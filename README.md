@@ -40,6 +40,14 @@ sudo apt install libtdb-dev python3-tdb python3-venv gcc g++ git libssl-dev
 
 ```
 
+### Get the source
+
+```bash
+# Clone the repository
+git clone --recurse-submodules https://github.com/ArduPilot/UDPProxy.git
+cd UDPProxy
+```
+
 ### Python Virtual Environment Setup
 
 It's recommended to use a Python virtual environment to install pymavlink:
@@ -53,14 +61,6 @@ source venv/bin/activate
 
 # Install pymavlink in the virtual environment
 pip install pymavlink
-```
-
-### Get the source
-
-```bash
-# Clone the repository
-git clone https://github.com/ArduPilot/UDPProxy.git
-cd UDPProxy
 ```
 
 ### Building UDPProxy
