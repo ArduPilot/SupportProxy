@@ -14,6 +14,7 @@
 #include <sys/ioctl.h>
 #include <stddef.h>
 #include <poll.h>
+#include <sys/fcntl.h>
 
 #ifdef __linux__
 #include <linux/sockios.h>   // SIOCOUTQ
@@ -203,4 +204,10 @@ bool socket_is_dead(int fd)
 
     // looks healthy for writing
     return false;
+}
+
+void set_nonblocking(int fd)
+{
+    unsigned v = fcntl(fd, F_GETFL, 0);
+    fcntl(fd, F_SETFL, v | O_NONBLOCK);
 }

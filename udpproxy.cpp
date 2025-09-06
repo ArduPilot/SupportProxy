@@ -346,6 +346,7 @@ static void main_loop(struct listen_port *p)
 		break;
 	    }
 	    set_tcp_options(fd2);
+	    set_nonblocking(fd2);
 	    close(p->sock1_tcp);
 	    p->sock1_tcp = fd2;
 	    fdmax = MAX(fdmax, p->sock1_tcp);
@@ -378,10 +379,12 @@ static void main_loop(struct listen_port *p)
 	    } else {
 		n = recv(p->sock1_tcp, buf, sizeof(buf)-1, 0);
 	    }
-	    if (n <= 0) {
-		printf("[%d] %s EOF TCP conn1\n", unsigned(p->port2), time_string());
-		break;
-	    }
+	    if (p->ws) {
+		    if (n < 0) { printf("[%d] %s EOF TCP conn1\n", unsigned(p->port2), time_string()); break; }
+		    if (n == 0) { /* no complete frame yet */ ; }
+		} else {
+		    if (n <= 0) { printf("[%d] %s EOF TCP conn1\n", unsigned(p->port2), time_string()); break; }
+		}
 	    last_pkt1 = now;
             count1++;
 	    mavlink_message_t msg {};
@@ -422,6 +425,7 @@ static void main_loop(struct listen_port *p)
 	    }
 
 	    set_tcp_options(fd2);
+	    set_nonblocking(fd2);
 
 	    uint8_t i;
 	    for (i=0; i<MAX_COMM2_LINKS; i++) {
@@ -470,15 +474,27 @@ static void main_loop(struct listen_port *p)
 		} else {
 		    n = recv(c2.sock, buf, sizeof(buf)-1, 0);
 		}
-		if (n <= 0) {
-		    printf("[%d] %s EOF TCP conn2[%u]\n", unsigned(p->port2), time_string(), unsigned(i+1));
-		    c2.close();
-		    if (conn2_count == max_conn2_count) {
-			max_conn2_count--;
-		    }
-		    conn2_count--;
-		    continue;
-		}
+		if (c2.ws) {
+		            if (n < 0) {
+		                printf("[%d] %s EOF TCP conn2[%u]\n", unsigned(p->port2), time_string(), unsigned(i+1));
+		                c2.close();
+		                if (conn2_count == max_conn2_count) { max_conn2_count--; }
+		                conn2_count--;
+		                continue;
+		            }
+		            if (n == 0) {
+		                // no complete frame yet
+		                continue;
+		            }
+		        } else {
+		            if (n <= 0) {
+		                printf("[%d] %s EOF TCP conn2[%u]\n", unsigned(p->port2), time_string(), unsigned(i+1));
+		                c2.close();
+		                if (conn2_count == max_conn2_count) { max_conn2_count--; }
+		                conn2_count--;
+		                continue;
+		            }
+		        }
 		buf[n] = 0;
 		count2++;
 		c2.tcp_active = true;
