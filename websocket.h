@@ -23,14 +23,20 @@ public:
 private:
     int fd = -1;
     bool _is_SSL = false;
+    bool SSL_handshake_complete = false;
     uint8_t pending[1024] {};
     uint32_t npending = 0;
     SSL *ssl = nullptr;
     SSL_CTX *ctx = nullptr;
     bool done_headers = false;
 
+    char handshake_buf[512] {};
+    size_t handshake_len = 0;
+    size_t handshake_sent = 0;
+
+    
     void fill_pending(void);
-    void send_handshake(const std::string &key);
+    bool send_handshake(const std::string &key);
     void check_headers(void);
     ssize_t decode(uint8_t *buf, size_t n, size_t &used);
 };

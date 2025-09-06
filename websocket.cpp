@@ -6,6 +6,7 @@
 #include <unistd.h>
 #include <string.h>
 #include <arpa/inet.h>
+#include <errno.h>
 #include <stdio.h>
 #include <string>
 #include <openssl/sha.h>
@@ -79,12 +80,6 @@ WebSocket::WebSocket(int _fd)
 	}
 	ssl = SSL_new(ctx);
 	SSL_set_fd(ssl, fd);
-	if (SSL_accept(ssl) <= 0) {
-	    ERR_print_errors_fp(stdout);
-	    return;
-	}
-
-	printf("SSL handshake completed\n");
     }
 
     fill_pending();
@@ -102,12 +97,13 @@ void WebSocket::check_headers(void)
     if (key_pos != std::string::npos) {
         key_pos += key_marker.length();
         size_t end = headers.find("\r\n", key_pos);
-	if (end != std::string::npos) {
-	    std::string sec_key = headers.substr(key_pos, end - key_pos);
-	    send_handshake(sec_key);
-	    done_headers = true;
-	    npending = 0;
-	    printf("WebSocket: done headers\n");
+        if (end != std::string::npos) {
+            std::string sec_key = headers.substr(key_pos, end - key_pos);
+            if (send_handshake(sec_key)) {
+                done_headers = true;
+                npending = 0;
+                printf("WebSocket: done headers\n");
+            }
         }
     }
 }
@@ -120,17 +116,59 @@ void WebSocket::fill_pending(void)
     // ensure always null terminated
     auto space = (sizeof(pending)-1) - npending;
     if (fd >= 0 && space > 0) {
-	ssize_t n;
-	if (ssl) {
-	    n = SSL_read(ssl, &pending[npending], space);
-	} else {
-	    n = ::recv(fd, &pending[npending], space, 0);
-	}
-	if (n < 0) {
-	    close(fd);
-	    fd = -1;
-	}
-	npending += n;
+        ssize_t n = 0;
+        if (ssl) {
+            if (!SSL_handshake_complete) {
+                auto res = SSL_accept(ssl);
+                if (res <= 0) {
+                    int err = SSL_get_error(ssl, res);
+                    if (err == SSL_ERROR_WANT_READ || err == SSL_ERROR_WANT_WRITE) {
+                        // still pending
+                        return;
+                    }
+                    ERR_print_errors_fp(stdout);
+                    close(fd);
+                    fd = -1;
+                    return;
+                }
+                printf("SSL handshake completed\n");
+                SSL_handshake_complete = true;
+            }
+            n = SSL_read(ssl, &pending[npending], space);
+            if (n <= 0) {
+                int err = SSL_get_error(ssl, n);
+                if (err == SSL_ERROR_WANT_READ || err == SSL_ERROR_WANT_WRITE) {
+                    return;
+                }
+                if (err == SSL_ERROR_ZERO_RETURN) {
+                    // orderly shutdown
+                    close(fd);
+                    fd = -1;
+                    return;
+                }
+                ERR_print_errors_fp(stdout);
+                close(fd);
+                fd = -1;
+                return;
+            }
+        } else {
+            n = ::recv(fd, &pending[npending], space, 0);
+            if (n < 0) {
+                if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                    return;
+                }
+                close(fd);
+                fd = -1;
+                return;
+            }
+            if (n == 0) {
+                // EOF
+                close(fd);
+                fd = -1;
+                return;
+            }
+        }
+        npending += n;
     }
 }
 
@@ -205,30 +243,57 @@ static std::string base64_encode(const uint8_t* input, size_t len)
 /*
   perform websocket handshake response
  */
-void WebSocket::send_handshake(const std::string &key)
+bool WebSocket::send_handshake(const std::string &key)
 {
-    const char *guid = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
-    std::string accept_src = key + guid;
+    if (handshake_len == 0) {
+        const char *guid = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+        std::string accept_src = key + guid;
 
-    uint8_t sha1_hash[SHA_DIGEST_LENGTH];
-    SHA1((const unsigned char *)accept_src.c_str(), accept_src.length(), sha1_hash);
+        uint8_t sha1_hash[SHA_DIGEST_LENGTH];
+        SHA1((const unsigned char *)accept_src.c_str(), accept_src.length(), sha1_hash);
 
-    std::string accept_val = base64_encode(sha1_hash, SHA_DIGEST_LENGTH);
+        std::string accept_val = base64_encode(sha1_hash, SHA_DIGEST_LENGTH);
 
-    char response[512];
-    snprintf(response, sizeof(response),
-             "HTTP/1.1 101 Switching Protocols\r\n"
-             "Upgrade: websocket\r\n"
-             "Connection: Upgrade\r\n"
-             "Sec-WebSocket-Accept: %s\r\n"
-             "\r\n",
-	     accept_val.c_str());
-
-    if (ssl) {
-	SSL_write(ssl, response, strlen(response));
-    } else {
-	::send(fd, response, strlen(response), 0);
+        int n = snprintf(handshake_buf, sizeof(handshake_buf),
+                         "HTTP/1.1 101 Switching Protocols\r\n"
+                         "Upgrade: websocket\r\n"
+                         "Connection: Upgrade\r\n"
+                         "Sec-WebSocket-Accept: %s\r\n"
+                         "\r\n",
+                         accept_val.c_str());
+        if (n < 0) {
+            return false;
+        }
+        handshake_len = (size_t)n;
+        handshake_sent = 0;
     }
+
+    while (handshake_sent < handshake_len) {
+        ssize_t wret;
+        if (ssl) {
+            wret = SSL_write(ssl, handshake_buf + handshake_sent, handshake_len - handshake_sent);
+            if (wret <= 0) {
+                int err = SSL_get_error(ssl, wret);
+                if (err == SSL_ERROR_WANT_WRITE || err == SSL_ERROR_WANT_READ) {
+                    return false; // try again later
+                }
+                ERR_print_errors_fp(stdout);
+                close(fd); fd = -1;
+                return false;
+            }
+        } else {
+            wret = ::send(fd, handshake_buf + handshake_sent, handshake_len - handshake_sent, 0);
+            if (wret < 0) {
+                if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                    return false;
+                }
+                close(fd); fd = -1;
+                return false;
+            }
+        }
+        handshake_sent += (size_t)wret;
+    }
+    return handshake_sent == handshake_len;
 }
 
 /*
@@ -259,12 +324,28 @@ ssize_t WebSocket::send(const void *buf, size_t n)
 
     ssize_t sent;
     if (_is_SSL && ssl) {
-	sent = SSL_write(ssl, pkt, sizeof(pkt));
+        sent = SSL_write(ssl, pkt, sizeof(pkt));
+        if (sent <= 0) {
+            int err = SSL_get_error(ssl, sent);
+            if (err == SSL_ERROR_WANT_WRITE || err == SSL_ERROR_WANT_READ) {
+                return 0; // try again later
+            }
+            ERR_print_errors_fp(stdout);
+            close(fd); fd = -1;
+            return -1;
+        }
     } else {
-	sent = ::send(fd, pkt, sizeof(pkt), 0);
+        sent = ::send(fd, pkt, sizeof(pkt), 0);
+        if (sent < 0) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                return 0;
+            }
+            close(fd); fd = -1;
+            return -1;
+        }
     }
     if (sent < ssize_t(sizeof(pkt))) {
-	return -1;
+        return 0; // partial; retry later
     }
     return sizeof(pkt) - header_len;
 }
