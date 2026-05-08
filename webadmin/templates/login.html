@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}Log in — {{ config.WEBUI_TITLE }}{% endblock %}
+{% block content %}
+<h2>Log in</h2>
+<p>Enter the user-side port (port1) <em>or</em> the engineer-side port (port2)
+   for your entry, plus the passphrase you set with <code>keydb.py</code>.</p>
+<form method="post" action="{{ url_for('auth.login') }}">
+  {{ form.csrf_token }}
+  <div class="field">{{ form.port.label }}: {{ form.port(autofocus=True) }}</div>
+  <div class="field">{{ form.passphrase.label }}: {{ form.passphrase() }}</div>
+  <div>{{ form.submit() }}</div>
+  {% for field, errors in form.errors.items() %}
+    {% for e in errors %}<div class="flash flash-error">{{ field }}: {{ e }}</div>{% endfor %}
+  {% endfor %}
+</form>
+{% endblock %}

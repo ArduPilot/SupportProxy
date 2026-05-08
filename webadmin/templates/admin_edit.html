@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}Edit {{ entry.port2 }} — {{ config.WEBUI_TITLE }}{% endblock %}
+{% block content %}
+<h2>Edit entry {{ entry.port1 }}/{{ entry.port2 }}</h2>
+<dl class="entry-info">
+  <dt>port2 (engineer side, read-only)</dt><dd>{{ entry.port2 }}</dd>
+  <dt>traffic counters (port1 / port2)</dt><dd>{{ entry.count1 }} / {{ entry.count2 }}</dd>
+  <dt>connections</dt><dd>{{ entry.connections }}</dd>
+  <dt>signing timestamp</dt><dd>{{ entry.timestamp }}</dd>
+</dl>
+<form method="post" action="{{ url_for('admin.edit', port2=entry.port2) }}">
+  {{ form.csrf_token }}
+  <div class="field">{{ form.name.label }}: {{ form.name() }}</div>
+  <div class="field">{{ form.port1.label }}: {{ form.port1() }}</div>
+  <div class="field">{{ form.new_passphrase.label }}: {{ form.new_passphrase() }}</div>
+  <div class="field">{{ form.confirm_passphrase.label }}: {{ form.confirm_passphrase() }}</div>
+  <div class="field">{{ form.is_admin() }} {{ form.is_admin.label }}</div>
+  <div class="field">{{ form.bidi_sign() }} {{ form.bidi_sign.label }}</div>
+  <div class="field">{{ form.reset_timestamp() }} {{ form.reset_timestamp.label }}</div>
+  <div>{{ form.submit() }}</div>
+  {% for field, errors in form.errors.items() %}
+    {% for e in errors %}<div class="flash flash-error">{{ field }}: {{ e }}</div>{% endfor %}
+  {% endfor %}
+</form>
+<h3>Delete entry</h3>
+<form method="post" action="{{ url_for('admin.delete', port2=entry.port2) }}">
+  {{ delete_form.csrf_token }}
+  <button type="submit" class="danger"
+          onclick="return confirm('Delete entry {{ entry.port1 }}/{{ entry.port2 }}? This cannot be undone.');">
+    Delete entry {{ entry.port1 }}/{{ entry.port2 }}
+  </button>
+</form>
+<p><a href="{{ url_for('admin.list_entries') }}">&larr; back to list</a></p>
+{% endblock %}

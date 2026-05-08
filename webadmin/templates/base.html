@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>{% block title %}{{ config.WEBUI_TITLE }}{% endblock %}</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+<header>
+  <h1><a href="{{ url_for('index') }}">{{ config.WEBUI_TITLE }}</a></h1>
+  <nav>
+    {% if session.get('owner') %}
+      <span>logged in as port {{ session['owner'] }}{% if session.get('is_admin') %} (admin){% endif %}</span>
+      {% if session.get('is_admin') %}
+        <a href="{{ url_for('admin.list_entries') }}">all entries</a>
+      {% endif %}
+      <a href="{{ url_for('owner.me') }}">my entry</a>
+      <form method="post" action="{{ url_for('auth.logout') }}" class="inline">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit">log out</button>
+      </form>
+    {% endif %}
+  </nav>
+</header>
+<main>
+  {% with msgs = get_flashed_messages(with_categories=true) %}
+    {% for cat, msg in msgs %}
+      <div class="flash flash-{{ cat }}">{{ msg }}</div>
+    {% endfor %}
+  {% endwith %}
+  {% block content %}{% endblock %}
+</main>
+</body>
+</html>
