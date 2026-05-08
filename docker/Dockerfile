@@ -58,6 +58,7 @@ WORKDIR /app
 # Copy the built binary and necessary files from builder stage
 COPY --from=builder /app/udpproxy /app/udpproxy
 COPY --from=builder /app/keydb.py /app/keydb.py
+COPY --from=builder /app/keydb_lib.py /app/keydb_lib.py
 
 # Create data directory for persistent storage
 RUN mkdir -p /app/data
