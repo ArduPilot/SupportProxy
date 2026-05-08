@@ -255,6 +255,14 @@ The `keydb.py` script provides comprehensive database management:
 ./keydb.py setpass PORT2 NewPassPhrase     # Change passphrase
 ./keydb.py setport1 PORT2 NewPORT1         # Change user port
 
+# Reset signing replay-protection timestamp (e.g. after clock skew)
+./keydb.py resettimestamp PORT2
+
+# Flag bits (used by the web admin UI to mark admins)
+./keydb.py setflag PORT2 admin             # Grant admin to entry
+./keydb.py clearflag PORT2 admin           # Revoke admin from entry
+./keydb.py flags PORT2                     # Show flags currently set
+
 # Examples:
 ./keydb.py add 10006 10007 'Engineering' SecurePass123
 ./keydb.py setname 10007 'QA Team'
@@ -274,6 +282,150 @@ The `keydb.py` script provides comprehensive database management:
 - **Port Range**: Consider using non-standard port ranges to avoid conflicts
 - **Firewall**: Configure firewall rules to allow only necessary ports
 - **Access Control**: Limit access to the server and keydb.py script
+
+## Web Admin UI
+
+The `webadmin/` directory contains a small Flask app that lets users
+manage their own entry through the browser, and lets users with the
+`admin` flag manage every entry. It writes to the same `keys.tdb` the
+running `udpproxy` reads, so changes go live within ~5 seconds with no
+proxy restart.
+
+### Roles and login
+
+- Anyone can log in by entering **either `port1` or `port2`** plus the
+  passphrase set with `keydb.py`.
+- Users with `KEY_FLAG_ADMIN` set on their entry get the admin UI (list
+  all entries, edit any, grant/revoke admin, add/delete entries).
+- Everyone else gets the self-service UI (rename their own entry, rotate
+  their own passphrase, reset their signing timestamp).
+
+### Install dependencies
+
+```bash
+source venv/bin/activate
+pip install Flask Flask-WTF gunicorn
+```
+
+### Bootstrap the first admin
+
+The web UI has no out-of-band admin; you promote an existing entry to
+admin from the CLI on the server:
+
+```bash
+./keydb.py setflag 10007 admin
+```
+
+That entry can then log in to the web UI as an admin and grant the flag
+to others through the web interface.
+
+### Run standalone
+
+```bash
+# Set a stable secret so sessions survive restarts
+export WEBADMIN_SECRET_KEY=$(python -c 'import secrets; print(secrets.token_hex(32))')
+
+# Path to keys.tdb (defaults to ./keys.tdb relative to cwd)
+export WEBADMIN_KEYDB_PATH=/path/to/proxy/keys.tdb
+
+# Bind to localhost or a public address. Use --certfile/--keyfile for TLS.
+gunicorn -w 2 -b 127.0.0.1:8080 webadmin.wsgi:application
+```
+
+For local HTTP-only development, also set `WEBADMIN_INSECURE_COOKIES=1`
+so the session cookie is sent without the `Secure` flag. **Do not set
+this in production.**
+
+For local development from `test/` (or any directory containing a
+`keys.tdb`), there's a helper that wires the env vars up for you:
+
+```bash
+cd test
+../scripts/run_webui.sh                     # http://127.0.0.1:8080
+WEBADMIN_PORT=9000 ../scripts/run_webui.sh
+WEBADMIN_TLS=1 ../scripts/run_webui.sh      # uses fullchain.pem / privkey.pem in cwd
+```
+
+It uses `gunicorn` if available and falls back to Flask's dev server
+otherwise.
+
+### Run behind Apache (`ProxyPass`)
+
+The intended deployment is for the web UI to listen on
+`127.0.0.1:8080` and have an existing Apache vhost forward an
+externally-managed URL to it. Apache terminates TLS; the app trusts
+`X-Forwarded-*` headers from Apache when `WEBADMIN_BEHIND_PROXY=1`:
+
+```apache
+<VirtualHost *:443>
+    ServerName  support.example.org
+    SSLEngine on
+    SSLCertificateFile      /etc/letsencrypt/live/support.example.org/fullchain.pem
+    SSLCertificateKeyFile   /etc/letsencrypt/live/support.example.org/privkey.pem
+
+    ProxyPreserveHost On
+    ProxyPass        /admin/ http://127.0.0.1:8080/
+    ProxyPassReverse /admin/ http://127.0.0.1:8080/
+    RequestHeader set X-Forwarded-Prefix /admin
+    RequestHeader set X-Forwarded-Proto https
+</VirtualHost>
+```
+
+Required Apache modules: `mod_proxy`, `mod_proxy_http`, `mod_headers`,
+`mod_ssl`. Then run gunicorn with the proxy flag set:
+
+```bash
+export WEBADMIN_BEHIND_PROXY=1
+export WEBADMIN_SECRET_KEY=...
+export WEBADMIN_KEYDB_PATH=/path/to/proxy/keys.tdb
+gunicorn -w 2 -b 127.0.0.1:8080 webadmin.wsgi:application
+```
+
+The browser hits `https://support.example.org/admin/` and Apache forwards
+to the local gunicorn. URL-building inside the app uses
+`X-Forwarded-Prefix` so links resolve correctly under `/admin/`.
+
+### Per-host customisation: `webui.json`
+
+A `webui.json` next to `keys.tdb` (i.e. `~/proxy/webui.json` for the
+default layout) is read on every web app startup. All keys are
+optional:
+
+```json
+{
+  "title": "ArduPilot Support Proxy",
+  "mode":  "standalone",
+  "host":  "127.0.0.1",
+  "port":  8080
+}
+```
+
+| Key | Effect |
+|---|---|
+| `title` | Replaces the default `UDPProxy admin` site name in the nav and `<title>` |
+| `mode` | `standalone` — `start_proxy.sh` (re)spawns the web UI on the configured `host:port`. `apache` — sets `BEHIND_PROXY=1` so the app honours `X-Forwarded-*`; the launching is then someone else's job (`mod_wsgi`, a systemd unit, etc.) |
+| `host` | Listen address for `mode: standalone`. Defaults to `127.0.0.1` (loopback only). Set to `0.0.0.0` to listen on every interface — only safe behind a firewall and/or a TLS terminator. |
+| `port` | TCP port for `mode: standalone`. Front with TLS / a reverse proxy in production. |
+
+When `mode: standalone`, the cron entry from "Automatic Startup" is
+enough — `start_proxy.sh` checks `webui.json`, generates a stable
+`~/proxy/.webadmin_secret`, and (re)launches the app on every tick if
+nothing is running. If `~/proxy/fullchain.pem` and
+`~/proxy/privkey.pem` are present (the same cert pair udpproxy uses
+for WSS), the standalone web UI auto-serves over HTTPS using them and
+keeps the session cookie's `Secure` flag set; otherwise it falls back
+to plain HTTP.
+
+### Configuration reference
+
+All settings can be overridden via environment variables:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `WEBADMIN_SECRET_KEY` | random per process | Flask session + CSRF signing key. Set a stable value in production. |
+| `WEBADMIN_KEYDB_PATH` | `keys.tdb` (cwd-relative) | Path to the TDB file. |
+| `WEBADMIN_BEHIND_PROXY` | unset | Set to `1` when fronted by Apache to honour `X-Forwarded-*` headers. |
+| `WEBADMIN_INSECURE_COOKIES` | unset | Set to `1` only for local HTTP dev; allows session cookie without `Secure` flag. |
 
 ## Troubleshooting
 
@@ -324,19 +476,32 @@ journalctl -f | grep udpproxy
 
 ## Testing
 
-### Automated CI Testing
-
-UDPProxy includes comprehensive CI testing to validate UDP and TCP connection functionality:
+The test suite covers UDP/TCP connection scenarios, the `keydb.py` CLI,
+and the web admin UI (auth, role guards, CSRF, concurrent writes).
 
 ```bash
-# Run all tests locally
-./run_tests.sh
+# Run everything (builds udpproxy, runs all three phases)
+./scripts/run_tests.sh
 
-# Run specific test suites
-source venv/bin/activate
-pytest tests/test_connections.py -v
-pytest tests/test_authentication.py -v
+# Run in parallel via pytest-xdist (-j N workers, each with its own
+# tmpdir + port pair so they don't collide)
+./scripts/run_tests.sh -j 4
+
+# List every test without running anything
+./scripts/run_tests.py --list
+
+# Run specific tests (any pytest selector works). --no-build skips the
+# make step for fast iteration.
+./scripts/run_tests.py --no-build tests/webadmin/
+./scripts/run_tests.py --no-build tests/test_connections.py::TestUDPConnections
+./scripts/run_tests.py --no-build -j 4 tests/webadmin/test_admin.py::TestAdminEdit::test_cannot_revoke_last_admin
 ```
+
+When invoked with no test selectors, the runner builds and then runs
+three separate pytest invocations (connection tests, authentication
+tests, webadmin tests) — they're kept separate because each phase has
+different cwd / `keys.tdb` / process expectations. With selectors, it
+runs one pytest invocation against exactly what you passed.
 
 ## Contributing
 
