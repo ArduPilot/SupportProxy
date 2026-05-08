@@ -42,10 +42,16 @@ bool db_load_key(TDB_CONTEXT *db, int port2, struct KeyEntry &key)
     k.dsize = sizeof(int);
 
     auto d = tdb_fetch(db, k);
-    if (d.dptr == nullptr || d.dsize != sizeof(key)) {
+    if (d.dptr == nullptr || d.dsize < KEYENTRY_MIN_SIZE) {
+        if (d.dptr) {
+            free(d.dptr);
+        }
         return false;
     }
-    memcpy(&key, d.dptr, sizeof(key));
+    // zero-init so fields not present in older on-disk layouts default to 0
+    memset(&key, 0, sizeof(key));
+    size_t copy = d.dsize < sizeof(key) ? d.dsize : sizeof(key);
+    memcpy(&key, d.dptr, copy);
     free(d.dptr);
     return key.magic == KEY_MAGIC;
 }
@@ -55,9 +61,34 @@ bool db_save_key(TDB_CONTEXT *tdb, int port2, const struct KeyEntry &ke)
     TDB_DATA k;
     k.dptr = (uint8_t*)&port2;
     k.dsize = sizeof(int);
-    TDB_DATA d;
-    d.dptr = (uint8_t*)&ke;
-    d.dsize = sizeof(ke);
 
-    return tdb_store(tdb, k, d, TDB_REPLACE) == 0;
+    // preserve any trailing bytes the on-disk record has beyond our struct
+    auto orig = tdb_fetch(tdb, k);
+    size_t tail = 0;
+    if (orig.dptr != nullptr && orig.dsize > sizeof(ke)) {
+        tail = orig.dsize - sizeof(ke);
+    }
+
+    size_t total = sizeof(ke) + tail;
+    uint8_t *buf = (uint8_t*)malloc(total);
+    if (buf == nullptr) {
+        if (orig.dptr) {
+            free(orig.dptr);
+        }
+        return false;
+    }
+    memcpy(buf, &ke, sizeof(ke));
+    if (tail > 0) {
+        memcpy(buf + sizeof(ke), orig.dptr + sizeof(ke), tail);
+    }
+    if (orig.dptr) {
+        free(orig.dptr);
+    }
+
+    TDB_DATA d;
+    d.dptr = buf;
+    d.dsize = total;
+    bool ok = tdb_store(tdb, k, d, TDB_REPLACE) == 0;
+    free(buf);
+    return ok;
 }

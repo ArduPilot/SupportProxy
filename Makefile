@@ -71,9 +71,10 @@ mavlink.o: mavlink.cpp mavlink.h $(MAVLINK_DIR)/protocol.h
 	@echo "Compiling $<..."
 	$(CXX) $(CXXFLAGS) -Wno-stringop-truncation -c $< -o $@
 
-# Dependencies
+# Dependencies. mavlink.h includes keydb.h, so any object that pulls in
+# mavlink.h transitively depends on keydb.h too.
 udpproxy.o: udpproxy.cpp mavlink.h util.h keydb.h websocket.h
-mavlink.o: mavlink.cpp mavlink.h $(MAVLINK_DIR)/protocol.h
+mavlink.o: mavlink.cpp mavlink.h keydb.h $(MAVLINK_DIR)/protocol.h
 util.o: util.cpp util.h
 keydb.o: keydb.cpp keydb.h
 websocket.o: websocket.cpp websocket.h util.h
