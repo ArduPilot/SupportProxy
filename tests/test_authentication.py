@@ -5,6 +5,7 @@ Tests MAVLink authentication, key validation, and database operations.
 import subprocess
 import os
 import pytest
+from test_config import KEYDB_PY
 
 
 class TestAuthentication:
@@ -18,7 +19,7 @@ class TestAuthentication:
 
         # Create new database
         result = subprocess.run(
-            ['python', 'keydb.py', 'initialise'],
+            ['python', KEYDB_PY, 'initialise'],
             capture_output=True,
             text=True
         )
@@ -31,11 +32,11 @@ class TestAuthentication:
         """Test adding a user to the authentication database."""
         # Ensure database exists
         if not os.path.exists("keys.tdb"):
-            subprocess.run(['python', 'keydb.py', 'initialise'])
+            subprocess.run(['python', KEYDB_PY, 'initialise'])
 
         # Add a test user-engineer pair
         result = subprocess.run([
-            'python', 'keydb.py', 'add',
+            'python', KEYDB_PY, 'add',
             '15000', '15001', 'test_pair', 'test_key_123'
         ], capture_output=True, text=True)
 
@@ -46,15 +47,15 @@ class TestAuthentication:
         """Test listing users in the authentication database."""
         # Ensure database exists with test pair
         if not os.path.exists("keys.tdb"):
-            subprocess.run(['python', 'keydb.py', 'initialise'])
+            subprocess.run(['python', KEYDB_PY, 'initialise'])
             subprocess.run([
-                'python', 'keydb.py', 'add',
+                'python', KEYDB_PY, 'add',
                 '15010', '15011', 'list_test_pair', 'list_test_key'
             ])
 
         # List users
         result = subprocess.run([
-            'python', 'keydb.py', 'list'
+            'python', KEYDB_PY, 'list'
         ], capture_output=True, text=True)
 
         # Should list users successfully
@@ -65,17 +66,17 @@ class TestAuthentication:
         """Test removing a user from the authentication database."""
         # Ensure database exists with test user
         if not os.path.exists("keys.tdb"):
-            subprocess.run(['python', 'keydb.py', 'initialise'])
+            subprocess.run(['python', KEYDB_PY, 'initialise'])
 
         # Add user first
         subprocess.run([
-            'python', 'keydb.py', 'add',
+            'python', KEYDB_PY, 'add',
             '15020', '15021', 'remove_test_pair', 'remove_test_key'
         ])
 
         # Remove the user-engineer pair
         result = subprocess.run([
-            'python', 'keydb.py', 'remove', '15021'
+            'python', KEYDB_PY, 'remove', '15021'
         ], capture_output=True, text=True)
 
         # User removal should succeed
@@ -85,17 +86,17 @@ class TestAuthentication:
         """Test handling of duplicate user additions."""
         # Ensure database exists
         if not os.path.exists("keys.tdb"):
-            subprocess.run(['python', 'keydb.py', 'initialise'])
+            subprocess.run(['python', KEYDB_PY, 'initialise'])
 
         # Add user first time
         result1 = subprocess.run([
-            'python', 'keydb.py', 'add',
+            'python', KEYDB_PY, 'add',
             '15030', '15031', 'duplicate_pair', 'key1'
         ], capture_output=True, text=True)
 
         # Add same user second time (will fail because port2 already exists)
         result2 = subprocess.run([
-            'python', 'keydb.py', 'add',
+            'python', KEYDB_PY, 'add',
             '15032', '15031', 'duplicate_pair_2', 'key2'
         ], capture_output=True, text=True)
 
@@ -110,11 +111,11 @@ class TestAuthentication:
         """Test handling of invalid port numbers."""
         # Ensure database exists
         if not os.path.exists("keys.tdb"):
-            subprocess.run(['python', 'keydb.py', 'initialise'])
+            subprocess.run(['python', KEYDB_PY, 'initialise'])
 
         # Try to add pair with invalid ports
         result = subprocess.run([
-            'python', 'keydb.py', 'add',
+            'python', KEYDB_PY, 'add',
             '999999', '999998', 'invalid_port_pair', 'key'
         ], capture_output=True, text=True)
 
@@ -126,11 +127,11 @@ class TestAuthentication:
         """Test handling of empty usernames."""
         # Ensure database exists
         if not os.path.exists("keys.tdb"):
-            subprocess.run(['python', 'keydb.py', 'initialise'])
+            subprocess.run(['python', KEYDB_PY, 'initialise'])
 
         # Try to add pair with empty username - this will fail
         result = subprocess.run([
-            'python', 'keydb.py', 'add',
+            'python', KEYDB_PY, 'add',
             '15040', '15041', '', 'key'
         ], capture_output=True, text=True)
 
@@ -141,11 +142,11 @@ class TestAuthentication:
         """Test handling of empty authentication keys."""
         # Ensure database exists
         if not os.path.exists("keys.tdb"):
-            subprocess.run(['python', 'keydb.py', 'initialise'])
+            subprocess.run(['python', KEYDB_PY, 'initialise'])
 
         # Try to add pair with empty key
         result = subprocess.run([
-            'python', 'keydb.py', 'add',
+            'python', KEYDB_PY, 'add',
             '15050', '15051', 'empty_key_pair', ''
         ], capture_output=True, text=True)
 
@@ -156,7 +157,7 @@ class TestAuthentication:
         """Test handling of special characters in usernames."""
         # Ensure database exists
         if not os.path.exists("keys.tdb"):
-            subprocess.run(['python', 'keydb.py', 'initialise'])
+            subprocess.run(['python', KEYDB_PY, 'initialise'])
 
         # Try various special characters
         special_users = [
@@ -169,7 +170,7 @@ class TestAuthentication:
         port_base = 15060
         for i, username in enumerate(special_users):
             result = subprocess.run([
-                'python', 'keydb.py', 'add',
+                'python', KEYDB_PY, 'add',
                 str(port_base + i*2), str(port_base + i*2 + 1),
                 username, f'key_{username}'
             ], capture_output=True, text=True)
@@ -181,13 +182,13 @@ class TestAuthentication:
         """Test handling of very long usernames."""
         # Ensure database exists
         if not os.path.exists("keys.tdb"):
-            subprocess.run(['python', 'keydb.py', 'initialise'])
+            subprocess.run(['python', KEYDB_PY, 'initialise'])
 
         # Create a very long username
         long_username = 'x' * 1000
 
         result = subprocess.run([
-            'python', 'keydb.py', 'add',
+            'python', KEYDB_PY, 'add',
             '15070', '15071', long_username, 'key'
         ], capture_output=True, text=True)
 
@@ -198,7 +199,7 @@ class TestAuthentication:
         """Test database file permissions and access."""
         # Ensure database exists
         if not os.path.exists("keys.tdb"):
-            subprocess.run(['python', 'keydb.py', 'initialise'])
+            subprocess.run(['python', KEYDB_PY, 'initialise'])
 
         # Check that database file exists and is readable
         assert os.path.exists("keys.tdb")
@@ -215,11 +216,11 @@ class TestAuthentication:
 
         # Ensure database exists
         if not os.path.exists("keys.tdb"):
-            subprocess.run(['python', 'keydb.py', 'initialise'])
+            subprocess.run(['python', KEYDB_PY, 'initialise'])
 
         def add_user_thread(thread_id):
             result = subprocess.run([
-                'python', 'keydb.py', 'add',
+                'python', KEYDB_PY, 'add',
                 str(15080 + thread_id*2), str(15081 + thread_id*2),
                 f'concurrent_pair_{thread_id}',
                 f'key_{thread_id}'
@@ -248,7 +249,7 @@ class TestAuthentication:
     def test_keydb_help_functionality(self):
         """Test the help functionality of keydb.py."""
         result = subprocess.run([
-            'python', 'keydb.py', '--help'
+            'python', KEYDB_PY, '--help'
         ], capture_output=True, text=True)
 
         # Help should display successfully
