@@ -31,6 +31,7 @@
 #include <netinet/in.h>
 #include <sys/wait.h>
 #include <sys/epoll.h>
+#include <signal.h>
 
 #include "mavlink.h"
 #include "util.h"
@@ -45,6 +46,13 @@ struct listen_port {
     int sock1_udp, sock2_udp;
     int sock1_tcp, sock2_listen;
     pid_t pid;
+    uint32_t flags;
+    bool seen;     // set true by handle_record() during reload_ports()
+                   // for any entry that's still in the DB; entries left
+                   // unseen after a reload have been removed.
+    bool removed;  // entry no longer in keys.tdb. We keep the struct
+                   // around (don't free it under a running child) but
+                   // close listening sockets and skip it everywhere.
     WebSocket *ws = nullptr;
 };
 
@@ -59,26 +67,57 @@ static uint32_t count_ports(void)
     return count;
 }
 
-static bool have_port2(int port2)
+static void open_sockets(struct listen_port *p);
+static void close_sockets(struct listen_port *p);
+
+/*
+  Reconcile a single keys.tdb record with our in-memory port list.
+
+    - new port2:                add struct, mark seen, open listeners
+    - existing port2, same port1, flags unchanged: just mark seen
+    - existing port2 marked removed: un-remove, reopen
+    - existing port2, port1 changed: close old listeners, signal the
+      running child (if any) to exit so the old port1 is freed, then
+      open the new port1
+    - existing port2, only flags changed: refresh flags so the next
+      child fork picks them up
+
+  Used both at startup and on each reload; reload_ports() handles the
+  flip side (entries that were in keys.tdb last time and aren't now).
+ */
+static void upsert_port(int port1, int port2, uint32_t flags)
 {
     for (auto *p = ports; p; p=p->next) {
         if (p->port2 == port2) {
-            return true;
+            p->seen = true;
+            if (p->removed) {
+                // came back: re-add as a fresh listener
+                printf("[%d] re-added (port1=%d)\n", port2, port1);
+                p->removed = false;
+                p->port1 = port1;
+                p->flags = flags;
+                if (p->pid == 0) {
+                    open_sockets(p);
+                }
+            } else if (p->port1 != port1) {
+                printf("[%d] port1 changed %d -> %d\n",
+                       port2, p->port1, port1);
+                close_sockets(p);
+                if (p->pid != 0) {
+                    // running child still binds the old port1; signal it
+                    // to exit so check_children reopens with the new one
+                    kill(p->pid, SIGTERM);
+                }
+                p->port1 = port1;
+                p->flags = flags;
+                if (p->pid == 0) {
+                    open_sockets(p);
+                }
+            } else {
+                p->flags = flags;
+            }
+            return;
         }
-    }
-    return false;
-}
-
-static void open_sockets(struct listen_port *p);
-
-/*
-  add a port pair to the list
- */
-static void add_port(int port1, int port2)
-{
-    if (have_port2(port2)) {
-        // already have it
-        return;
     }
     struct listen_port *p = new struct listen_port;
     p->next = ports;
@@ -89,6 +128,9 @@ static void add_port(int port1, int port2)
     p->sock1_tcp = -1;
     p->sock2_listen = -1;
     p->pid = 0;
+    p->flags = flags;
+    p->seen = true;
+    p->removed = false;
     ports = p;
     printf("Added port %d/%d\n", port1, port2);
     open_sockets(p);
@@ -97,15 +139,16 @@ static void add_port(int port1, int port2)
 
 static int handle_record(struct tdb_context *db, TDB_DATA key, TDB_DATA data, void *ptr)
 {
-    if (key.dsize != sizeof(int) || data.dsize != sizeof(KeyEntry)) {
+    if (key.dsize != sizeof(int) || data.dsize < KEYENTRY_MIN_SIZE) {
         // skip it
         return 0;
     }
     struct KeyEntry k {};
     int port2 = 0;
     memcpy(&port2, key.dptr, sizeof(int));
-    memcpy(&k, data.dptr, sizeof(KeyEntry));
-    add_port(k.port1, port2);
+    size_t copy = data.dsize < sizeof(KeyEntry) ? data.dsize : sizeof(KeyEntry);
+    memcpy(&k, data.dptr, copy);
+    upsert_port(k.port1, port2, k.flags);
     return 0;
 }
 
@@ -145,6 +188,11 @@ static void main_loop(struct listen_port *p)
     double last_pkt1=0;
     uint32_t count1=0, count2=0;
     int fdmax = -1;
+    // bidi-sign: enforce signing on the user side too. mav1 then loads the
+    // same key keys.tdb stores for the engineer side, so unsigned and
+    // wrong-key user packets are rejected before being forwarded.
+    const bool bidi = (p->flags & KEY_FLAG_BIDI_SIGN) != 0;
+    const int conn1_key_id = bidi ? p->port2 : -1;
     /*
       we allow more than one connection on the support engineer side
      */
@@ -233,7 +281,7 @@ static void main_loop(struct listen_port *p)
                 if (connect(p->sock1_udp, (struct sockaddr *)&from, fromlen) != 0) {
                     break;
                 }
-		mav1.init(p->sock1_udp, CHAN_COMM1, false, false, false);
+		mav1.init(p->sock1_udp, CHAN_COMM1, bidi, false, false, conn1_key_id);
                 have_conn1 = true;
 		printf("[%d] %s have UDP conn1 for from %s\n", unsigned(p->port2), time_string(), addr_to_str(from));
             }
@@ -352,7 +400,7 @@ static void main_loop(struct listen_port *p)
 	    fdmax = MAX(fdmax, p->sock1_tcp);
 	    have_conn1 = true;
 	    printf("[%d] %s have TCP conn1 for from %s\n", unsigned(p->port2), time_string(), addr_to_str(from));
-	    mav1.init(p->sock1_tcp, CHAN_COMM1, false, false, true);
+	    mav1.init(p->sock1_tcp, CHAN_COMM1, bidi, false, true, conn1_key_id);
 	    last_pkt1 = now;
 	    continue;
 	}
@@ -606,7 +654,12 @@ static void check_children(void)
                 printf("[%d] Child %d exited\n", p->port2, int(pid));
                 p->pid = 0;
 		found_child = true;
-		open_sockets(p);
+		// Don't reopen listening sockets for an entry that was
+		// removed from keys.tdb between fork and exit; that would
+		// rebind the port for a record that no longer exists.
+		if (!p->removed) {
+			open_sockets(p);
+		}
                 break;
             }
         }
@@ -639,17 +692,42 @@ static void handle_connection(struct listen_port *p)
 
 static void reload_ports(void)
 {
-    auto *db = db_open();
+    // mark every port pair we know about as "unseen". upsert_port()
+    // will set seen=true for any port2 it finds in the DB; entries
+    // still unseen after the traverse are gone from keys.tdb and
+    // need to be torn down.
+    for (auto *p = ports; p; p = p->next) {
+        p->seen = false;
+    }
+
+    // wrap the traversal in a transaction so we see a consistent snapshot
+    // even if keydb.py / the web admin UI is mutating in parallel
+    auto *db = db_open_transaction();
     if (db == nullptr) {
         printf("Database not found\n");
         exit(1);
     }
     tdb_traverse(db, handle_record, nullptr);
-    db_close(db);
+    db_close_cancel(db);
+
+    // any port pair not seen during the traverse has been removed from
+    // keys.tdb. Close listening sockets, signal the running child to
+    // exit so any active conn1/conn2 dies, and mark the struct removed
+    // so we don't reopen sockets when the child exits.
+    for (auto *p = ports; p; p = p->next) {
+        if (!p->seen && !p->removed) {
+            printf("[%d] removed from keys.tdb\n", p->port2);
+            p->removed = true;
+            close_sockets(p);
+            if (p->pid != 0) {
+                kill(p->pid, SIGTERM);
+            }
+        }
+    }
 
     // see if any sockets need opening
     for (auto *p = ports; p; p=p->next) {
-	if (p->pid == 0) {
+	if (p->pid == 0 && !p->removed) {
 	    open_sockets(p);
 	}
     }
@@ -672,7 +750,7 @@ static void wait_connection(void)
     auto rebuild_epoll_set = [&]() {
         epoll_ctl(epfd, EPOLL_CTL_DEL, -1, nullptr); // dummy cleanup if needed
         for (auto *p = ports; p; p = p->next) {
-            if (p->pid != 0) continue;
+            if (p->pid != 0 || p->removed) continue;
 
             struct epoll_event ev = {};
             ev.events = EPOLLIN;
@@ -728,7 +806,7 @@ static void wait_connection(void)
             int fd = events[i].data.fd;
 
             for (auto *p = ports; p; p = p->next) {
-                if (p->pid != 0) continue;
+                if (p->pid != 0 || p->removed) continue;
                 if ((p->sock1_udp == fd || p->sock2_udp == fd ||
                      p->sock1_tcp == fd || p->sock2_listen == fd)) {
                     handle_connection(p);
@@ -744,14 +822,14 @@ int main(int argc, char *argv[])
 {
     setvbuf(stdout, nullptr, _IOLBF, 4096);
     printf("Opening sockets\n");
-    auto *db = db_open();
+    auto *db = db_open_transaction();
     if (db == nullptr) {
         printf("Database not found\n");
         exit(1);
     }
     tdb_traverse(db, handle_record, nullptr);
     printf("Added %u ports\n", unsigned(count_ports()));
-    db_close(db);
+    db_close_cancel(db);
 
     wait_connection();
 
