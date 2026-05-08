@@ -275,10 +275,33 @@ void MAVLink::load_signing_key(void)
     memcpy(signing.secret_key, key.secret_key, sizeof(key.secret_key));
     signing.link_id = uint8_t(chan);
 
-    // use a timestamp 15s past the last recorded timestamp. Combined
-    // with saving the key once every 10s this prevents a window for
-    // replay attacks
-    signing.timestamp = key.timestamp + 15ULL * 100ULL * 1000ULL;
+    // Start signing.timestamp at max(saved + 15s, current wall clock).
+    //
+    // The +15s buffer over the saved value is the historical guard for the
+    // replay window between key saves (saves are throttled to once per 10s,
+    // so a crash can lose up to that window of advancement).
+    //
+    // We take max() with current wall clock so the timestamp doesn't end
+    // up parked in the future when the saved value was written long enough
+    // ago that real time has caught up. Without this, sequential
+    // short-lived connections (e.g. test runs creating a new MAVLink
+    // instance per scenario) accumulate +15s of "future" drift per load
+    // because update_signing_timestamp() is only invoked from send_message
+    // and so doesn't run before the first incoming packet has its tstamp
+    // checked against signing.timestamp. The first incoming packet's
+    // tstamp is "now", and once signing.timestamp has drifted past
+    // now + MAVLINK_SIGNING_TIMESTAMP_LIMIT seconds the helper rejects
+    // the packet before any send can pull signing.timestamp back to now.
+    {
+        uint64_t loaded = key.timestamp + 15ULL * 100ULL * 1000ULL;
+        const uint64_t epoch_offset = 1420070400ULL;  // 2015-01-01 UTC
+        double now_s = time_seconds();
+        uint64_t now_mavlink = 0;
+        if (now_s > epoch_offset) {
+            now_mavlink = uint64_t(now_s - epoch_offset) * 100ULL * 1000ULL;
+        }
+        signing.timestamp = (now_mavlink > loaded) ? now_mavlink : loaded;
+    }
     signing.flags = MAVLINK_SIGNING_FLAG_SIGN_OUTGOING;
     signing.accept_unsigned_callback = accept_unsigned_callback;
 
@@ -357,12 +380,33 @@ void MAVLink::save_signing_timestamp(void)
     }
     bool need_save = false;
 
+    // Cap saved value at current real time. The +15s buffer added in
+    // load_signing_key() is a per-load replay guard; allowing it to
+    // round-trip through this save would let the buffer compound across
+    // sequential short-lived sessions until signing.timestamp parks far
+    // enough in the future that incoming packets get rejected as
+    // MAVLINK_SIGNING_STATUS_OLD_TIMESTAMP. Using the legitimate
+    // wall-clock advancement here keeps the stored timestamp in sync
+    // with reality.
+    double now_s = time_seconds();
+    const uint64_t epoch_offset = 1420070400ULL;
+    uint64_t now_mavlink = 0;
+    if (now_s > epoch_offset) {
+        now_mavlink = uint64_t(now_s - epoch_offset) * 100ULL * 1000ULL;
+    }
+
     for (uint8_t i=0; i<MAVLINK_COMM_NUM_BUFFERS; i++) {
 	mavlink_channel_t _chan = (mavlink_channel_t)(MAVLINK_COMM_0 + i);
 	const mavlink_status_t *status = mavlink_get_channel_status(_chan);
-        if (status && status->signing && status->signing->timestamp > key.timestamp) {
-            key.timestamp = status->signing->timestamp;
-            need_save = true;
+        if (status && status->signing) {
+            uint64_t v = status->signing->timestamp;
+            if (v > now_mavlink) {
+                v = now_mavlink;
+            }
+            if (v > key.timestamp) {
+                key.timestamp = v;
+                need_save = true;
+            }
         }
     }
     if (need_save) {
