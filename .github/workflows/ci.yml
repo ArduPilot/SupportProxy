@@ -2,7 +2,7 @@ name: CI Tests
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [ main, develop, 'pr-*' ]
   pull_request:
     branches: [ main, develop ]
 
@@ -27,7 +27,7 @@ jobs:
       run: |
         set -e  # Exit on any error
         echo "Running test script..."
-        scripts/run_tests.sh -j 4
+        scripts/run_tests.sh -j 16
         echo "All tests completed successfully"
 
   docker-test:
