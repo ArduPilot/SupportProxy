@@ -12,12 +12,15 @@ _worker = os.environ.get('PYTEST_XDIST_WORKER', 'gw0')
 _WORKER_ID = int(_worker[2:]) if _worker.startswith('gw') else 0
 os.environ['TEST_PORT_USER'] = str(14552 + _WORKER_ID * 2)
 os.environ['TEST_PORT_ENGINEER'] = str(14553 + _WORKER_ID * 2)
+os.environ['TEST_PORT_USER_BIDI'] = str(14652 + _WORKER_ID * 2)
+os.environ['TEST_PORT_ENGINEER_BIDI'] = str(14653 + _WORKER_ID * 2)
 
 import subprocess
 import threading
 import time
 import pytest
 from test_config import (TEST_PORT_USER, TEST_PORT_ENGINEER, TEST_PASSPHRASE,
+                         TEST_PORT_USER_BIDI, TEST_PORT_ENGINEER_BIDI,
                          KEYDB_PY, UDPPROXY_BIN)
 
 os.environ['MAVLINK_DIALECT'] = 'ardupilotmega'
@@ -101,10 +104,12 @@ def test_server(_worker_cwd):
     subprocess.check_call(['python', KEYDB_PY, 'initialise'])
 
     port1, port2 = TEST_PORT_USER, TEST_PORT_ENGINEER
+    port1_b, port2_b = TEST_PORT_USER_BIDI, TEST_PORT_ENGINEER_BIDI
 
-    # Idempotent: remove any prior entry, then add the test entry.
-    subprocess.run(['python', KEYDB_PY, 'remove', str(port2)],
-                   capture_output=True)
+    # Idempotent: remove any prior entries, then add the test entries.
+    for p2 in (port2, port2_b):
+        subprocess.run(['python', KEYDB_PY, 'remove', str(p2)],
+                       capture_output=True)
 
     result = subprocess.run([
         'python', KEYDB_PY, 'add', str(port1), str(port2),
@@ -112,16 +117,39 @@ def test_server(_worker_cwd):
     ], capture_output=True, text=True)
     assert result.returncode == 0, f"Failed to setup database: {result.stderr}"
 
-    # Verify database entry
+    # Second pair with KEY_FLAG_BIDI_SIGN set so bidi tests can target it.
+    result = subprocess.run([
+        'python', KEYDB_PY, 'add', str(port1_b), str(port2_b),
+        'test_user_bidi', TEST_PASSPHRASE
+    ], capture_output=True, text=True)
+    assert result.returncode == 0, f"Failed to setup bidi database: {result.stderr}"
+
+    result = subprocess.run([
+        'python', KEYDB_PY, 'setflag', str(port2_b), 'bidi_sign'
+    ], capture_output=True, text=True)
+    assert result.returncode == 0, f"Failed to set bidi_sign: {result.stderr}"
+
+    # Verify database entries
     result = subprocess.run(['python', KEYDB_PY, 'list'],
                             capture_output=True, text=True)
     print(f"DEBUG: Database contents before starting UDPProxy:\n{result.stdout}")
 
+    # Generate a per-worker self-signed cert for the proxy's WSS listener.
+    # The proxy reads fullchain.pem/privkey.pem from cwd when a TLS client
+    # ClientHello arrives. The cert never needs to validate (test client
+    # disables verification), it just has to load.
+    subprocess.check_call([
+        'openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-nodes',
+        '-keyout', 'privkey.pem', '-out', 'fullchain.pem',
+        '-days', '1', '-subj', '/CN=localhost',
+    ], stderr=subprocess.DEVNULL)
+
     print("DEBUG: Starting UDPProxy with database ready...")
     server = UDPProxyProcess()  # cwd is already the worker's tmpdir
 
-    # Wait for UDPProxy to load our port pair before yielding.
-    expected_marker = f"Added port {port1}/{port2}"
+    # Wait for UDPProxy to load both port pairs before yielding.
+    markers = {f"Added port {port1}/{port2}": False,
+               f"Added port {port1_b}/{port2_b}": False}
     max_wait = 10
     start_time = time.time()
 
@@ -132,8 +160,12 @@ def test_server(_worker_cwd):
 
         if "Opening sockets" in output:
             print("DEBUG: UDPProxy has started opening sockets")
-        if expected_marker in output:
-            print(f"DEBUG: UDPProxy loaded port {port1}/{port2} - ready for testing!")
+        for m in markers:
+            if not markers[m] and m in output:
+                markers[m] = True
+                print(f"DEBUG: UDPProxy loaded {m.replace('Added port ', '')}")
+        if all(markers.values()):
+            print("DEBUG: UDPProxy ready for testing!")
             break
     else:
         stdout, stderr = server.get_new_output_since_last_check()
