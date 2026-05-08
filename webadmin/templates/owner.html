@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}My entry — {{ config.WEBUI_TITLE }}{% endblock %}
+{% block content %}
+<h2>My entry</h2>
+<dl class="entry-info">
+  <dt>port1 (user side)</dt><dd>{{ entry.port1 }}</dd>
+  <dt>port2 (engineer side)</dt><dd>{{ entry.port2 }}</dd>
+  <dt>traffic counters (port1 / port2)</dt><dd>{{ entry.count1 }} / {{ entry.count2 }}</dd>
+  <dt>connections</dt><dd>{{ entry.connections }}</dd>
+  <dt>signing timestamp</dt><dd>{{ entry.timestamp }}</dd>
+  <dt>flags</dt><dd>{{ entry.flag_names() | join(', ') or '(none)' }}</dd>
+</dl>
+<form method="post" action="{{ url_for('owner.me') }}">
+  {{ form.csrf_token }}
+  <div class="field">{{ form.name.label }}: {{ form.name() }}</div>
+  <div class="field">{{ form.new_passphrase.label }}: {{ form.new_passphrase() }}</div>
+  <div class="field">{{ form.confirm_passphrase.label }}: {{ form.confirm_passphrase() }}</div>
+  <div class="field">{{ form.bidi_sign() }} {{ form.bidi_sign.label }}</div>
+  <div class="field">{{ form.reset_timestamp() }} {{ form.reset_timestamp.label }}</div>
+  <div>{{ form.submit() }}</div>
+  {% for field, errors in form.errors.items() %}
+    {% for e in errors %}<div class="flash flash-error">{{ field }}: {{ e }}</div>{% endfor %}
+  {% endfor %}
+</form>
+{% endblock %}

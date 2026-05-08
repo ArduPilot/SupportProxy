@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}All entries — {{ config.WEBUI_TITLE }}{% endblock %}
+{% block content %}
+<h2>All entries ({{ entries | length }})</h2>
+<table class="entries">
+  <thead><tr>
+    <th>port1</th><th>port2</th><th>name</th>
+    <th>count1</th><th>count2</th><th>conns</th>
+    <th>flags</th><th></th>
+  </tr></thead>
+  <tbody>
+    {% for ke in entries %}
+    <tr>
+      <td>{{ ke.port1 }}</td>
+      <td>{{ ke.port2 }}</td>
+      <td>{{ ke.name }}</td>
+      <td>{{ ke.count1 }}</td>
+      <td>{{ ke.count2 }}</td>
+      <td>{{ ke.connections }}</td>
+      <td>{{ ke.flag_names() | join(', ') or '—' }}</td>
+      <td><a href="{{ url_for('admin.edit', port2=ke.port2) }}">edit</a></td>
+    </tr>
+    {% else %}
+    <tr><td colspan="8"><em>(no entries)</em></td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<h3>Add a new entry</h3>
+<form method="post" action="{{ url_for('admin.add_entry') }}">
+  {{ add_form.csrf_token }}
+  <div class="field">{{ add_form.port1.label }}: {{ add_form.port1() }}</div>
+  <div class="field">{{ add_form.port2.label }}: {{ add_form.port2() }}</div>
+  <div class="field">{{ add_form.name.label }}: {{ add_form.name() }}</div>
+  <div class="field">{{ add_form.passphrase.label }}: {{ add_form.passphrase() }}</div>
+  <div>{{ add_form.submit() }}</div>
+</form>
+{% endblock %}
