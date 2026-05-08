@@ -1,25 +1,38 @@
 """
 Test configuration and shared utilities for UDPProxy testing.
 """
+import os
+
+# Resolve worker ID and per-worker port pair *before* importing test_config so
+# its module-level constants pick up the right values. We assign directly
+# (rather than os.environ.setdefault) because the pytest-xdist controller
+# imports this module first and exports its env to workers; a setdefault would
+# leave every worker stuck on worker 0's ports.
+_worker = os.environ.get('PYTEST_XDIST_WORKER', 'gw0')
+_WORKER_ID = int(_worker[2:]) if _worker.startswith('gw') else 0
+os.environ['TEST_PORT_USER'] = str(14552 + _WORKER_ID * 2)
+os.environ['TEST_PORT_ENGINEER'] = str(14553 + _WORKER_ID * 2)
+
 import subprocess
 import threading
 import time
 import pytest
-import os
-from test_config import TEST_PORT_USER, TEST_PORT_ENGINEER, TEST_PASSPHRASE
+from test_config import (TEST_PORT_USER, TEST_PORT_ENGINEER, TEST_PASSPHRASE,
+                         KEYDB_PY, UDPPROXY_BIN)
 
 os.environ['MAVLINK_DIALECT'] = 'ardupilotmega'
 os.environ['MAVLINK20'] = '1'  # Ensure MAVLink2 is used
 
 
 class UDPProxyProcess:
-    def __init__(self, executable="./udpproxy"):
+    def __init__(self, executable=UDPPROXY_BIN, cwd=None):
         self.proc = subprocess.Popen(
             [executable],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             bufsize=1,
-            universal_newlines=True
+            universal_newlines=True,
+            cwd=cwd,
         )
         self._stdout_lines = []
         self._stderr_lines = []
@@ -48,7 +61,6 @@ class UDPProxyProcess:
 
     def get_latest_output(self, num_lines=5):
         """Get the latest N lines from stdout/stderr combined."""
-        # Get the latest num_lines from both stdout and stderr
         if len(self._stdout_lines) >= num_lines:
             latest_stdout = self._stdout_lines[-num_lines:]
         else:
@@ -59,7 +71,6 @@ class UDPProxyProcess:
         else:
             latest_stderr = self._stderr_lines
 
-        # Combine and return as strings
         return ''.join(latest_stdout), ''.join(latest_stderr)
 
     def terminate(self):
@@ -70,40 +81,48 @@ class UDPProxyProcess:
             self.proc.kill()
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _worker_cwd(tmp_path_factory):
+    """Each xdist worker runs in its own tmpdir so workers don't share a
+    keys.tdb. cwd-relative paths in tests resolve to the per-worker dir."""
+    workdir = tmp_path_factory.mktemp(f"udpproxy_w{_WORKER_ID}")
+    os.chdir(workdir)
+    yield workdir
+
+
 @pytest.fixture(scope="session")
-def test_server():
+def test_server(_worker_cwd):
     """Pytest fixture to provide a test server instance."""
-    print("DEBUG: Setting up test_server fixture")
+    workdir = _worker_cwd
+    print(f"DEBUG: Setting up test_server (worker={_WORKER_ID}, cwd={workdir})")
 
-    # Setup database BEFORE starting UDPProxy
-    print("DEBUG: Setting up database entries before starting UDPProxy...")
+    # Initialize the per-worker keys.tdb in the worker's cwd. We use the
+    # absolute KEYDB_PY because cwd is no longer the repo root.
+    subprocess.check_call(['python', KEYDB_PY, 'initialise'])
+
     port1, port2 = TEST_PORT_USER, TEST_PORT_ENGINEER
-    test_passphrase = TEST_PASSPHRASE
 
-    # Remove any existing entry first
-    subprocess.run(['python', 'keydb.py', 'remove', str(port2)],
+    # Idempotent: remove any prior entry, then add the test entry.
+    subprocess.run(['python', KEYDB_PY, 'remove', str(port2)],
                    capture_output=True)
 
-    # Add our test entry
     result = subprocess.run([
-        'python', 'keydb.py', 'add', str(port1), str(port2),
-        'test_user', test_passphrase
+        'python', KEYDB_PY, 'add', str(port1), str(port2),
+        'test_user', TEST_PASSPHRASE
     ], capture_output=True, text=True)
     assert result.returncode == 0, f"Failed to setup database: {result.stderr}"
 
     # Verify database entry
-    result = subprocess.run(['python', 'keydb.py', 'list'],
+    result = subprocess.run(['python', KEYDB_PY, 'list'],
                             capture_output=True, text=True)
-    print(
-        f"DEBUG: Database contents before starting UDPProxy:\n{result.stdout}")
+    print(f"DEBUG: Database contents before starting UDPProxy:\n{result.stdout}")
 
-    # Now start UDPProxy with database already populated
     print("DEBUG: Starting UDPProxy with database ready...")
-    server = UDPProxyProcess()
+    server = UDPProxyProcess()  # cwd is already the worker's tmpdir
 
-    # Wait for UDPProxy to be fully initialized
-    print("DEBUG: Waiting for UDPProxy to initialize...")
-    max_wait = 10  # Maximum wait time in seconds
+    # Wait for UDPProxy to load our port pair before yielding.
+    expected_marker = f"Added port {port1}/{port2}"
+    max_wait = 10
     start_time = time.time()
 
     while time.time() - start_time < max_wait:
@@ -113,15 +132,13 @@ def test_server():
 
         if "Opening sockets" in output:
             print("DEBUG: UDPProxy has started opening sockets")
-        if "Added port 14552/14553" in output:
-            print("DEBUG: UDPProxy has loaded our test port - ready for testing!")
+        if expected_marker in output:
+            print(f"DEBUG: UDPProxy loaded port {port1}/{port2} - ready for testing!")
             break
     else:
-        # Get all output for debugging
         stdout, stderr = server.get_new_output_since_last_check()
         output = stdout + stderr
-        print(
-            f"DEBUG: UDPProxy initialization timeout. Output so far:\n{output}")
+        print(f"DEBUG: UDPProxy initialization timeout. Output so far:\n{output}")
         server.terminate()
         raise RuntimeError(
             "UDPProxy failed to initialize properly within timeout")
@@ -130,8 +147,5 @@ def test_server():
     yield server
 
     print("DEBUG: Tearing down test_server fixture")
-    # Clean up database entry
-    subprocess.run(['python', 'keydb.py', 'remove', str(port2)],
-                   capture_output=True)
     server.terminate()
     print("DEBUG: test_server fixture teardown complete")
