@@ -12,7 +12,7 @@ CXXFLAGS := $(CXXFLAGS) -DMAVLINK_SIGNING_TIMESTAMP_LIMIT=600
 LIBS := -ltdb -lssl -lcrypto
 
 # Source files
-SOURCES := udpproxy.cpp mavlink.cpp util.cpp keydb.cpp websocket.cpp
+SOURCES := udpproxy.cpp mavlink.cpp util.cpp keydb.cpp conntdb.cpp websocket.cpp
 OBJECTS := $(SOURCES:.cpp=.o)
 TARGET := udpproxy
 
@@ -73,10 +73,11 @@ mavlink.o: mavlink.cpp mavlink.h $(MAVLINK_DIR)/protocol.h
 
 # Dependencies. mavlink.h includes keydb.h, so any object that pulls in
 # mavlink.h transitively depends on keydb.h too.
-udpproxy.o: udpproxy.cpp mavlink.h util.h keydb.h websocket.h
+udpproxy.o: udpproxy.cpp mavlink.h util.h keydb.h conntdb.h websocket.h
 mavlink.o: mavlink.cpp mavlink.h keydb.h $(MAVLINK_DIR)/protocol.h
 util.o: util.cpp util.h
 keydb.o: keydb.cpp keydb.h
+conntdb.o: conntdb.cpp conntdb.h
 websocket.o: websocket.cpp websocket.h util.h
 
 # Testing

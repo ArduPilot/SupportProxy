@@ -704,5 +704,138 @@ class TestReloadReconciliation(BaseConnectionTest):
             "proxy still bound to port2 %d after entry removed" % port2
 
 
+class TestConnectionsTDB(BaseConnectionTest):
+    """While traffic flows, the proxy's per-port-pair child mirrors live
+    state into ``connections.tdb`` (next to keys.tdb in cwd). Verify that
+    a record for the expected port2 appears with the right transport tag
+    and visible peer info — this is the wire the web admin UI reads.
+    """
+
+    def _read_connections_tdb(self):
+        """Return list of ConnEntry-like dicts straight off connections.tdb.
+        Imports kept inside so the rest of the file doesn't grow new
+        top-level deps when running without webadmin installed."""
+        import struct as _struct
+        import tdb as _tdb
+        path = os.path.join(os.getcwd(), 'connections.tdb')
+        if not os.path.exists(path):
+            return []
+        # Mirror webadmin/connections.py's PACK_FORMAT exactly. Kept
+        # local so this test doesn't drag the Flask app into the import
+        # graph for an integration test.
+        FORMAT = "<QQQiiIIIIHBBII4x"
+        SIZE = _struct.calcsize(FORMAT)
+        MAGIC = 0x436f6e6e45424553
+        out = []
+        db = _tdb.open(path, hash_size=1024, tdb_flags=0,
+                       flags=os.O_RDWR, mode=0o600)
+        try:
+            k = db.firstkey()
+            while k is not None:
+                v = db.get(k)
+                if v is not None and len(v) >= SIZE:
+                    body = v[:SIZE]
+                    (magic, connected_at, last_update, port2, conn_index,
+                     pid, rx, tx, peer_ip_be, peer_port_be,
+                     transport, is_user, _flags, _pad) = _struct.unpack(
+                         FORMAT, body)
+                    if magic == MAGIC:
+                        out.append({
+                            'port2': port2, 'conn_index': conn_index,
+                            'transport': transport, 'is_user': is_user,
+                            'rx': rx, 'tx': tx,
+                            'last_update': last_update,
+                            'peer_ip_be': peer_ip_be,
+                            'peer_port_be': peer_port_be,
+                        })
+                k = db.nextkey(k)
+        finally:
+            db.close()
+        return out
+
+    def test_udp_traffic_appears_in_connections_tdb(self, test_server):
+        """A live UDP user + UDP engineer pair should show up as a
+        is_user record (mav1) and an is_user=0 record (engineer) in
+        connections.tdb within the heartbeat window (10s)."""
+        from test_config import TEST_PORTS
+        port1, port2 = TEST_PORTS
+
+        correct_key = passphrase_to_key(TEST_PASSPHRASE)
+        user_conn = engineer_conn = None
+        try:
+            user_conn = self.create_connection('udp', port1, source_system=1)
+            engineer_conn = self.create_connection('udp', port2,
+                                                   source_system=2)
+            self.setup_signing(engineer_conn, correct_key, enable_signing=True)
+
+            stop_sending = threading.Event()
+            user_sender = self.create_message_sender(
+                user_conn, ['heartbeat_user'], stop_sending)
+            engineer_sender = self.create_message_sender(
+                engineer_conn, ['heartbeat_engineer'], stop_sending)
+            user_thread = threading.Thread(target=user_sender)
+            engineer_thread = threading.Thread(target=engineer_sender)
+
+            user_thread.start()
+            self.wait_for_connection_user(test_server)
+            engineer_thread.start()
+
+            # The heartbeat fires the first time main_loop's snapshot
+            # branch is reached (initial last_conn_save_s = 0, throttle
+            # >10s). In practice that's within ~1 packet exchange, but
+            # give it up to ~3s of slack for the grandchild fork +
+            # transaction + commit + the test reading back.
+            deadline = time.time() + 3.0
+            entries = []
+            while time.time() < deadline:
+                entries = [e for e in self._read_connections_tdb()
+                           if e['port2'] == port2]
+                if any(e['is_user'] == 1 for e in entries) and \
+                   any(e['is_user'] == 0 for e in entries):
+                    break
+                time.sleep(0.2)
+
+            stop_sending.set()
+            user_thread.join()
+            engineer_thread.join()
+
+            user_recs = [e for e in entries if e['is_user'] == 1]
+            eng_recs = [e for e in entries if e['is_user'] == 0]
+            self.assert_with_proxy_log(
+                test_server, len(user_recs) == 1,
+                "expected 1 user-side connection record for port2=%d, got %r"
+                % (port2, entries))
+            self.assert_with_proxy_log(
+                test_server, len(eng_recs) >= 1,
+                "expected an engineer-side connection record for port2=%d, "
+                "got %r" % (port2, entries))
+            # transport == 0 is CONN_TRANSPORT_UDP
+            assert user_recs[0]['transport'] == 0, user_recs[0]
+            assert eng_recs[0]['transport'] == 0, eng_recs[0]
+            # rx counters bump as messages get forwarded
+            assert user_recs[0]['rx'] >= 1 or user_recs[0]['tx'] >= 1, \
+                user_recs[0]
+
+        finally:
+            if user_conn:
+                user_conn.close()
+            if engineer_conn:
+                engineer_conn.close()
+            self.wait_for_connection_close(test_server)
+
+        # After the child exits, the parent wipes records for that
+        # port2. Allow up to ~5s (one reload tick) for cleanup.
+        deadline = time.time() + 6.0
+        while time.time() < deadline:
+            remaining = [e for e in self._read_connections_tdb()
+                         if e['port2'] == port2]
+            if not remaining:
+                break
+            time.sleep(0.2)
+        assert not [e for e in self._read_connections_tdb()
+                    if e['port2'] == port2], \
+            "stale connection records left behind for port2=%d" % port2
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

@@ -36,6 +36,7 @@
 #include "mavlink.h"
 #include "util.h"
 #include "keydb.h"
+#include "conntdb.h"
 #include "websocket.h"
 
 #define MAX_EPOLL_EVENTS 64
@@ -171,6 +172,10 @@ public:
     socklen_t fromlen = 0;
     bool is_udp = false;
     double last_pkt = 0;
+    // for connections.tdb visibility
+    time_t connected_at = 0;
+    uint32_t rx_msgs = 0;
+    uint32_t tx_msgs = 0;
 
     void close(void) {
 	close_fd(sock);
@@ -178,6 +183,9 @@ public:
 	used = false;
 	delete ws;
 	ws = nullptr;
+	connected_at = 0;
+	rx_msgs = 0;
+	tx_msgs = 0;
     }
 };
 
@@ -201,6 +209,17 @@ static void main_loop(struct listen_port *p)
     MAVLink mav_blank;
     MAVLink mav1;
     Connection2 conn2[MAX_COMM2_LINKS];
+
+    // Live state mirrored into connections.tdb so the web UI can show
+    // who is connected right now. Captured here, snapshotted into TDB
+    // on a 10s heartbeat below (mirroring save_signing_timestamp's
+    // fork-and-write pattern in mavlink.cpp).
+    struct sockaddr_in mav1_peer {};
+    time_t mav1_connected_at = 0;
+    uint32_t mav1_rx_msgs = 0, mav1_tx_msgs = 0;
+    bool mav1_is_tcp = false;
+    double last_conn_save_s = 0;
+    const pid_t my_pid = getpid();
 
     fdmax = MAX(fdmax, p->sock1_udp);
     fdmax = MAX(fdmax, p->sock2_udp);
@@ -283,26 +302,38 @@ static void main_loop(struct listen_port *p)
                 }
 		mav1.init(p->sock1_udp, CHAN_COMM1, bidi, false, false, conn1_key_id);
                 have_conn1 = true;
+		mav1_peer = from;
+		mav1_connected_at = time(nullptr);
+		mav1_is_tcp = false;
+		// trigger an immediate connections.tdb snapshot on the next
+		// loop iteration so the web UI sees the new conn quickly
+		last_conn_save_s = 0;
 		printf("[%d] %s have UDP conn1 for from %s\n", unsigned(p->port2), time_string(), addr_to_str(from));
             }
             mavlink_message_t msg {};
 	    if (conn2_count > 0) {
 		uint8_t *buf0 = buf;
 		while (n > 0 && mav1.receive_message(buf0, n, msg)) {
+		    mav1_rx_msgs++;
 		    for (uint8_t i=0; i<max_conn2_count; i++) {
 			auto &c2 = conn2[i];
 			if (!c2.used) {
 			    continue;
 			}
-			if (!c2.is_udp && c2.sock != -1 && !c2.mav.send_message(msg)) {
-			    c2.close();
-			    if (conn2_count == max_conn2_count) {
-				max_conn2_count--;
+			if (!c2.is_udp && c2.sock != -1) {
+			    if (!c2.mav.send_message(msg)) {
+				c2.close();
+				if (conn2_count == max_conn2_count) {
+				    max_conn2_count--;
+				}
+				conn2_count--;
+			    } else {
+				c2.tx_msgs++;
 			    }
-			    conn2_count--;
 			}
 			if (c2.is_udp) {
 			    c2.mav.send_message(msg);
+			    c2.tx_msgs++;
 			}
 		    }
 		}
@@ -352,6 +383,10 @@ static void main_loop(struct listen_port *p)
 			c2.mav.set_sendto(from, fromlen);
 			c2.used = true;
 			c2.last_pkt = now;
+			c2.connected_at = time(nullptr);
+			c2.rx_msgs = 0;
+			c2.tx_msgs = 0;
+			last_conn_save_s = 0;  // immediate snapshot
 			printf("[%u] %s have UDP conn2[%u] from %s\n",
 			       unsigned(p->port2), time_string(),
 			       unsigned(idx+1),
@@ -368,10 +403,12 @@ static void main_loop(struct listen_port *p)
 		    bool failed = false;
 		    auto &c2 = conn2[idx];
 		    while (n > 0 && c2.mav.receive_message(buf0, n, msg)) {
+			c2.rx_msgs++;
 			if (!mav1.send_message(msg)) {
 			    failed = true;
 			    break;
 			}
+			mav1_tx_msgs++;
 		    }
 		    if (failed) {
 			break;
@@ -399,6 +436,10 @@ static void main_loop(struct listen_port *p)
 	    p->sock1_tcp = fd2;
 	    fdmax = MAX(fdmax, p->sock1_tcp);
 	    have_conn1 = true;
+	    mav1_peer = from;
+	    mav1_connected_at = time(nullptr);
+	    mav1_is_tcp = true;
+	    last_conn_save_s = 0;  // immediate snapshot
 	    printf("[%d] %s have TCP conn1 for from %s\n", unsigned(p->port2), time_string(), addr_to_str(from));
 	    mav1.init(p->sock1_tcp, CHAN_COMM1, bidi, false, true, conn1_key_id);
 	    last_pkt1 = now;
@@ -439,6 +480,7 @@ static void main_loop(struct listen_port *p)
 	    if (conn2_count > 0) {
 		uint8_t *buf0 = buf;
 		while (n > 0 && mav1.receive_message(buf0, n, msg)) {
+		    mav1_rx_msgs++;
 		    for (uint8_t i=0; i<max_conn2_count; i++) {
 			auto &c2 = conn2[i];
 			if (!c2.used) {
@@ -450,6 +492,8 @@ static void main_loop(struct listen_port *p)
 				max_conn2_count--;
 			    }
 			    conn2_count--;
+			} else {
+			    c2.tx_msgs++;
 			}
 		    }
 		}
@@ -491,6 +535,12 @@ static void main_loop(struct listen_port *p)
 	    c2.tcp_active = false;
 	    c2.used = true;
 	    c2.is_udp = false;
+	    c2.from = from;
+	    c2.fromlen = fromlen;
+	    c2.connected_at = time(nullptr);
+	    c2.rx_msgs = 0;
+	    c2.tx_msgs = 0;
+	    last_conn_save_s = 0;  // immediate snapshot
 	    fdmax = MAX(fdmax, c2.sock);
 	    printf("[%d] %s have TCP conn2[%u] for from %s\n", unsigned(p->port2), time_string(), unsigned(i+1), addr_to_str(from));
 	    c2.mav.init(c2.sock, CHAN_COMM2(i), true, true, true, p->port2);
@@ -551,14 +601,85 @@ static void main_loop(struct listen_port *p)
 		    uint8_t *buf0 = buf;
 		    bool failed = false;
 		    while (n > 0 && c2.mav.receive_message(buf0, n, msg)) {
+			c2.rx_msgs++;
 			if (!mav1.send_message(msg)) {
 			    failed = true;
 			    break;
 			}
+			mav1_tx_msgs++;
 		    }
 		    if (failed) {
 			break;
 		    }
+		}
+	    }
+	}
+
+	/*
+	  Heartbeat snapshot of live connections to connections.tdb.
+	  Throttled to 10s and forked into a grandchild so we don't
+	  block main_loop on disk I/O. Same pattern as
+	  save_signing_timestamp() in mavlink.cpp.
+	 */
+	{
+	    double snap_now = time_seconds();
+	    if (snap_now - last_conn_save_s > 10) {
+		last_conn_save_s = snap_now;
+		signal(SIGCHLD, SIG_IGN);
+		if (fork() == 0) {
+		    auto *db = conn_db_open_transaction();
+		    if (db != nullptr) {
+			conn_delete_for_port2(db, p->port2);
+			time_t now_t = time(nullptr);
+			if (have_conn1) {
+			    struct ConnEntry e {};
+			    e.magic = CONN_MAGIC;
+			    e.connected_at = mav1_connected_at;
+			    e.last_update = now_t;
+			    e.port2 = p->port2;
+			    e.conn_index = 0;
+			    e.pid = my_pid;
+			    e.rx_msgs = mav1_rx_msgs;
+			    e.tx_msgs = mav1_tx_msgs;
+			    e.peer_ip_be = mav1_peer.sin_addr.s_addr;
+			    e.peer_port_be = mav1_peer.sin_port;
+			    if (p->ws) {
+				e.transport = p->ws->is_SSL() ? CONN_TRANSPORT_WSS : CONN_TRANSPORT_WS;
+			    } else {
+				e.transport = mav1_is_tcp ? CONN_TRANSPORT_TCP : CONN_TRANSPORT_UDP;
+			    }
+			    e.is_user = 1;
+			    conn_write(db, e);
+			}
+			for (uint8_t i = 0; i < max_conn2_count; i++) {
+			    const auto &c2 = conn2[i];
+			    if (!c2.used) {
+				continue;
+			    }
+			    struct ConnEntry e {};
+			    e.magic = CONN_MAGIC;
+			    e.connected_at = c2.connected_at;
+			    e.last_update = now_t;
+			    e.port2 = p->port2;
+			    e.conn_index = i + 1;
+			    e.pid = my_pid;
+			    e.rx_msgs = c2.rx_msgs;
+			    e.tx_msgs = c2.tx_msgs;
+			    e.peer_ip_be = c2.from.sin_addr.s_addr;
+			    e.peer_port_be = c2.from.sin_port;
+			    if (c2.is_udp) {
+				e.transport = CONN_TRANSPORT_UDP;
+			    } else if (c2.ws) {
+				e.transport = c2.ws->is_SSL() ? CONN_TRANSPORT_WSS : CONN_TRANSPORT_WS;
+			    } else {
+				e.transport = CONN_TRANSPORT_TCP;
+			    }
+			    e.is_user = 0;
+			    conn_write(db, e);
+			}
+			conn_db_close_commit(db);
+		    }
+		    exit(0);
 		}
 	    }
 	}
@@ -653,6 +774,8 @@ static void check_children(void)
             if (p->pid == pid) {
                 printf("[%d] Child %d exited\n", p->port2, int(pid));
                 p->pid = 0;
+		// drop any live-connection records the child wrote
+		conn_remove_port2(p->port2);
 		found_child = true;
 		// Don't reopen listening sockets for an entry that was
 		// removed from keys.tdb between fork and exit; that would
@@ -722,6 +845,7 @@ static void reload_ports(void)
             if (p->pid != 0) {
                 kill(p->pid, SIGTERM);
             }
+            conn_remove_port2(p->port2);
         }
     }
 
@@ -822,6 +946,11 @@ int main(int argc, char *argv[])
 {
     setvbuf(stdout, nullptr, _IOLBF, 4096);
     printf("Opening sockets\n");
+    // Wipe any connections.tdb records left behind by a previous run.
+    // Per-port-pair children write into this file; on a fresh start no
+    // record can be live yet. Doing this in the parent before any fork
+    // means we never race with a live writer.
+    conn_recreate_empty();
     auto *db = db_open_transaction();
     if (db == nullptr) {
         printf("Database not found\n");
