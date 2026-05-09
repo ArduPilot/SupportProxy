@@ -6,6 +6,7 @@ UDPProxy key database management.
 import argparse
 import sys
 
+import conntdb_lib
 import keydb_lib
 from keydb_lib import CLIError, FLAG_NAMES
 
@@ -23,7 +24,8 @@ def main():
                         choices=['list', 'convert', 'add', 'remove',
                                  'setname', 'setpass', 'setport1',
                                  'initialise', 'resettimestamp',
-                                 'setflag', 'clearflag', 'flags'],
+                                 'setflag', 'clearflag', 'flags',
+                                 'stats'],
                         help="action to perform")
     parser.add_argument("args", default=[], nargs=argparse.REMAINDER)
     args = parser.parse_args()
@@ -100,6 +102,26 @@ def main():
                 raise CLIError("No entry for port2 %d" % port2)
             on = ke.flag_names()
             print("flags=0x%x %s" % (ke.flags, ','.join(on) if on else '(none)'))
+
+        elif args.action == "stats":
+            # Live-connection stats from connections.tdb (sibling of
+            # keys.tdb), joined with each entry's name from this DB.
+            entries = {ke.port2: ke for ke in keydb_lib.list_entries(db)}
+            conn_path = conntdb_lib.conn_path_for(args.keydb)
+            active = conntdb_lib.list_active(conn_path)
+            if not active:
+                print("(no active connections)")
+            else:
+                for c in active:
+                    ke = entries.get(c.port2)
+                    if ke is not None:
+                        label = "%d/%d '%s'" % (ke.port1, ke.port2, ke.name)
+                    else:
+                        label = "?/%d" % c.port2
+                    side = 'user' if c.is_user else 'eng#%d' % c.conn_index
+                    print("%s %s %s peer=%s uptime=%ds rx=%u tx=%u"
+                          % (label, side, c.transport_name, c.peer,
+                             c.uptime_s(), c.rx_msgs, c.tx_msgs))
 
         else:
             raise CLIError("Unknown action: %s" % args.action)
