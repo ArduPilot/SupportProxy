@@ -32,5 +32,12 @@
   {% endwith %}
   {% block content %}{% endblock %}
 </main>
+{% if config.GIT_VERSION %}
+<footer class="version">
+  build
+  <a href="{{ config.GITHUB_REPO_URL }}/commit/{{ config.GIT_VERSION }}"
+     target="_blank" rel="noopener">{{ config.GIT_VERSION }}</a>
+</footer>
+{% endif %}
 </body>
 </html>
