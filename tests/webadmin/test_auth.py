@@ -148,4 +148,4 @@ class TestWebuiJson:
         is what shows up in pages."""
         resp = client.get('/login')
         assert resp.status_code == 200
-        assert b'UDPProxy admin' in resp.data
+        assert b'SupportProxy admin' in resp.data
