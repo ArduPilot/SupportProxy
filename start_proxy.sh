@@ -1,7 +1,7 @@
 #!/bin/bash
-# script to start UDPProxy from cron
+# script to start SupportProxy from cron
 # assumes that keys.tdb is in $HOME/proxy
-# assumes that UDPProxy build is in $HOME/UDPProxy
+# assumes that SupportProxy build is in $HOME/SupportProxy
 #
 # If $HOME/proxy/webui.json exists with "mode":"standalone", we also
 # (re)launch the web admin UI on the configured port.
@@ -10,8 +10,8 @@ cd $HOME/proxy
 
 (
     date
-    pidof -q udpproxy || {
-        nohup $HOME/UDPProxy/udpproxy >> proxy.log 2>&1 &
+    pidof -q supportproxy || {
+        nohup $HOME/SupportProxy/supportproxy >> proxy.log 2>&1 &
     }
 
     if [ -f webui.json ]; then
@@ -37,9 +37,9 @@ print(json.load(open("webui.json")).get("host", "127.0.0.1"))' 2>/dev/null)
                 fi
                 export WEBADMIN_SECRET_KEY="$(cat .webadmin_secret)"
                 export WEBADMIN_KEYDB_PATH="$(pwd)/keys.tdb"
-                export PYTHONPATH="$HOME/UDPProxy"
+                export PYTHONPATH="$HOME/SupportProxy"
 
-                # Reuse the udpproxy WSS cert if it's here (typically a
+                # Reuse the supportproxy WSS cert if it's here (typically a
                 # symlink or copy of the host's Let's Encrypt cert).
                 # When we have TLS, leave WEBADMIN_INSECURE_COOKIES
                 # unset so the session cookie keeps its Secure flag.

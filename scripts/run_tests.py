@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Test runner for UDPProxy.
+Test runner for SupportProxy.
 
-Default behaviour: build udpproxy, then run three pytest invocations
+Default behaviour: build supportproxy, then run three pytest invocations
 (connection, authentication, webadmin tests) — each phase has different
 cwd / keys.tdb / process expectations, so they stay isolated.
 
@@ -157,7 +157,7 @@ def main():
                          '"-j 0" uses one worker per test; "-j N" '
                          '(N>=1) uses N workers; omit for sequential.')
     ap.add_argument('--no-build', action='store_true',
-                    help='skip the make step (use existing udpproxy binary)')
+                    help='skip the make step (use existing supportproxy binary)')
     ap.add_argument('--list', action='store_true',
                     help='list all tests across the three phases and exit')
     ap.add_argument('--timing', action='store_true',
@@ -181,13 +181,13 @@ def main():
         return 0
 
     if not args.no_build:
-        print('=== Building UDPProxy ===')
+        print('=== Building SupportProxy ===')
         run(['make', 'clean'])
         run(['make', 'distclean'])
         run(['make', 'all'])
 
-    if not os.path.isfile('udpproxy'):
-        sys.exit('ERROR: udpproxy binary not found')
+    if not os.path.isfile('supportproxy'):
+        sys.exit('ERROR: supportproxy binary not found')
 
     all_timings = []
 
@@ -220,7 +220,7 @@ def main():
         run_one(extra, paths)
     else:
         # Default: three separate phases (kept apart so phase 2 can wipe
-        # keys.tdb without disturbing phase 1's live udpproxy fixture).
+        # keys.tdb without disturbing phase 1's live supportproxy fixture).
         for label, target in PHASES:
             print('\n=== Running %s ===' % label)
             run_one([], [target])
