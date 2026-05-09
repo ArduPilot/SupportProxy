@@ -10,6 +10,7 @@ from flask import (Blueprint, abort, flash, redirect, render_template, request,
 
 import keydb_lib
 
+from . import connections as conn_db
 from .auth import is_admin, require_admin
 from .db import tdb_readonly, tdb_transaction
 from .forms import AdminAddForm, AdminEditForm, DeleteForm
@@ -24,6 +25,23 @@ def list_entries():
         entries = keydb_lib.list_entries(db)
     add_form = AdminAddForm()
     return render_template('admin_list.html', entries=entries, add_form=add_form)
+
+
+@bp.route('/connections', methods=['GET'])
+@require_admin
+def connections():
+    """Live connections across all entries.
+
+    Joins connections.tdb with keys.tdb so we can render the entry
+    name alongside each connection. Auto-refreshes via meta http-equiv
+    in the template — the proxy heartbeat is 10s.
+    """
+    active = conn_db.list_active()
+    with tdb_readonly() as db:
+        names = {e.port2: e.name for e in keydb_lib.list_entries(db)}
+        port1s = {e.port2: e.port1 for e in keydb_lib.list_entries(db)}
+    return render_template('admin_connections.html',
+                           active=active, names=names, port1s=port1s)
 
 
 @bp.route('/add', methods=['POST'])
