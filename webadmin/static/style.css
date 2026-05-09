@@ -30,3 +30,13 @@ dl.entry-info dd { margin: 0; font-family: monospace; }
 .flash-error   { background: #fbd5d5; border: 1px solid #c06060; }
 
 a { color: #2050a0; }
+
+footer.version {
+    margin: 2rem 1rem 0.5rem;
+    color: #888;
+    font-size: 0.85rem;
+    text-align: right;
+    font-family: monospace;
+}
+footer.version a { color: #888; text-decoration: none; }
+footer.version a:hover { text-decoration: underline; }

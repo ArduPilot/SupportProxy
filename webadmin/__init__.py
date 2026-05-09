@@ -24,6 +24,7 @@ $WEBADMIN_KEYDB_PATH is /home/proxy/keys.tdb then create_app() reads
 """
 import json
 import os
+import subprocess
 
 from flask import Flask, redirect, url_for
 from flask_wtf.csrf import CSRFProtect
@@ -32,6 +33,36 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 from . import config
 
 WEBUI_JSON_NAME = 'webui.json'
+GIT_VERSION_FILE = 'git-version.txt'
+DEFAULT_GITHUB_REPO_URL = 'https://github.com/ArduPilot/UDPProxy'
+
+
+def _resolve_git_version():
+    """Short git hash for the running build.
+
+    On deployed servers `.git/` is excluded from rsync; instead
+    update_server.sh writes git-version.txt to the repo root before
+    rsync. For local dev (no git-version.txt) fall back to live
+    `git rev-parse`. Returns None if neither works.
+    """
+    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__),
+                                             os.pardir))
+    path = os.path.join(repo_root, GIT_VERSION_FILE)
+    if os.path.isfile(path):
+        try:
+            with open(path) as f:
+                v = f.read().strip()
+            if v:
+                return v
+        except OSError:
+            pass
+    try:
+        out = subprocess.check_output(
+            ['git', '-C', repo_root, 'rev-parse', '--short', 'HEAD'],
+            stderr=subprocess.DEVNULL, text=True, timeout=2)
+        return out.strip() or None
+    except (subprocess.SubprocessError, FileNotFoundError, OSError):
+        return None
 
 
 def _load_webui_json(app):
@@ -52,11 +83,15 @@ def _load_webui_json(app):
             app.config['WEBUI_TITLE'] = cfg['title']
         if cfg.get('mode') == 'apache':
             app.config['BEHIND_PROXY'] = True
+        if isinstance(cfg.get('github_repo'), str):
+            app.config['GITHUB_REPO_URL'] = cfg['github_repo']
 
 
 def create_app(test_config=None):
     app = Flask(__name__)
     app.config.from_object(config.DefaultConfig)
+    app.config.setdefault('GITHUB_REPO_URL', DEFAULT_GITHUB_REPO_URL)
+    app.config['GIT_VERSION'] = _resolve_git_version()
     # test_config (when present) typically sets KEYDB_PATH to a fresh
     # tmpdir; apply it before reading webui.json so the json lookup
     # uses the final keys.tdb path rather than the default.
