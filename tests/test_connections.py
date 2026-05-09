@@ -1,5 +1,5 @@
 """
-Connection Tests for UDPProxy using PyMAVLink with authentication.
+Connection Tests for SupportProxy using PyMAVLink with authentication.
 Tests UDP, TCP, and mixed connection scenarios with proper MAVLink2 authentication.
 """
 from pymavlink import mavutil
@@ -64,7 +64,7 @@ class BaseConnectionTest:
         it has called open_sockets() to re-listen. We require the
         parent's marker because that's the one that signals the next
         test can race-free."""
-        print("DEBUG: Waiting for UDPProxy to close + reopen sockets...")
+        print("DEBUG: Waiting for SupportProxy to close + reopen sockets...")
         start_time = time.time()
         seen_close = False
         seen_reopen = False
@@ -79,7 +79,7 @@ class BaseConnectionTest:
                 seen_reopen = True
             if seen_reopen:
                 # parent has reopened listen sockets — safe to proceed
-                print("DEBUG: ✅ UDPProxy ready for next test")
+                print("DEBUG: ✅ SupportProxy ready for next test")
                 return True
             time.sleep(0.1)
 
@@ -87,9 +87,9 @@ class BaseConnectionTest:
         return False
 
     def wait_for_connection_user(self, test_server, timeout=10):
-        """Wait for UDPProxy to log 'User connection established' 
+        """Wait for SupportProxy to log 'User connection established' 
         indicating proper user connection."""
-        print("DEBUG: Waiting for UDPProxy user connection...")
+        print("DEBUG: Waiting for SupportProxy user connection...")
         start_time = time.time()
 
         while time.time() - start_time < timeout:
@@ -105,11 +105,11 @@ class BaseConnectionTest:
         return False
 
     def print_udp_proxy_output(self, test_server):
-        """Print the current output of the UDPProxy process for debugging."""
+        """Print the current output of the SupportProxy process for debugging."""
         stdout, stderr = test_server.get_new_output_since_last_check()
         all_output = stdout + stderr
 
-        print(f"DEBUG: UDPProxy output: {all_output}")
+        print(f"DEBUG: SupportProxy output: {all_output}")
         return all_output
 
     def assert_with_proxy_log(self, test_server, condition, msg, num_lines=80):
@@ -120,12 +120,12 @@ class BaseConnectionTest:
             return
         out, err = test_server.get_latest_output(num_lines=num_lines)
         pytest.fail(
-            "%s\n\n=== udpproxy stdout (last %d lines) ===\n%s"
-            "=== udpproxy stderr (last %d lines) ===\n%s"
+            "%s\n\n=== supportproxy stdout (last %d lines) ===\n%s"
+            "=== supportproxy stderr (last %d lines) ===\n%s"
             % (msg, num_lines, out, num_lines, err))
 
-    def check_udpproxy_output(self, test_server, expected_messages, num_lines=5):
-        """Check UDPProxy stdout/stderr for expected messages.
+    def check_supportproxy_output(self, test_server, expected_messages, num_lines=5):
+        """Check SupportProxy stdout/stderr for expected messages.
 
         This method looks at the latest output lines to avoid the issue
         where get_new_output_since_last_check() returns empty because
@@ -135,7 +135,7 @@ class BaseConnectionTest:
         all_output = stdout + stderr
 
         print(
-            f"DEBUG: Latest UDPProxy output (last {num_lines} lines): {all_output}")
+            f"DEBUG: Latest SupportProxy output (last {num_lines} lines): {all_output}")
 
         found_messages = []
         for expected in expected_messages:
@@ -299,7 +299,7 @@ class BaseConnectionTest:
                 user_conn.close()
             if engineer_conn:
                 engineer_conn.close()
-            # Wait for UDPProxy to close connections before next test
+            # Wait for SupportProxy to close connections before next test
             self.wait_for_connection_close(test_server)
 
 
@@ -326,7 +326,7 @@ class TestUDPConnections(BaseConnectionTest):
             test_server, 'udp', 'udp', engineer_signing_key=bad_key, test_duration=4
         )
         expected_messages = ["Bad support signing key"]
-        self.check_udpproxy_output(test_server, expected_messages)
+        self.check_supportproxy_output(test_server, expected_messages)
 
     def test_good_signing_key(self, test_server):
         """Engineer with the correct key - should get HEARTBEAT and SYSTEM_TIME."""
@@ -406,7 +406,7 @@ class TestMixedConnections(BaseConnectionTest):
 
         time.sleep(0.5)
         expected_messages = ["Got good signature"]
-        found_messages = self.check_udpproxy_output(
+        found_messages = self.check_supportproxy_output(
             test_server, expected_messages)
 
         if found_messages:
@@ -434,7 +434,7 @@ class TestMixedConnections(BaseConnectionTest):
 
         time.sleep(0.5)
         expected_messages = ["Got good signature"]
-        found_messages = self.check_udpproxy_output(
+        found_messages = self.check_supportproxy_output(
             test_server, expected_messages)
 
         if found_messages:
@@ -447,7 +447,7 @@ class TestTCPMultipleConnections(BaseConnectionTest):
     """Test suite for multiple TCP engineer connections capability."""
 
     def test_eight_tcp_engineer_connections(self, test_server):
-        """Test that UDPProxy can handle 8 simultaneous TCP engineer 
+        """Test that SupportProxy can handle 8 simultaneous TCP engineer 
         connections."""
         print("\n=== MULTIPLE TCP TEST: 8 TCP Engineer Connections ===")
         self._test_multiple_tcp_engineers(test_server)
@@ -540,10 +540,10 @@ class TestTCPMultipleConnections(BaseConnectionTest):
             print(f"✅ SUCCESS: All {MAX_TCP_ENGINEER_CONNECTIONS} TCP engineers "
                   f"successfully connected and received HEARTBEAT and SYSTEM_TIME messages")
 
-            # Check UDPProxy output for good signatures
+            # Check SupportProxy output for good signatures
             time.sleep(0.5)
             expected_messages = ["Got good signature"]
-            found_messages = self.check_udpproxy_output(test_server,
+            found_messages = self.check_supportproxy_output(test_server,
                                                         expected_messages, num_lines=15)
 
             if found_messages:
@@ -562,7 +562,7 @@ class TestTCPMultipleConnections(BaseConnectionTest):
                 except Exception:
                     pass
 
-            # Wait for UDPProxy to close connections
+            # Wait for SupportProxy to close connections
             self.wait_for_connection_close(test_server)
 
 

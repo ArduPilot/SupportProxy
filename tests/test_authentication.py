@@ -1,5 +1,5 @@
 """
-Authentication Tests for UDPProxy.
+Authentication Tests for SupportProxy.
 Tests MAVLink authentication, key validation, and database operations.
 """
 import subprocess

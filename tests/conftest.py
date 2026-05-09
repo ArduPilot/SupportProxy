@@ -1,5 +1,5 @@
 """
-Test configuration and shared utilities for UDPProxy testing.
+Test configuration and shared utilities for SupportProxy testing.
 """
 import os
 
@@ -27,7 +27,7 @@ os.environ['MAVLINK_DIALECT'] = 'ardupilotmega'
 os.environ['MAVLINK20'] = '1'  # Ensure MAVLink2 is used
 
 
-class UDPProxyProcess:
+class SupportProxyProcess:
     def __init__(self, executable=SUPPORTPROXY_BIN, cwd=None):
         self.proc = subprocess.Popen(
             [executable],
@@ -88,7 +88,7 @@ class UDPProxyProcess:
 def _worker_cwd(tmp_path_factory):
     """Each xdist worker runs in its own tmpdir so workers don't share a
     keys.tdb. cwd-relative paths in tests resolve to the per-worker dir."""
-    workdir = tmp_path_factory.mktemp(f"udpproxy_w{_WORKER_ID}")
+    workdir = tmp_path_factory.mktemp(f"supportproxy_w{_WORKER_ID}")
     os.chdir(workdir)
     yield workdir
 
@@ -132,7 +132,7 @@ def test_server(_worker_cwd):
     # Verify database entries
     result = subprocess.run(['python', KEYDB_PY, 'list'],
                             capture_output=True, text=True)
-    print(f"DEBUG: Database contents before starting UDPProxy:\n{result.stdout}")
+    print(f"DEBUG: Database contents before starting SupportProxy:\n{result.stdout}")
 
     # Generate a per-worker self-signed cert for the proxy's WSS listener.
     # The proxy reads fullchain.pem/privkey.pem from cwd when a TLS client
@@ -144,10 +144,10 @@ def test_server(_worker_cwd):
         '-days', '1', '-subj', '/CN=localhost',
     ], stderr=subprocess.DEVNULL)
 
-    print("DEBUG: Starting UDPProxy with database ready...")
-    server = UDPProxyProcess()  # cwd is already the worker's tmpdir
+    print("DEBUG: Starting SupportProxy with database ready...")
+    server = SupportProxyProcess()  # cwd is already the worker's tmpdir
 
-    # Wait for UDPProxy to load both port pairs before yielding.
+    # Wait for SupportProxy to load both port pairs before yielding.
     markers = {f"Added port {port1}/{port2}": False,
                f"Added port {port1_b}/{port2_b}": False}
     max_wait = 10
@@ -159,21 +159,21 @@ def test_server(_worker_cwd):
         output = stdout + stderr
 
         if "Opening sockets" in output:
-            print("DEBUG: UDPProxy has started opening sockets")
+            print("DEBUG: SupportProxy has started opening sockets")
         for m in markers:
             if not markers[m] and m in output:
                 markers[m] = True
-                print(f"DEBUG: UDPProxy loaded {m.replace('Added port ', '')}")
+                print(f"DEBUG: SupportProxy loaded {m.replace('Added port ', '')}")
         if all(markers.values()):
-            print("DEBUG: UDPProxy ready for testing!")
+            print("DEBUG: SupportProxy ready for testing!")
             break
     else:
         stdout, stderr = server.get_new_output_since_last_check()
         output = stdout + stderr
-        print(f"DEBUG: UDPProxy initialization timeout. Output so far:\n{output}")
+        print(f"DEBUG: SupportProxy initialization timeout. Output so far:\n{output}")
         server.terminate()
         raise RuntimeError(
-            "UDPProxy failed to initialize properly within timeout")
+            "SupportProxy failed to initialize properly within timeout")
 
     print("DEBUG: test_server fixture setup complete")
     yield server
