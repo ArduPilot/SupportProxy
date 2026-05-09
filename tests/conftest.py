@@ -21,14 +21,14 @@ import time
 import pytest
 from test_config import (TEST_PORT_USER, TEST_PORT_ENGINEER, TEST_PASSPHRASE,
                          TEST_PORT_USER_BIDI, TEST_PORT_ENGINEER_BIDI,
-                         KEYDB_PY, UDPPROXY_BIN)
+                         KEYDB_PY, SUPPORTPROXY_BIN)
 
 os.environ['MAVLINK_DIALECT'] = 'ardupilotmega'
 os.environ['MAVLINK20'] = '1'  # Ensure MAVLink2 is used
 
 
 class UDPProxyProcess:
-    def __init__(self, executable=UDPPROXY_BIN, cwd=None):
+    def __init__(self, executable=SUPPORTPROXY_BIN, cwd=None):
         self.proc = subprocess.Popen(
             [executable],
             stdout=subprocess.PIPE,

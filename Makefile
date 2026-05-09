@@ -1,4 +1,4 @@
-# Makefile for UDPProxy
+# Makefile for SupportProxy
 
 # Compiler settings
 CXX ?= g++
@@ -12,9 +12,9 @@ CXXFLAGS := $(CXXFLAGS) -DMAVLINK_SIGNING_TIMESTAMP_LIMIT=600
 LIBS := -ltdb -lssl -lcrypto
 
 # Source files
-SOURCES := udpproxy.cpp mavlink.cpp util.cpp keydb.cpp conntdb.cpp websocket.cpp
+SOURCES := supportproxy.cpp mavlink.cpp util.cpp keydb.cpp conntdb.cpp websocket.cpp
 OBJECTS := $(SOURCES:.cpp=.o)
-TARGET := udpproxy
+TARGET := supportproxy
 
 # Build directories
 BUILD_DIR := build
@@ -27,7 +27,7 @@ all: modules headers $(TARGET)
 
 # Help target
 help:
-	@echo "UDPProxy Build System"
+	@echo "SupportProxy Build System"
 	@echo "====================="
 	@echo "Available targets:"
 	@echo "  all       - Build everything (default)"
@@ -73,7 +73,7 @@ mavlink.o: mavlink.cpp mavlink.h $(MAVLINK_DIR)/protocol.h
 
 # Dependencies. mavlink.h includes keydb.h, so any object that pulls in
 # mavlink.h transitively depends on keydb.h too.
-udpproxy.o: udpproxy.cpp mavlink.h util.h keydb.h conntdb.h websocket.h
+supportproxy.o: supportproxy.cpp mavlink.h util.h keydb.h conntdb.h websocket.h
 mavlink.o: mavlink.cpp mavlink.h keydb.h $(MAVLINK_DIR)/protocol.h
 util.o: util.cpp util.h
 keydb.o: keydb.cpp keydb.h

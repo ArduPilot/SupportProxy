@@ -1,4 +1,4 @@
-# Dockerfile for UDPProxy - Multi-stage build (Ubuntu version)
+# Dockerfile for SupportProxy - Multi-stage build (Ubuntu version)
 # Build stage
 FROM ubuntu:24.04 AS builder
 
@@ -34,7 +34,7 @@ RUN python3 -m venv --system-site-packages venv && \
 # Initialize git submodules and build
 RUN git submodule update --init --recursive || true
 
-# Build the udpproxy binary with venv activated
+# Build the supportproxy binary with venv activated
 RUN . venv/bin/activate && make clean && make
 
 # Runtime stage
@@ -56,7 +56,7 @@ RUN apt-get update && apt-get install --no-install-recommends -y \
 WORKDIR /app
 
 # Copy the built binary and necessary files from builder stage
-COPY --from=builder /app/udpproxy /app/udpproxy
+COPY --from=builder /app/supportproxy /app/supportproxy
 COPY --from=builder /app/keydb.py /app/keydb.py
 COPY --from=builder /app/keydb_lib.py /app/keydb_lib.py
 COPY --from=builder /app/conntdb_lib.py /app/conntdb_lib.py
@@ -71,5 +71,5 @@ RUN chmod +x /app/entrypoint.sh
 # Use the entrypoint script
 ENTRYPOINT ["/app/entrypoint.sh"]
 
-# Default command is to run udpproxy
+# Default command is to run supportproxy
 CMD []

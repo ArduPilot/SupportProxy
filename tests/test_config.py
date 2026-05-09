@@ -1,12 +1,12 @@
 """
-Centralized test configuration constants for UDPProxy testing.
+Centralized test configuration constants for SupportProxy testing.
 This module provides a single source of truth for all test configuration.
 """
 import os
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
 KEYDB_PY = os.path.join(REPO_ROOT, 'keydb.py')
-UDPPROXY_BIN = os.path.join(REPO_ROOT, 'udpproxy')
+SUPPORTPROXY_BIN = os.path.join(REPO_ROOT, 'supportproxy')
 
 # Test port configuration. When running under pytest-xdist, conftest.py
 # assigns per-worker port pairs via these env vars before this module is
