@@ -1,5 +1,5 @@
 /*
-  mavlink class for UDPProxy
+  mavlink class for SupportProxy
  */
 #pragma once
 

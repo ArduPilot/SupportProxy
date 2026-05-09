@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-UDPProxy key database management.
+SupportProxy key database management.
 """
 
 import argparse

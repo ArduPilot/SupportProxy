@@ -1,6 +1,6 @@
 """
 Reader for connections.tdb — the live per-connection state the
-udpproxy children mirror out via the heartbeat fork-and-write idiom.
+supportproxy children mirror out via the heartbeat fork-and-write idiom.
 
 This module has no Flask dependency so the keydb.py CLI and the
 webadmin Flask app can both use it. webadmin/connections.py is the
@@ -117,7 +117,7 @@ def iter_active(path, now=None, max_age_s=30):
     """Yield ConnEntry records currently in connections.tdb at ``path``.
 
     Records older than ``max_age_s`` (last_update too far in the past)
-    are skipped — defence in depth against orphans the udpproxy parent
+    are skipped — defence in depth against orphans the supportproxy parent
     failed to clean up. Returns nothing if the file is missing.
     """
     if not os.path.exists(path):

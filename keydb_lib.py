@@ -1,5 +1,5 @@
 """
-Library for the UDPProxy keys.tdb.
+Library for the SupportProxy keys.tdb.
 
 The on-disk record layout is append-only and forward-compatible. Readers
 accept any record of size >= KEYENTRY_MIN_SIZE; bytes beyond what the
@@ -142,7 +142,7 @@ def open_db(path='keys.tdb'):
     # serializes the actual transactions, but bare open() racing with that
     # can spuriously fail. 5 attempts is enough for the test harness; for
     # the production CLI / web app it absorbs the rare collision with the
-    # live udpproxy's reload tick.
+    # live supportproxy's reload tick.
     last = None
     for delay in (0.0, 0.01, 0.05, 0.1, 0.25):
         if delay:

@@ -9,7 +9,7 @@ README.md
 
 # Build artifacts
 *.o
-udpproxy
+supportproxy
 venv/
 libraries/
 
