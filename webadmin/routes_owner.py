@@ -3,6 +3,7 @@ from flask import Blueprint, abort, flash, redirect, render_template, url_for
 
 import keydb_lib
 
+from . import connections as conn_db
 from .auth import current_owner, require_login
 from .db import tdb_readonly, tdb_transaction
 from .forms import OwnerEditForm
@@ -45,4 +46,5 @@ def me():
         # populate form defaults from current state
         form.name.data = ke.name
         form.bidi_sign.data = bool(ke.flags & keydb_lib.FLAG_BIDI_SIGN)
-    return render_template('owner.html', form=form, entry=ke)
+    active = conn_db.list_for_port2(port2)
+    return render_template('owner.html', form=form, entry=ke, active=active)

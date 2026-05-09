@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <title>{% block title %}{{ config.WEBUI_TITLE }}{% endblock %}</title>
 <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+{% block head_extra %}{% endblock %}
 </head>
 <body>
 <header>
@@ -13,6 +14,7 @@
       <span>logged in as port {{ session['owner'] }}{% if session.get('is_admin') %} (admin){% endif %}</span>
       {% if session.get('is_admin') %}
         <a href="{{ url_for('admin.list_entries') }}">all entries</a>
+        <a href="{{ url_for('admin.connections') }}">connections</a>
       {% endif %}
       <a href="{{ url_for('owner.me') }}">my entry</a>
       <form method="post" action="{{ url_for('auth.logout') }}" class="inline">

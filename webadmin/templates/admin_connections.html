@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Active connections — {{ config.WEBUI_TITLE }}{% endblock %}
+{% block head_extra %}<meta http-equiv="refresh" content="10">{% endblock %}
+{% block content %}
+<h2>Active connections ({{ active | length }})</h2>
+<p><a href="{{ url_for('admin.list_entries') }}">&larr; all entries</a></p>
+<table class="entries">
+  <thead><tr>
+    <th>port1</th><th>port2</th><th>name</th>
+    <th>side</th><th>transport</th><th>peer</th>
+    <th>uptime</th><th>rx</th><th>tx</th>
+  </tr></thead>
+  <tbody>
+    {% for c in active %}
+    <tr>
+      <td>{{ port1s.get(c.port2, '?') }}</td>
+      <td>{{ c.port2 }}</td>
+      <td>{{ names.get(c.port2, '?') }}</td>
+      <td>{{ 'user' if c.is_user else 'engineer #%d' % c.conn_index }}</td>
+      <td>{{ c.transport_name }}</td>
+      <td>{{ c.peer }}</td>
+      <td>{{ c.uptime_s() }}s</td>
+      <td>{{ c.rx_msgs }}</td>
+      <td>{{ c.tx_msgs }}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="9"><em>(none)</em></td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}
