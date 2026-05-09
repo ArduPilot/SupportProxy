@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# CI Setup script for UDPProxy
+# CI Setup script for SupportProxy
 # Sets up the CI environment for testing
 
 set -e  # Exit on any error
@@ -10,7 +10,7 @@ set -o pipefail  # Exit on pipe failure
 # Ensure we're running from repository root
 cd "$(dirname "$0")/.."
 
-echo "=== Setting up CI environment for UDPProxy tests ==="
+echo "=== Setting up CI environment for SupportProxy tests ==="
 
 echo "Installing system dependencies..."
 sudo apt-get update

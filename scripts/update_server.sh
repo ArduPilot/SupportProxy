@@ -1,25 +1,25 @@
 #!/bin/bash
-# Sync the local UDPProxy source to one or more remote servers, rebuild
+# Sync the local SupportProxy source to one or more remote servers, rebuild
 # in place, and restart the proxy.
 #
 # Usage: scripts/update_server.sh [user@]host [more-hosts...]
 #
 # On each server we assume the standard layout:
-#   ~/UDPProxy/                  - this repo's checkout (kept in sync
+#   ~/SupportProxy/                  - this repo's checkout (kept in sync
 #                                  from the local working tree, including
 #                                  the modules/mavlink submodule and any
 #                                  uncommitted changes)
-#   ~/UDPProxy/start_proxy.sh    - the launcher already in the repo
+#   ~/SupportProxy/start_proxy.sh    - the launcher already in the repo
 #   ~/proxy/                     - the data dir; keys.tdb, proxy.log,
 #                                  cron.log, the live signing keys live
 #                                  here. Untouched by this script.
 #
 # What runs:
-#   1. rsync the local source tree -> remote ~/UDPProxy/, with --delete
+#   1. rsync the local source tree -> remote ~/SupportProxy/, with --delete
 #      so removed files go away. Build artifacts and runtime data are
 #      excluded so we never clobber the server's keys / logs / certs.
 #   2. ssh in and rebuild from clean (make distclean && make).
-#   3. kill any running udpproxy and re-run ~/UDPProxy/start_proxy.sh
+#   3. kill any running supportproxy and re-run ~/SupportProxy/start_proxy.sh
 #      so the new binary takes over immediately. (The cron entry from
 #      README would respawn it within a minute anyway, but that leaves
 #      a gap.)
@@ -38,7 +38,7 @@ REPO_ROOT="$( cd "$SCRIPT_DIR/.." && pwd )"
 # and data files (server-side state we must not overwrite).
 RSYNC_EXCLUDES=(
     --exclude='*.o'
-    --exclude='udpproxy'
+    --exclude='supportproxy'
     --exclude='libraries/'
     --exclude='__pycache__/'
     --exclude='*.pyc'
@@ -64,12 +64,12 @@ for host in "$@"; do
     echo
     echo "=== $host: syncing source ==="
     rsync -az --delete "${RSYNC_EXCLUDES[@]}" \
-        "$REPO_ROOT/" "$host:UDPProxy/"
+        "$REPO_ROOT/" "$host:SupportProxy/"
 
     echo "=== $host: rebuild + restart ==="
     ssh "$host" bash -se <<'SSH_EOF'
 set -e
-cd ~/UDPProxy
+cd ~/SupportProxy
 # Activate the venv if the server's set up the way the README
 # describes (python3 -m venv --system-site-packages venv +
 # pip install pymavlink). Without this, mavgen.py isn't on PATH and
@@ -87,8 +87,8 @@ make distclean >/dev/null
 ./regen_headers.sh
 make all
 # pkill -f matches the full argv. We anchor on the bin path so we don't
-# accidentally kill anything named "udpproxy" run from elsewhere.
-pkill -f "$HOME/UDPProxy/udpproxy" 2>/dev/null || true
+# accidentally kill anything named "supportproxy" run from elsewhere.
+pkill -f "$HOME/SupportProxy/supportproxy" 2>/dev/null || true
 # Also kill any running webadmin gunicorn so start_proxy.sh respawns it
 # against the freshly-rsynced source. Without this, an existing gunicorn
 # keeps serving the old code (start_proxy.sh skips relaunching when one
@@ -98,7 +98,7 @@ sleep 1
 ./start_proxy.sh
 sleep 1
 echo "running pid:"
-pgrep -af udpproxy || echo "  (no udpproxy detected — check ~/proxy/cron.log)"
+pgrep -af supportproxy || echo "  (no supportproxy detected — check ~/proxy/cron.log)"
 SSH_EOF
 done
 
