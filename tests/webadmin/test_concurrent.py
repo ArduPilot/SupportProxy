@@ -21,7 +21,7 @@ from _test_helpers import (BOB_PASS, BOB_PORT1, BOB_PORT2,
 
 
 def _bump_counters(keydb_path, port2, iterations, stop_event):
-    """Imitate udpproxy.cpp's connection-close counter update."""
+    """Imitate supportproxy.cpp's connection-close counter update."""
     for _ in range(iterations):
         if stop_event.is_set():
             return
