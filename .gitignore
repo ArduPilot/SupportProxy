@@ -2,7 +2,6 @@
 *.o
 set_key
 udpproxy
-git-version.txt
 libraries/
 venv/
 __pycache__/
