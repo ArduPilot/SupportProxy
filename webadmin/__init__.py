@@ -33,29 +33,19 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 from . import config
 
 WEBUI_JSON_NAME = 'webui.json'
-GIT_VERSION_FILE = 'git-version.txt'
 DEFAULT_GITHUB_REPO_URL = 'https://github.com/ArduPilot/UDPProxy'
 
 
 def _resolve_git_version():
-    """Short git hash for the running build.
+    """Short git hash for the running build, via `git rev-parse`.
 
-    On deployed servers `.git/` is excluded from rsync; instead
-    update_server.sh writes git-version.txt to the repo root before
-    rsync. For local dev (no git-version.txt) fall back to live
-    `git rev-parse`. Returns None if neither works.
+    Both local dev and deploys (scripts/update_server.sh now rsyncs
+    .git/ along with the source) have a working repo root, so a live
+    rev-parse is enough. Returns None if git isn't available or the
+    repo state is broken.
     """
     repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__),
                                              os.pardir))
-    path = os.path.join(repo_root, GIT_VERSION_FILE)
-    if os.path.isfile(path):
-        try:
-            with open(path) as f:
-                v = f.read().strip()
-            if v:
-                return v
-        except OSError:
-            pass
     try:
         out = subprocess.check_output(
             ['git', '-C', repo_root, 'rev-parse', '--short', 'HEAD'],

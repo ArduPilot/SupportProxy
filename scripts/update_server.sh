@@ -34,14 +34,9 @@ fi
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 REPO_ROOT="$( cd "$SCRIPT_DIR/.." && pwd )"
 
-# Stamp the local source tree with the current git short hash so the web
-# UI footer can show it on the server (.git/ is excluded from rsync).
-git -C "$REPO_ROOT" rev-parse --short HEAD > "$REPO_ROOT/git-version.txt"
-
 # What rsync should NOT transfer. Build artifacts (rebuilt on the server)
 # and data files (server-side state we must not overwrite).
 RSYNC_EXCLUDES=(
-    --exclude='.git/'
     --exclude='*.o'
     --exclude='udpproxy'
     --exclude='libraries/'
