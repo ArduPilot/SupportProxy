@@ -1,4 +1,6 @@
-# UDP Proxy for MAVLink
+# SupportProxy — MAVLink relay for behind-NAT support
+
+> This project was previously called UDPProxy. The repo, the binary, and most file/path names have been renamed; the old GitHub URL still redirects.
 
 This is a UDP/TCP/WebSocket Proxy for MAVLink to facilitate remote support of ArduPilot users.
 
@@ -17,9 +19,9 @@ For more information on using the support proxy see https://support.ardupilot.or
 
 ## How It Works
 
-![UDPProxy Architecture](udpproxy-diagram.svg)
+![SupportProxy Architecture](supportproxy-diagram.svg)
 
-UDPProxy acts as a bridge between ArduPilot users and support engineers:
+SupportProxy acts as a bridge between ArduPilot users and support engineers:
 
 1. **User Side**: Connects their Ground Control Station to the proxy server (e.g., port 10001)
 2. **Proxy Server**: Routes traffic between user and engineer ports with authentication
@@ -44,8 +46,8 @@ sudo apt install libtdb-dev python3-tdb python3-venv gcc g++ git libssl-dev
 
 ```bash
 # Clone the repository
-git clone --recurse-submodules https://github.com/ArduPilot/UDPProxy.git
-cd UDPProxy
+git clone --recurse-submodules https://github.com/ArduPilot/SupportProxy.git
+cd SupportProxy
 ```
 
 ### Python Virtual Environment Setup
@@ -63,7 +65,7 @@ source venv/bin/activate
 pip install pymavlink
 ```
 
-### Building UDPProxy
+### Building SupportProxy
 
 ```bash
 # Build everything (initializes submodules, generates headers, compiles)
@@ -79,7 +81,7 @@ make help
 
 ### Initial Setup
 
-UDPProxy should be run on a machine with a public IP address or through an internet domain. Initialize the database once:
+SupportProxy should be run on a machine with a public IP address or through an internet domain. Initialize the database once:
 
 ```bash
 # Initialize the key database
@@ -110,10 +112,10 @@ Add support engineer and user port pairs:
 
 ```bash
 # Start the proxy (runs in foreground)
-./udpproxy
+./supportproxy
 
 # Check if running in another terminal
-pgrep udpproxy
+pgrep supportproxy
 ```
 
 ### Supporting WebSocket + SSL
@@ -121,7 +123,7 @@ pgrep udpproxy
 To support SSL encrypted links for WebSocket connections (both for
 user connections and support engineer connections) you will need to
 provide a fullchain.pem and privkey.pem file in the directory where
-you start udpproxy. These files must be readable by udpproxy. SSL
+you start supportproxy. These files must be readable by supportproxy. SSL
 support has been tested with Let's Encrypt certificates. Note that
 when you renew your certificates you will need to update the files in
 this directory, or use symlinks to the system certificates.
@@ -137,12 +139,12 @@ For production deployment, you can use cron for automatic startup and restart:
 crontab -e
 
 # Add these lines:
-*/1 * * * * $HOME/UDPProxy/start_proxy.sh
-@reboot $HOME/UDPProxy/start_proxy.sh
+*/1 * * * * $HOME/SupportProxy/start_proxy.sh
+@reboot $HOME/SupportProxy/start_proxy.sh
 ```
 
 The `start_proxy.sh` script will:
-- Check if udpproxy is already running
+- Check if supportproxy is already running
 - Start it if not running
 - Log output to `proxy.log` and cron activity to `cron.log`
 
@@ -150,7 +152,7 @@ The `start_proxy.sh` script will:
 
 ```bash
 # Check proxy status
-pgrep udpproxy
+pgrep supportproxy
 
 # View logs
 tail -f proxy.log      # Proxy output
@@ -165,28 +167,28 @@ netstat -ln | grep ":1000[0-9]"
 
 ## Docker Usage
 
-UDPProxy can also be run using Docker for easier deployment and management.
+SupportProxy can also be run using Docker for easier deployment and management.
 
 ### Building the Docker Image
 
 ```bash
-docker build -f docker/Dockerfile -t ap-udpproxy .
+docker build -f docker/Dockerfile -t ap-supportproxy .
 ```
 
 ### Running with Docker
 
 ```bash
 # Create a volume for persistent data (keys.tdb and logs)
-docker volume create udpproxy-data
+docker volume create supportproxy-data
 
 # Initialize the database (first time only)
-docker run --rm -v udpproxy-data:/app/data -it ap-udpproxy keydb.py initialise
+docker run --rm -v supportproxy-data:/app/data -it ap-supportproxy keydb.py initialise
 
 # Add users to the database
-docker run --rm -v udpproxy-data:/app/data -it ap-udpproxy keydb.py add 10001 10002 'Support1' MySecurePassPhrase
+docker run --rm -v supportproxy-data:/app/data -it ap-supportproxy keydb.py add 10001 10002 'Support1' MySecurePassPhrase
 
 # Run the UDP proxy as deamon
-docker run -d --name ap-udpproxy -v udpproxy-data:/app/data -p 10001-10100:10001-10100 ap-udpproxy
+docker run -d --name ap-supportproxy -v supportproxy-data:/app/data -p 10001-10100:10001-10100 ap-supportproxy
 ```
 
 Adapt exposed port according to your usage.
@@ -197,38 +199,38 @@ The Docker container includes an intelligent entrypoint that automatically handl
 
 ```bash
 # All keydb.py operations work directly:
-docker run --rm -v udpproxy-data:/app/data -it ap-udpproxy keydb.py list
-docker run --rm -v udpproxy-data:/app/data -it ap-udpproxy keydb.py add PORT1 PORT2 Name PassPhrase
-docker run --rm -v udpproxy-data:/app/data -it ap-udpproxy keydb.py remove PORT2
-docker run --rm -v udpproxy-data:/app/data -it ap-udpproxy keydb.py setname PORT2 NewName
-docker run --rm -v udpproxy-data:/app/data -it ap-udpproxy keydb.py setpass PORT2 NewPassPhrase
+docker run --rm -v supportproxy-data:/app/data -it ap-supportproxy keydb.py list
+docker run --rm -v supportproxy-data:/app/data -it ap-supportproxy keydb.py add PORT1 PORT2 Name PassPhrase
+docker run --rm -v supportproxy-data:/app/data -it ap-supportproxy keydb.py remove PORT2
+docker run --rm -v supportproxy-data:/app/data -it ap-supportproxy keydb.py setname PORT2 NewName
+docker run --rm -v supportproxy-data:/app/data -it ap-supportproxy keydb.py setpass PORT2 NewPassPhrase
 ```
 
 ### Viewing Logs and Monitoring
 
-When running UDPProxy in Docker, you can monitor logs and status using these commands:
+When running SupportProxy in Docker, you can monitor logs and status using these commands:
 
 ```bash
 # View real-time logs from the running container
-docker logs -f ap-udpproxy
+docker logs -f ap-supportproxy
 
 # View last 100 lines of logs
-docker logs --tail 100 ap-udpproxy
+docker logs --tail 100 ap-supportproxy
 
 # View logs with timestamps
-docker logs -t ap-udpproxy
+docker logs -t ap-supportproxy
 
 # Check container status
-docker ps | grep ap-udpproxy
+docker ps | grep ap-supportproxy
 
 # Check container resource usage
-docker stats ap-udpproxy
+docker stats ap-supportproxy
 
 # Access container shell for debugging
-docker exec -it ap-udpproxy bash
+docker exec -it ap-supportproxy bash
 
 # View logs inside the container (if available)
-docker exec ap-udpproxy tail -f /app/data/proxy.log
+docker exec ap-supportproxy tail -f /app/data/proxy.log
 ```
 
 ## Database Management
@@ -271,7 +273,7 @@ The `keydb.py` script provides comprehensive database management:
 
 ### Database Notes
 
-- **Automatic Port Listening**: When users are added, udpproxy automatically starts listening on new ports without restart
+- **Automatic Port Listening**: When users are added, supportproxy automatically starts listening on new ports without restart
 - **Port Conflicts**: The system prevents duplicate port assignments
 - **Persistent Storage**: Database is stored in `keys.tdb` file
 - **Backup**: Regularly backup the `keys.tdb` file for disaster recovery
@@ -288,7 +290,7 @@ The `keydb.py` script provides comprehensive database management:
 The `webadmin/` directory contains a small Flask app that lets users
 manage their own entry through the browser, and lets users with the
 `admin` flag manage every entry. It writes to the same `keys.tdb` the
-running `udpproxy` reads, so changes go live within ~5 seconds with no
+running `supportproxy` reads, so changes go live within ~5 seconds with no
 proxy restart.
 
 ### Roles and login
@@ -402,7 +404,7 @@ optional:
 
 | Key | Effect |
 |---|---|
-| `title` | Replaces the default `UDPProxy admin` site name in the nav and `<title>` |
+| `title` | Replaces the default `SupportProxy admin` site name in the nav and `<title>` |
 | `mode` | `standalone` — `start_proxy.sh` (re)spawns the web UI on the configured `host:port`. `apache` — sets `BEHIND_PROXY=1` so the app honours `X-Forwarded-*`; the launching is then someone else's job (`mod_wsgi`, a systemd unit, etc.) |
 | `host` | Listen address for `mode: standalone`. Defaults to `127.0.0.1` (loopback only). Set to `0.0.0.0` to listen on every interface — only safe behind a firewall and/or a TLS terminator. |
 | `port` | TCP port for `mode: standalone`. Front with TLS / a reverse proxy in production. |
@@ -411,7 +413,7 @@ When `mode: standalone`, the cron entry from "Automatic Startup" is
 enough — `start_proxy.sh` checks `webui.json`, generates a stable
 `~/proxy/.webadmin_secret`, and (re)launches the app on every tick if
 nothing is running. If `~/proxy/fullchain.pem` and
-`~/proxy/privkey.pem` are present (the same cert pair udpproxy uses
+`~/proxy/privkey.pem` are present (the same cert pair supportproxy uses
 for WSS), the standalone web UI auto-serves over HTTPS using them and
 keeps the session cookie's `Secure` flag set; otherwise it falls back
 to plain HTTP.
@@ -452,7 +454,7 @@ netstat -ln | grep ":10001"
 ./keydb.py list
 
 # Restart proxy
-pkill udpproxy && ./udpproxy
+pkill supportproxy && ./supportproxy
 
 # Check logs
 tail -f proxy.log
@@ -471,7 +473,7 @@ ls -la keys.tdb
 
 ```bash
 # Check system logs
-journalctl -f | grep udpproxy
+journalctl -f | grep supportproxy
 ```
 
 ## Testing
@@ -480,7 +482,7 @@ The test suite covers UDP/TCP connection scenarios, the `keydb.py` CLI,
 and the web admin UI (auth, role guards, CSRF, concurrent writes).
 
 ```bash
-# Run everything (builds udpproxy, runs all three phases)
+# Run everything (builds supportproxy, runs all three phases)
 ./scripts/run_tests.sh
 
 # Run in parallel via pytest-xdist (-j N workers, each with its own
@@ -512,6 +514,6 @@ runs one pytest invocation against exactly what you passed.
 
 ## License
 
-UDPProxy is licensed under the GNU General Public License version 3 or later.
+SupportProxy is licensed under the GNU General Public License version 3 or later.
 
 See `COPYING.txt` for full license terms.

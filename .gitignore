@@ -1,7 +1,7 @@
 *.tdb
 *.o
 set_key
-udpproxy
+supportproxy
 libraries/
 venv/
 __pycache__/

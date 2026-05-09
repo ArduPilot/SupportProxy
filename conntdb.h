@@ -11,8 +11,8 @@
   Each per-port-pair child writes its own records here, on connect/
   disconnect events and on a 10s heartbeat snapshot driven by the
   same fork-and-write idiom mavlink.cpp uses for save_signing_timestamp().
-  The udpproxy parent wipes the file at startup and clears records
-  for exiting / removed children.
+  The supportproxy parent wipes the file at startup and clears
+  records for exiting / removed children.
  */
 #pragma once
 

@@ -4,7 +4,7 @@
   <rect width="800" height="600" fill="#f8f9fa"/>
   
   <!-- Title -->
-  <text x="400" y="30" text-anchor="middle" font-family="Arial, sans-serif" font-size="24" font-weight="bold" fill="#2c3e50">UDPProxy for MAVLink Remote Support</text>
+  <text x="400" y="30" text-anchor="middle" font-family="Arial, sans-serif" font-size="24" font-weight="bold" fill="#2c3e50">SupportProxy for MAVLink Remote Support</text>
   
   <!-- User Side (Left) -->
   <g id="user-side">
@@ -39,10 +39,10 @@
     <text x="400" y="210" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" fill="#ecf0f1">Public Network</text>
   </g>
   
-  <!-- UDPProxy Server (Center) -->
+  <!-- SupportProxy Server (Center) -->
   <g id="proxy-server">
     <rect x="320" y="300" width="160" height="120" fill="#2ecc71" stroke="#27ae60" stroke-width="3" rx="10"/>
-    <text x="400" y="325" text-anchor="middle" font-family="Arial, sans-serif" font-size="14" font-weight="bold" fill="white">UDPProxy Server</text>
+    <text x="400" y="325" text-anchor="middle" font-family="Arial, sans-serif" font-size="14" font-weight="bold" fill="white">SupportProxy Server</text>
     <text x="400" y="345" text-anchor="middle" font-family="Arial, sans-serif" font-size="11" fill="#ecf0f1">Public IP: 203.0.113.50</text>
     
     <!-- Port mapping -->
@@ -93,10 +93,10 @@
   <!-- Legend -->
   <g id="legend">
     <rect x="50" y="450" width="700" height="120" fill="#ffffff" stroke="#bdc3c7" stroke-width="1" rx="5"/>
-    <text x="400" y="475" text-anchor="middle" font-family="Arial, sans-serif" font-size="14" font-weight="bold" fill="#2c3e50">How UDPProxy Works</text>
+    <text x="400" y="475" text-anchor="middle" font-family="Arial, sans-serif" font-size="14" font-weight="bold" fill="#2c3e50">How SupportProxy Works</text>
     
     <text x="70" y="495" font-family="Arial, sans-serif" font-size="11" font-weight="bold" fill="#2c3e50">1. Setup:</text>
-    <text x="70" y="510" font-family="Arial, sans-serif" font-size="10" fill="#7f8c8d">• UDPProxy runs on a server with public IP address</text>
+    <text x="70" y="510" font-family="Arial, sans-serif" font-size="10" fill="#7f8c8d">• SupportProxy runs on a server with public IP address</text>
     <text x="70" y="525" font-family="Arial, sans-serif" font-size="10" fill="#7f8c8d">• Database maps user ports to engineer ports with authentication</text>
     
     <text x="400" y="495" font-family="Arial, sans-serif" font-size="11" font-weight="bold" fill="#2c3e50">2. Connection:</text>
