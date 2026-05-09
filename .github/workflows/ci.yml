@@ -44,42 +44,42 @@ jobs:
 
     - name: Build Docker image
       run: |
-        docker build -t udpproxy-test -f docker/Dockerfile .
+        docker build -t supportproxy-test -f docker/Dockerfile .
 
     - name: Test Docker container
       run: |
         # Test that the binary exists and is executable
-        docker run --rm --entrypoint=/bin/bash udpproxy-test -c "ls -la /app/udpproxy && test -x /app/udpproxy && echo '/app/udpproxy is executable'"
+        docker run --rm --entrypoint=/bin/bash supportproxy-test -c "ls -la /app/supportproxy && test -x /app/supportproxy && echo '/app/supportproxy is executable'"
 
         # Create a volume for persistent data as shown in README
-        docker volume create udpproxy-test-data
+        docker volume create supportproxy-test-data
 
         # Initialize the database in the volume (as shown in README)
-        docker run --rm -v udpproxy-test-data:/app/data udpproxy-test keydb.py initialise
+        docker run --rm -v supportproxy-test-data:/app/data supportproxy-test keydb.py initialise
 
         # Add a test user to the database (as shown in README)
-        docker run --rm -v udpproxy-test-data:/app/data udpproxy-test keydb.py add 10001 10002 'TestUser' TestPass123
+        docker run --rm -v supportproxy-test-data:/app/data supportproxy-test keydb.py add 10001 10002 'TestUser' TestPass123
 
-        # Test that the container runs udpproxy and creates proxy.log
-        docker run --rm --name udpproxy-test-run -v udpproxy-test-data:/app/data -d udpproxy-test
+        # Test that the container runs supportproxy and creates proxy.log
+        docker run --rm --name supportproxy-test-run -v supportproxy-test-data:/app/data -d supportproxy-test
         sleep 3
-        
+
         # Check if proxy.log is being created/filled
-        if docker exec udpproxy-test-run test -f /app/data/proxy.log; then
-          echo 'UDPProxy is running and proxy.log exists'
-          log_size=$(docker exec udpproxy-test-run wc -c /app/data/proxy.log | cut -d' ' -f1)
+        if docker exec supportproxy-test-run test -f /app/data/proxy.log; then
+          echo 'SupportProxy is running and proxy.log exists'
+          log_size=$(docker exec supportproxy-test-run wc -c /app/data/proxy.log | cut -d' ' -f1)
           echo "proxy.log size: $log_size bytes"
           if [ "$log_size" -gt 0 ]; then
-            echo 'proxy.log is being filled - UDPProxy is working correctly'
+            echo 'proxy.log is being filled - SupportProxy is working correctly'
           else
             echo 'proxy.log exists but is empty'
           fi
-          docker stop udpproxy-test-run
+          docker stop supportproxy-test-run
         else
-          echo 'UDPProxy container failed - proxy.log not found'
-          docker stop udpproxy-test-run
+          echo 'SupportProxy container failed - proxy.log not found'
+          docker stop supportproxy-test-run
           exit 1
         fi
 
         # Cleanup
-        docker volume rm udpproxy-test-data
+        docker volume rm supportproxy-test-data
