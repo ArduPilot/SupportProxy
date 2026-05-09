@@ -21,8 +21,8 @@ class DefaultConfig:
     SECRET_KEY = os.environ.get('WEBADMIN_SECRET_KEY') or secrets.token_hex(32)
 
     # Path to keys.tdb. Resolved relative to the working directory at startup
-    # unless absolute. The udpproxy binary uses cwd-relative 'keys.tdb' so the
-    # web admin should typically be started from the same directory.
+    # unless absolute. The supportproxy binary uses cwd-relative 'keys.tdb'
+    # so the web admin should typically be started from the same directory.
     KEYDB_PATH = os.environ.get('WEBADMIN_KEYDB_PATH', 'keys.tdb')
 
     # Cookie hardening. Set WEBADMIN_INSECURE_COOKIES=1 only for local HTTP dev.
@@ -39,4 +39,4 @@ class DefaultConfig:
 
     # Site-name shown in templates. Overridden by webui.json's "title"
     # field if that file exists in the keys.tdb directory.
-    WEBUI_TITLE = 'UDPProxy admin'
+    WEBUI_TITLE = 'SupportProxy admin'

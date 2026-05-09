@@ -1,5 +1,5 @@
 """
-UDPProxy web admin UI.
+SupportProxy web admin UI.
 
 A Flask app that lets owners (port + passphrase) manage their own keys.tdb
 entry and lets users with the KEY_FLAG_ADMIN bit set manage every entry.
@@ -33,7 +33,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 from . import config
 
 WEBUI_JSON_NAME = 'webui.json'
-DEFAULT_GITHUB_REPO_URL = 'https://github.com/ArduPilot/UDPProxy'
+DEFAULT_GITHUB_REPO_URL = 'https://github.com/ArduPilot/SupportProxy'
 
 
 def _resolve_git_version():
