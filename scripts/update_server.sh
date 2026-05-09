@@ -79,6 +79,12 @@ if [ -f venv/bin/activate ]; then
     source venv/bin/activate
 fi
 make distclean >/dev/null
+# Run regen_headers explicitly. The Makefile rule for the generated
+# headers depends on modules/mavlink/.../all.xml's mtime, but rsync
+# preserves source mtimes — so a submodule bump can leave the
+# regenerated headers older than the new XML and make won't notice.
+# Run regen_headers.sh up-front to be safe.
+./regen_headers.sh
 make all
 # pkill -f matches the full argv. We anchor on the bin path so we don't
 # accidentally kill anything named "udpproxy" run from elsewhere.
