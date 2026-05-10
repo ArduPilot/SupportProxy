@@ -64,7 +64,22 @@ echo "webadmin: $PROTO://$BIND:$PORT/"
 echo
 
 if command -v gunicorn >/dev/null 2>&1; then
-    GUNICORN_ARGS=( -w 1 -b "$BIND:$PORT" )
+    # gthread worker (threaded sync) so one stalled TLS connection
+    # doesn't block the whole UI. The default sync worker handles one
+    # request at a time per worker — fine for low-traffic admin pages,
+    # but the 5s auto-refresh from any open tab plus the occasional
+    # half-open TLS connection (scanner / slow client / dropped net)
+    # is enough to keep the worker pinned and trip gunicorn's
+    # WORKER TIMEOUT abort. gthread runs --threads workers per
+    # process with IO multiplexed across them.
+    GUNICORN_ARGS=(
+        -w 1
+        -k gthread
+        --threads 4
+        --timeout 60
+        --graceful-timeout 30
+        -b "$BIND:$PORT"
+    )
     if [ "$USE_TLS" = "1" ]; then
         GUNICORN_ARGS+=( --certfile fullchain.pem --keyfile privkey.pem )
     fi
