@@ -38,6 +38,7 @@
 #include "keydb.h"
 #include "conntdb.h"
 #include "tlog.h"
+#include "session.h"
 #include "cleanup.h"
 #include "websocket.h"
 
@@ -243,13 +244,19 @@ static void main_loop(struct listen_port *p)
         sigaction(SIGUSR1, &sa, nullptr);
     }
 
+    // session_n is computed once at fork start and shared between the
+    // tlog and (further down) the binlog writer so the paired files
+    // — sessionN.tlog + sessionN.bin — share their N regardless of
+    // which writer activates first or whether one of them never does.
+    const unsigned session_n = next_session_n(uint32_t(p->port2), "logs");
+
     // tlog: opened lazily on first received frame so an idle child that
     // never sees traffic doesn't leave behind an empty session file.
     TlogWriter tlog;
     const bool tlog_enabled = (p->flags & KEY_FLAG_TLOG) != 0;
     auto ensure_tlog_open = [&]() {
         if (tlog_enabled && !tlog.is_open()) {
-            tlog.open(uint32_t(p->port2));
+            tlog.open(uint32_t(p->port2), session_n);
         }
     };
     auto tlog_ptr = [&]() -> TlogWriter * {
