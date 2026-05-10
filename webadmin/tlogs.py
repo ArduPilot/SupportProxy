@@ -21,7 +21,11 @@ from .auth import current_owner, require_admin, require_login
 from .db import tdb_readonly
 
 DATE_RE = re.compile(r'^\d{4}-\d{2}-\d{2}$')
-SESSION_RE = re.compile(r'^session\d+\.tlog$')
+# Cover both .tlog (raw MAVLink frames) and .bin (ArduPilot dataflash
+# logs over MAVLink). Listing + download flow through this regex, so
+# broadening it surfaces .bin files alongside .tlog without further
+# changes.
+SESSION_RE = re.compile(r'^session\d+\.(tlog|bin)$')
 
 
 def _logs_root():
