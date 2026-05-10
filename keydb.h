@@ -31,6 +31,7 @@
  */
 #define KEY_FLAG_ADMIN     (1u << 0)
 #define KEY_FLAG_BIDI_SIGN (1u << 1)  // require signed MAVLink on the user side too
+#define KEY_FLAG_TLOG      (1u << 2)  // record per-connection MAVProxy-format tlogs
 
 struct KeyEntry {
     uint64_t magic;
@@ -42,6 +43,8 @@ struct KeyEntry {
     uint32_t count2;
     char name[32];
     uint32_t flags;
+    float    tlog_retention_days;   // 0.0 = forever; fractional values allowed for tests
+    uint32_t reserved[16];
 };
 
 /*

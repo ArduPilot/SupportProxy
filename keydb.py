@@ -25,6 +25,7 @@ def main():
                                  'setname', 'setpass', 'setport1',
                                  'initialise', 'resettimestamp',
                                  'setflag', 'clearflag', 'flags',
+                                 'setretention',
                                  'stats'],
                         help="action to perform")
     parser.add_argument("args", default=[], nargs=argparse.REMAINDER)
@@ -102,6 +103,21 @@ def main():
                 raise CLIError("No entry for port2 %d" % port2)
             on = ke.flag_names()
             print("flags=0x%x %s" % (ke.flags, ','.join(on) if on else '(none)'))
+
+        elif args.action == "setretention":
+            _expect(args.args, 2,
+                    "keydb.py setretention PORT2 DAYS  "
+                    "(float; 0 = keep forever)")
+            try:
+                days = float(args.args[1])
+            except ValueError:
+                raise CLIError("retention DAYS must be a number, got %r"
+                               % args.args[1])
+            ke = keydb_lib.set_tlog_retention(db, int(args.args[0]), days)
+            if days == 0.0:
+                print("Set tlog retention=0 (keep forever) for %s" % ke)
+            else:
+                print("Set tlog retention=%.4g days for %s" % (days, ke))
 
         elif args.action == "stats":
             # Live-connection stats from connections.tdb (sibling of
