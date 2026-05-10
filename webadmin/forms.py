@@ -10,6 +10,15 @@ from wtforms.validators import (DataRequired, Length, NumberRange, Optional,
 OWNER_MAX_TLOG_RETENTION_DAYS = 30.0
 ADMIN_MAX_TLOG_RETENTION_DAYS = 36500.0  # ~100 years; effectively unbounded
 
+# Render-kwargs for "this is a brand-new passphrase, browser, don't
+# autofill the user's saved login passphrase here". Without this Chrome
+# happily prefills the 'New passphrase' field with the value it has
+# stored for /login on this site.
+_NEW_PW_KW = {'autocomplete': 'new-password', 'spellcheck': 'false',
+              'autocorrect': 'off', 'autocapitalize': 'off'}
+_CURRENT_PW_KW = {'autocomplete': 'current-password', 'spellcheck': 'false',
+                  'autocorrect': 'off', 'autocapitalize': 'off'}
+
 
 class LoginForm(FlaskForm):
     port = IntegerField('Port (port1 or port2)',
@@ -17,7 +26,8 @@ class LoginForm(FlaskForm):
                                     NumberRange(min=1, max=65535)])
     passphrase = PasswordField('Passphrase',
                                validators=[DataRequired(),
-                                           Length(min=1, max=256)])
+                                           Length(min=1, max=256)],
+                               render_kw=_CURRENT_PW_KW)
     submit = SubmitField('Log in')
 
 
@@ -26,11 +36,13 @@ class OwnerEditForm(FlaskForm):
     name = StringField('Display name', validators=[Optional(), Length(max=31)])
     new_passphrase = PasswordField(
         'New passphrase (leave blank to keep current)',
-        validators=[Optional(), Length(min=4, max=256)])
+        validators=[Optional(), Length(min=4, max=256)],
+        render_kw=_NEW_PW_KW)
     confirm_passphrase = PasswordField(
         'Confirm new passphrase',
         validators=[Optional(), EqualTo('new_passphrase',
-                                        message='Passphrases do not match.')])
+                                        message='Passphrases do not match.')],
+        render_kw=_NEW_PW_KW)
     bidi_sign = BooleanField(
         'Require MAVLink signing on the user side too (bi-directional signing)')
     tlog_enabled = BooleanField('Record telemetry logs (.tlog) for this entry')
@@ -50,11 +62,13 @@ class AdminEditForm(FlaskForm):
                                      NumberRange(min=1, max=65535)])
     new_passphrase = PasswordField(
         'New passphrase (leave blank to keep current)',
-        validators=[Optional(), Length(min=4, max=256)])
+        validators=[Optional(), Length(min=4, max=256)],
+        render_kw=_NEW_PW_KW)
     confirm_passphrase = PasswordField(
         'Confirm new passphrase',
         validators=[Optional(), EqualTo('new_passphrase',
-                                        message='Passphrases do not match.')])
+                                        message='Passphrases do not match.')],
+        render_kw=_NEW_PW_KW)
     is_admin = BooleanField('Grant admin privilege (KEY_FLAG_ADMIN)')
     bidi_sign = BooleanField(
         'Require MAVLink signing on the user side too (bi-directional signing)')
@@ -78,7 +92,8 @@ class AdminAddForm(FlaskForm):
                        validators=[DataRequired(), Length(max=31)])
     passphrase = PasswordField('Passphrase',
                                validators=[DataRequired(),
-                                           Length(min=4, max=256)])
+                                           Length(min=4, max=256)],
+                               render_kw=_NEW_PW_KW)
     submit = SubmitField('Add')
 
 

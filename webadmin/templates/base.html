@@ -8,7 +8,12 @@
 </head>
 <body>
 <header>
-  <h1><a href="{{ url_for('index') }}">{{ config.WEBUI_TITLE }}</a></h1>
+  <a class="brand" href="{{ url_for('index') }}">
+    <img src="{{ url_for('static', filename='ardupilot_logo.png') }}"
+         alt="ArduPilot" class="logo"
+         width="245" height="88" fetchpriority="high">
+    <h1>{{ config.WEBUI_TITLE }}</h1>
+  </a>
   <nav>
     {% if session.get('owner') %}
       <span>logged in as port {{ session['owner'] }}{% if session.get('is_admin') %} (admin){% endif %}</span>
@@ -39,6 +44,7 @@
      target="_blank" rel="noopener">{{ config.GIT_VERSION }}</a>
 </footer>
 {% endif %}
+<script src="{{ url_for('static', filename='password-toggle.js') }}" defer></script>
 <script src="{{ url_for('static', filename='localtime.js') }}" defer></script>
 </body>
 </html>

@@ -45,3 +45,10 @@ class DefaultConfig:
     # Site-name shown in templates. Overridden by webui.json's "title"
     # field if that file exists in the keys.tdb directory.
     WEBUI_TITLE = 'SupportProxy admin'
+
+    # Browser-cache static assets (logo, CSS, JS). Without this Flask
+    # emits no Cache-Control header, so the meta-refresh flow refetches
+    # the logo every 5 s and you see a blank header flash mid-paint.
+    # Set to 1 day; bust by renaming files or appending a query string
+    # if you change one.
+    SEND_FILE_MAX_AGE_DEFAULT = 86400
