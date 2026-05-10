@@ -12,6 +12,16 @@
 
 typedef ssize_t (*send_fn_t)(int, const void *, size_t , int);
 
+class TlogWriter;
+
+/*
+  Serialize a parsed mavlink_message_t to wire bytes and write it as one
+  tlog record (8-byte big-endian µs timestamp + frame). No-op if tlog is
+  null or unopened. Defined here (not in tlog.cpp) to keep the mavlink
+  generated headers out of the tlog translation unit.
+ */
+void tlog_write_message(TlogWriter *tlog, const mavlink_message_t &msg);
+
 /*
   abstraction for MAVLink on UDP
  */

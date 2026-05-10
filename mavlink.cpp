@@ -26,6 +26,7 @@
 #include <unistd.h>
 #include <signal.h>
 #include "util.h"
+#include "tlog.h"
 
 mavlink_system_t mavlink_system = {0, 0};
 
@@ -34,6 +35,19 @@ bool MAVLink::got_bad_signature[MAVLINK_COMM_NUM_BUFFERS];
 // unused comm_send_buffer (as we handle packets as UDP buffers)
 void comm_send_buffer(mavlink_channel_t chan, const uint8_t *buf, uint8_t len)
 {
+}
+
+void tlog_write_message(TlogWriter *tlog, const mavlink_message_t &msg)
+{
+    if (tlog == nullptr || !tlog->is_open()) {
+        return;
+    }
+    uint8_t buf[MAVLINK_MAX_PACKET_LEN];
+    mavlink_message_t msg2 = msg;
+    uint16_t len = mavlink_msg_to_send_buffer(buf, &msg2);
+    if (len > 0) {
+        tlog->write_frame(buf, len);
+    }
 }
 
 /*

@@ -37,6 +37,8 @@
 #include "util.h"
 #include "keydb.h"
 #include "conntdb.h"
+#include "tlog.h"
+#include "cleanup.h"
 #include "websocket.h"
 
 #define MAX_EPOLL_EVENTS 64
@@ -58,6 +60,12 @@ struct listen_port {
 };
 
 static struct listen_port *ports;
+
+// PID of the long-lived tlog-cleanup child forked from main(). Tracked
+// separately from per-port-pair children so check_children() can
+// respawn it if it dies, rather than printing "No child for X found".
+static pid_t cleanup_child_pid = 0;
+static void fork_cleanup_child(void);
 
 static uint32_t count_ports(void)
 {
@@ -210,6 +218,19 @@ static void main_loop(struct listen_port *p)
     MAVLink mav1;
     Connection2 conn2[MAX_COMM2_LINKS];
 
+    // tlog: opened lazily on first received frame so an idle child that
+    // never sees traffic doesn't leave behind an empty session file.
+    TlogWriter tlog;
+    const bool tlog_enabled = (p->flags & KEY_FLAG_TLOG) != 0;
+    auto ensure_tlog_open = [&]() {
+        if (tlog_enabled && !tlog.is_open()) {
+            tlog.open(uint32_t(p->port2));
+        }
+    };
+    auto tlog_ptr = [&]() -> TlogWriter * {
+        return tlog_enabled ? &tlog : nullptr;
+    };
+
     // Live state mirrored into connections.tdb so the web UI can show
     // who is connected right now. Captured here, snapshotted into TDB
     // on a 10s heartbeat below (mirroring save_signing_timestamp's
@@ -315,6 +336,8 @@ static void main_loop(struct listen_port *p)
 		uint8_t *buf0 = buf;
 		while (n > 0 && mav1.receive_message(buf0, n, msg)) {
 		    mav1_rx_msgs++;
+		    ensure_tlog_open();
+		    tlog_write_message(tlog_ptr(), msg);
 		    for (uint8_t i=0; i<max_conn2_count; i++) {
 			auto &c2 = conn2[i];
 			if (!c2.used) {
@@ -404,6 +427,8 @@ static void main_loop(struct listen_port *p)
 		    auto &c2 = conn2[idx];
 		    while (n > 0 && c2.mav.receive_message(buf0, n, msg)) {
 			c2.rx_msgs++;
+			ensure_tlog_open();
+			tlog_write_message(tlog_ptr(), msg);
 			if (!mav1.send_message(msg)) {
 			    failed = true;
 			    break;
@@ -481,6 +506,8 @@ static void main_loop(struct listen_port *p)
 		uint8_t *buf0 = buf;
 		while (n > 0 && mav1.receive_message(buf0, n, msg)) {
 		    mav1_rx_msgs++;
+		    ensure_tlog_open();
+		    tlog_write_message(tlog_ptr(), msg);
 		    for (uint8_t i=0; i<max_conn2_count; i++) {
 			auto &c2 = conn2[i];
 			if (!c2.used) {
@@ -602,6 +629,8 @@ static void main_loop(struct listen_port *p)
 		    bool failed = false;
 		    while (n > 0 && c2.mav.receive_message(buf0, n, msg)) {
 			c2.rx_msgs++;
+			ensure_tlog_open();
+			tlog_write_message(tlog_ptr(), msg);
 			if (!mav1.send_message(msg)) {
 			    failed = true;
 			    break;
@@ -769,6 +798,12 @@ static void check_children(void)
         if (pid <= 0) {
             break;
         }
+        if (pid == cleanup_child_pid) {
+            printf("tlog cleanup child %d exited; respawning\n", int(pid));
+            cleanup_child_pid = 0;
+            fork_cleanup_child();
+            continue;
+        }
         bool found_child = false;
         for (auto *p = ports; p; p=p->next) {
             if (p->pid == pid) {
@@ -790,6 +825,29 @@ static void check_children(void)
             printf("No child for %d found\n", int(pid));
         }
     }
+}
+
+/*
+  fork the long-lived cleanup child once. The child closes all listening
+  sockets it inherited from the parent (so it doesn't keep the ports
+  bound), then runs tlog_cleanup_loop forever.
+ */
+static void fork_cleanup_child(void)
+{
+    pid_t pid = fork();
+    if (pid == 0) {
+        for (auto *p = ports; p; p = p->next) {
+            close_sockets(p);
+        }
+        tlog_cleanup_loop();
+        _exit(0);
+    }
+    if (pid < 0) {
+        perror("fork(cleanup)");
+        return;
+    }
+    cleanup_child_pid = pid;
+    printf("tlog cleanup child %d started\n", int(pid));
 }
 
 /*
@@ -959,6 +1017,8 @@ int main(int argc, char *argv[])
     tdb_traverse(db, handle_record, nullptr);
     printf("Added %u ports\n", unsigned(count_ports()));
     db_close_cancel(db);
+
+    fork_cleanup_child();
 
     wait_connection();
 
