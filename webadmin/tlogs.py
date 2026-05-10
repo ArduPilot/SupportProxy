@@ -102,13 +102,23 @@ def _list_sessions(port2, date):
 def _send_tlog(port2, date, session_name):
     """send_from_directory takes care of path-traversal safety; we still
     pre-validate the date and filename so a malformed URL bounces with a
-    404 before touching the filesystem."""
+    404 before touching the filesystem.
+
+    Tlogs contain raw vehicle telemetry: do NOT let intermediaries (or
+    a shared-device browser) cache them. Override the app's default
+    SEND_FILE_MAX_AGE_DEFAULT (set for the logo etc.) with max_age=0
+    and explicit Cache-Control: private, no-store.
+    """
     _safe_date(date)
     _safe_session(session_name)
     directory = os.path.join(_logs_root(), str(port2), date)
     if not os.path.isdir(directory):
         abort(404)
-    return send_from_directory(directory, session_name, as_attachment=True)
+    resp = send_from_directory(directory, session_name,
+                               as_attachment=True, max_age=0)
+    resp.headers['Cache-Control'] = 'private, no-store'
+    resp.headers['Pragma'] = 'no-cache'
+    return resp
 
 
 # ---------------------------------------------------------------------------
