@@ -83,6 +83,57 @@ class TestOwnerTlogForm:
         assert not (ke.flags & keydb_lib.FLAG_TLOG)
         assert ke.tlog_retention_days == 0.0
 
+    def test_owner_enable_binlog_via_form(self, client, keydb_path):
+        login_as(client, ALICE_PORT1, ALICE_PASS)
+        resp = client.post('/me/', data={
+            'name': 'alice',
+            'binlog_enabled': 'y',
+            'submit': 'Save',
+        })
+        assert resp.status_code == 302
+        ke = fetch_entry(keydb_path, ALICE_PORT2)
+        assert ke.flags & keydb_lib.FLAG_BINLOG
+        # First-enable seeds 7 days for binlog too (shared with tlog).
+        assert ke.tlog_retention_days == keydb_lib.DEFAULT_TLOG_RETENTION_DAYS
+
+    def test_owner_disable_binlog_keeps_retention(self, client, keydb_path):
+        login_as(client, ALICE_PORT1, ALICE_PASS)
+        # enable + 20 days
+        client.post('/me/', data={
+            'name': 'alice', 'binlog_enabled': 'y',
+            'tlog_retention_days': '20', 'submit': 'Save',
+        })
+        # disable (omit checkbox)
+        client.post('/me/', data={
+            'name': 'alice', 'tlog_retention_days': '20',
+            'submit': 'Save',
+        })
+        ke = fetch_entry(keydb_path, ALICE_PORT2)
+        assert not (ke.flags & keydb_lib.FLAG_BINLOG)
+        assert ke.tlog_retention_days == 20.0
+
+    def test_owner_tlog_and_binlog_independent_toggles(self, client, keydb_path):
+        """The two flags are toggled independently on one POST."""
+        login_as(client, ALICE_PORT1, ALICE_PASS)
+        client.post('/me/', data={
+            'name': 'alice',
+            'tlog_enabled': 'y',
+            'binlog_enabled': 'y',
+            'submit': 'Save',
+        })
+        ke = fetch_entry(keydb_path, ALICE_PORT2)
+        assert ke.flags & keydb_lib.FLAG_TLOG
+        assert ke.flags & keydb_lib.FLAG_BINLOG
+        # Drop only tlog.
+        client.post('/me/', data={
+            'name': 'alice',
+            'binlog_enabled': 'y',
+            'submit': 'Save',
+        })
+        ke = fetch_entry(keydb_path, ALICE_PORT2)
+        assert not (ke.flags & keydb_lib.FLAG_TLOG)
+        assert ke.flags & keydb_lib.FLAG_BINLOG
+
     def test_owner_disable_keeps_retention(self, client, keydb_path):
         login_as(client, ALICE_PORT1, ALICE_PASS)
         # enable + 14 days
@@ -116,6 +167,18 @@ class TestAdminTlogForm:
         ke = fetch_entry(keydb_path, ALICE_PORT2)
         assert ke.flags & keydb_lib.FLAG_TLOG
         assert ke.tlog_retention_days == 365.0
+
+    def test_admin_enable_binlog_via_form(self, client, keydb_path):
+        login_as(client, BOB_PORT1, BOB_PASS)
+        resp = client.post('/admin/' + str(ALICE_PORT2), data={
+            'name': 'alice',
+            'port1': str(ALICE_PORT1),
+            'binlog_enabled': 'y',
+            'submit': 'Save',
+        })
+        assert resp.status_code == 302
+        ke = fetch_entry(keydb_path, ALICE_PORT2)
+        assert ke.flags & keydb_lib.FLAG_BINLOG
 
     def test_admin_can_set_fractional(self, client, keydb_path):
         login_as(client, BOB_PORT1, BOB_PASS)
