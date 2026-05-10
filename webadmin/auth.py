@@ -1,16 +1,23 @@
 """Login / logout / session helpers and role guard decorators."""
 import functools
+import time
 from urllib.parse import urlparse
 
-from flask import (Blueprint, abort, flash, redirect, render_template,
-                   request, session, url_for)
+from flask import (Blueprint, abort, current_app, flash, redirect,
+                   render_template, request, session, url_for)
 
 import keydb_lib
 
+from . import throttle
 from .db import tdb_readonly
 from .forms import LoginForm
 
 bp = Blueprint('auth', __name__)
+
+# Constant sleep on every failed login. Slows raw brute-force from a
+# single IP regardless of the throttle counter; pairs with throttle.py
+# for an explicit per-IP cap. Skipped under TESTING.
+_LOGIN_FAIL_SLEEP_S = 0.5
 
 
 def current_owner():
@@ -86,6 +93,18 @@ def _is_safe_local_redirect(target):
 def login():
     form = LoginForm()
     if form.validate_on_submit():
+        # Skip the throttle/slowdown when running under pytest so the
+        # webadmin test suite's many sequential login attempts don't
+        # trip it. In production it's always live.
+        testing = bool(current_app.config.get('TESTING'))
+        ip = request.remote_addr or ''
+
+        if not testing and throttle.is_blocked(ip):
+            time.sleep(_LOGIN_FAIL_SLEEP_S)
+            flash('Too many failed login attempts; try again in a minute.',
+                  'error')
+            return render_template('login.html', form=form)
+
         port = form.port.data
         passphrase = form.passphrase.data
         with tdb_readonly() as db:
@@ -95,6 +114,8 @@ def login():
             admin = ok and ke.is_admin()
             port2 = ke.port2 if ke else None
         if ok:
+            if not testing:
+                throttle.record_success(ip)
             session.clear()
             session['owner'] = port2
             session['is_admin'] = admin
@@ -102,6 +123,12 @@ def login():
             if _is_safe_local_redirect(next_url):
                 return redirect(next_url)
             return redirect(url_for('index'))
+        # Failed login: record and slow down. The sleep dominates an
+        # attacker's throughput on a single IP; the counter then hard-
+        # caps the burst once they exceed MAX_FAILURES_PER_WINDOW.
+        if not testing:
+            throttle.record_failure(ip)
+            time.sleep(_LOGIN_FAIL_SLEEP_S)
         flash('Login failed: unknown port or wrong passphrase.', 'error')
     return render_template('login.html', form=form)
 
