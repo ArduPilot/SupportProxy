@@ -9,6 +9,7 @@
     <th>port1</th><th>port2</th><th>name</th>
     <th>side</th><th>transport</th><th>peer</th>
     <th>uptime</th><th>rx</th><th>tx</th>
+    <th></th>
   </tr></thead>
   <tbody>
     {% for c in active %}
@@ -22,9 +23,20 @@
       <td>{{ c.uptime_s() }}s</td>
       <td>{{ c.rx_msgs }}</td>
       <td>{{ c.tx_msgs }}</td>
+      <td>
+        <form method="post"
+              action="{{ url_for('admin.kill_connection', port2=c.port2, conn_index=c.conn_index) }}"
+              class="inline">
+          {{ kill_form.csrf_token }}
+          <button type="submit" class="danger"
+                  onclick="return confirm({% if c.is_user %}'Drop the user side of port2={{ c.port2 }}? This ends the whole session.'{% else %}'Drop engineer #{{ c.conn_index }} on port2={{ c.port2 }}?'{% endif %});">
+            kill
+          </button>
+        </form>
+      </td>
     </tr>
     {% else %}
-    <tr><td colspan="9"><em>(none)</em></td></tr>
+    <tr><td colspan="10"><em>(none)</em></td></tr>
     {% endfor %}
   </tbody>
 </table>

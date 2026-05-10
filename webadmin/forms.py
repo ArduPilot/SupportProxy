@@ -85,3 +85,8 @@ class AdminAddForm(FlaskForm):
 class DeleteForm(FlaskForm):
     """Empty form just to carry a CSRF token for the delete button."""
     submit = SubmitField('Delete')
+
+
+class KillForm(FlaskForm):
+    """Empty form just to carry a CSRF token for the kill-connection button."""
+    submit = SubmitField('Kill')

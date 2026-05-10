@@ -13,11 +13,20 @@ from a newer C++ schema are ignored on read.
 """
 import errno
 import os
+import signal
 import socket
 import struct
 import time
 
 import keydb_lib
+
+# Name reported by /proc/<pid>/comm for a live supportproxy process.
+# request_drop cross-checks this so we don't accidentally signal a PID
+# that died and got recycled by an unrelated process.
+SUPPORTPROXY_COMM = 'supportproxy'
+
+# ConnEntry.flags bits — keep in sync with conntdb.h.
+CONN_FLAG_DROP_REQUESTED = 1 << 0
 
 CONN_FILE = 'connections.tdb'
 CONN_MAGIC = 0x436f6e6e45424553  # "ConnEBES"
@@ -153,3 +162,85 @@ def list_active(path, **kw):
     out = list(iter_active(path, **kw))
     out.sort(key=lambda c: (c.port2, c.conn_index))
     return out
+
+
+def _proc_comm(pid):
+    """Read /proc/<pid>/comm; return None on any error (file missing,
+    permission denied, etc). Module-level so tests can monkeypatch."""
+    try:
+        with open('/proc/%d/comm' % pid) as f:
+            return f.read().strip()
+    except OSError:
+        return None
+
+
+def _flip_drop_flag(path, port2, conn_index):
+    """Set CONN_FLAG_DROP_REQUESTED on the (port2, conn_index) record.
+
+    Returns the PID stored in that record, or None when the record is
+    missing. Caller is responsible for signalling the PID afterwards.
+    """
+    if not os.path.exists(path):
+        return None
+    try:
+        db = keydb_lib.open_db(path)
+    except OSError:
+        return None
+    pid = None
+    try:
+        db.transaction_start()
+        try:
+            key = struct.pack(KEY_FORMAT, port2, conn_index)
+            v = db.get(key)
+            if v is None or len(v) < CONNENTRY_MIN_SIZE:
+                return None
+            ce = ConnEntry.unpack(v)
+            if ce.magic != CONN_MAGIC:
+                return None
+            ce.flags |= CONN_FLAG_DROP_REQUESTED
+            pid = ce.pid if ce.pid > 0 else None
+            # rebuild record bytes preserving any forward-compat tail
+            tail = v[CONNENTRY_CURRENT_SIZE:] if len(v) > CONNENTRY_CURRENT_SIZE else b''
+            new_body = struct.pack(
+                PACK_FORMAT,
+                ce.magic, ce.connected_at, ce.last_update,
+                ce.port2, ce.conn_index, ce.pid,
+                ce.rx_msgs, ce.tx_msgs,
+                ce.peer_ip_be, ce.peer_port_be,
+                ce.transport, ce.is_user,
+                ce.flags, 0,  # _pad
+            )
+            import tdb as _tdb
+            db.store(key, new_body + tail, _tdb.REPLACE)
+            db.transaction_prepare_commit()
+            db.transaction_commit()
+        except Exception:
+            db.transaction_cancel()
+            raise
+    finally:
+        db.close()
+    return pid
+
+
+def request_drop(path, port2, conn_index, exec_name=SUPPORTPROXY_COMM):
+    """Ask the per-port-pair child to drop a single connection.
+
+    Sets CONN_FLAG_DROP_REQUESTED on the (port2, conn_index) record so
+    the child can find it after the signal, then sends SIGUSR1 to the
+    child PID (validated against /proc/<pid>/comm so we don't hit a
+    recycled PID). Returns True if the signal was sent.
+
+    A user-side row (conn_index=0) ends the whole session because the
+    child has nothing left to proxy without conn1; an engineer row
+    (conn_index>=1) drops just that engineer slot.
+    """
+    pid = _flip_drop_flag(path, port2, conn_index)
+    if pid is None:
+        return False
+    if _proc_comm(pid) != exec_name:
+        return False
+    try:
+        os.kill(pid, signal.SIGUSR1)
+    except OSError:
+        return False
+    return True

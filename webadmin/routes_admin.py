@@ -13,7 +13,7 @@ import keydb_lib
 from . import connections as conn_db
 from .auth import is_admin, require_admin
 from .db import tdb_readonly, tdb_transaction
-from .forms import AdminAddForm, AdminEditForm, DeleteForm
+from .forms import AdminAddForm, AdminEditForm, DeleteForm, KillForm
 
 bp = Blueprint('admin', __name__, url_prefix='/admin')
 
@@ -41,7 +41,28 @@ def connections():
         names = {e.port2: e.name for e in keydb_lib.list_entries(db)}
         port1s = {e.port2: e.port1 for e in keydb_lib.list_entries(db)}
     return render_template('admin_connections.html',
-                           active=active, names=names, port1s=port1s)
+                           active=active, names=names, port1s=port1s,
+                           kill_form=KillForm())
+
+
+@bp.route('/<int:port2>/kill/<int:conn_index>', methods=['POST'])
+@require_admin
+def kill_connection(port2, conn_index):
+    """Drop a single connection (port2, conn_index).
+
+    conn_index 0 is the user side; dropping it ends the whole session.
+    conn_index >= 1 closes just that engineer slot.
+    """
+    form = KillForm()
+    if not form.validate_on_submit():
+        abort(400)
+    if conn_db.request_drop(port2, conn_index):
+        flash('Drop requested for port2=%d/conn=%d.' % (port2, conn_index),
+              'success')
+    else:
+        flash('Connection (port2=%d, conn=%d) not found or already gone.'
+              % (port2, conn_index), 'error')
+    return redirect(url_for('admin.connections'))
 
 
 @bp.route('/add', methods=['POST'])

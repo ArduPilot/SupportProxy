@@ -32,3 +32,7 @@ def list_active(**kw):
 
 def list_for_port2(port2, **kw):
     return [c for c in list_active(**kw) if c.port2 == port2]
+
+
+def request_drop(port2, conn_index, **kw):
+    return conntdb_lib.request_drop(_conn_path(), port2, conn_index, **kw)

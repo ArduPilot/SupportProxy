@@ -41,6 +41,21 @@
 #include "cleanup.h"
 #include "websocket.h"
 
+#include <vector>
+
+/*
+  SIGUSR1 from the webadmin asks the per-port-pair child to drop a
+  specific connection. The webadmin sets CONN_FLAG_DROP_REQUESTED on
+  the matching ConnEntry first; the handler just sets a flag and
+  main_loop scans connections.tdb to find the target slot(s).
+ */
+static volatile sig_atomic_t g_drops_pending = 0;
+
+static void sigusr1_handler(int)
+{
+    g_drops_pending = 1;
+}
+
 #define MAX_EPOLL_EVENTS 64
 
 struct listen_port {
@@ -218,6 +233,16 @@ static void main_loop(struct listen_port *p)
     MAVLink mav1;
     Connection2 conn2[MAX_COMM2_LINKS];
 
+    // Webadmin sends SIGUSR1 to ask us to drop a specific connection.
+    // The signal handler just sets a flag; we scan connections.tdb at
+    // the top of each main_loop iteration to find the target slot(s).
+    {
+        struct sigaction sa = {};
+        sa.sa_handler = sigusr1_handler;
+        sigemptyset(&sa.sa_mask);
+        sigaction(SIGUSR1, &sa, nullptr);
+    }
+
     // tlog: opened lazily on first received frame so an idle child that
     // never sees traffic doesn't leave behind an empty session file.
     TlogWriter tlog;
@@ -247,12 +272,84 @@ static void main_loop(struct listen_port *p)
     fdmax = MAX(fdmax, p->sock1_tcp);
     fdmax = MAX(fdmax, p->sock2_listen);
 
+    // Pull DROP_REQUESTED entries for our port2 out of connections.tdb,
+    // close the matching slots, and delete the records. Returns true if
+    // the user side was dropped (caller should exit main_loop).
+    auto process_drops = [&]() -> bool {
+        std::vector<int> indices;
+        struct collect_ctx {
+            int port2;
+            std::vector<int> *out;
+        } ctx { p->port2, &indices };
+
+        auto cb = [](struct tdb_context *, TDB_DATA key, TDB_DATA data,
+                     void *vptr) -> int {
+            auto *c = static_cast<collect_ctx *>(vptr);
+            if (key.dsize != sizeof(struct ConnKey)
+                || data.dsize < CONNENTRY_MIN_SIZE) {
+                return 0;
+            }
+            struct ConnKey k {};
+            memcpy(&k, key.dptr, sizeof(k));
+            if (k.port2 != c->port2) {
+                return 0;
+            }
+            struct ConnEntry e {};
+            size_t copy = data.dsize < sizeof(e) ? data.dsize : sizeof(e);
+            memcpy(&e, data.dptr, copy);
+            if (e.magic == CONN_MAGIC
+                && (e.flags & CONN_FLAG_DROP_REQUESTED) != 0) {
+                c->out->push_back(k.conn_index);
+            }
+            return 0;
+        };
+
+        auto *db = conn_db_open_transaction();
+        if (db == nullptr) {
+            return false;
+        }
+        tdb_traverse(db, cb, &ctx);
+        for (int idx : indices) {
+            conn_delete(db, p->port2, idx);
+        }
+        conn_db_close_commit(db);
+
+        bool exit_loop = false;
+        for (int idx : indices) {
+            if (idx == 0) {
+                printf("[%d] %s drop user requested -> ending session\n",
+                       p->port2, time_string());
+                exit_loop = true;
+            } else if (idx >= 1 && idx <= MAX_COMM2_LINKS) {
+                auto &c2 = conn2[idx - 1];
+                if (c2.used) {
+                    printf("[%d] %s drop conn2[%d] requested\n",
+                           p->port2, time_string(), idx - 1);
+                    c2.close();
+                    if (conn2_count > 0) {
+                        conn2_count--;
+                    }
+                    if (max_conn2_count > 0 && idx == max_conn2_count) {
+                        max_conn2_count--;
+                    }
+                }
+            }
+        }
+        return exit_loop;
+    };
+
     while (1) {
+        if (g_drops_pending) {
+            g_drops_pending = 0;
+            if (process_drops()) {
+                break;
+            }
+        }
         fd_set fds;
         int ret;
         struct timeval tval;
         double now = time_seconds();
-            
+
         if (have_conn1 && now - last_pkt1 > 10) {
             break;
         }
