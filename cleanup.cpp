@@ -23,10 +23,17 @@ struct PassCtx {
     time_t now;
 };
 
-static bool ends_with_tlog(const char *name)
+/*
+  Predicate for "this is a session file we should age out under
+  tlog_retention_days". Covers both .tlog (raw MAVLink frames) and
+  .bin (ArduPilot dataflash logs) so the retention rule is uniform —
+  per spec, both file types share the entry's retention setting.
+ */
+static bool is_session_file(const char *name)
 {
     size_t n = strlen(name);
-    return n > 5 && strcmp(name + n - 5, ".tlog") == 0;
+    return (n > 5 && strcmp(name + n - 5, ".tlog") == 0) ||
+           (n > 4 && strcmp(name + n - 4, ".bin")  == 0);
 }
 
 static void cleanup_for_port2(uint32_t port2, double retention_days,
@@ -70,7 +77,7 @@ static void cleanup_for_port2(uint32_t port2, double retention_days,
             }
             char fpath[1280];
             snprintf(fpath, sizeof(fpath), "%s/%s", date_dir, fent->d_name);
-            if (ends_with_tlog(fent->d_name)) {
+            if (is_session_file(fent->d_name)) {
                 struct stat fst;
                 if (stat(fpath, &fst) == 0) {
                     double age = double(now - fst.st_mtime);

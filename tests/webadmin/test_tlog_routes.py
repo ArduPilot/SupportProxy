@@ -134,6 +134,69 @@ class TestAdminTlogForm:
 # listing & download
 # ---------------------------------------------------------------------------
 
+class TestBinFileListing:
+    """`.bin` files (ArduPilot dataflash logs over MAVLink) live in the
+    same per-date dir as `.tlog` files and are surfaced through the
+    same listing + download endpoints. The regex broadening in
+    webadmin/tlogs.py is the only change."""
+
+    def test_bin_appears_in_owner_listing(self, client, keydb_path,
+                                            logs_dir):
+        seed_session(logs_dir, ALICE_PORT2, '2026-05-10', 'session1.tlog',
+                     content=b'TLOG')
+        seed_session(logs_dir, ALICE_PORT2, '2026-05-10', 'session1.bin',
+                     content=b'BIN')
+        login_as(client, ALICE_PORT1, ALICE_PASS)
+        r = client.get('/me/tlogs/2026-05-10/')
+        assert r.status_code == 200
+        assert b'session1.tlog' in r.data
+        assert b'session1.bin' in r.data
+
+    def test_bin_appears_in_admin_listing(self, client, logs_dir):
+        seed_session(logs_dir, ALICE_PORT2, '2026-05-10', 'session2.bin',
+                     content=b'BIN')
+        login_as(client, BOB_PORT1, BOB_PASS)
+        r = client.get('/admin/tlogs/' + str(ALICE_PORT2) + '/2026-05-10/')
+        assert r.status_code == 200
+        assert b'session2.bin' in r.data
+
+    def test_owner_can_download_bin(self, client, keydb_path, logs_dir):
+        seed_session(logs_dir, ALICE_PORT2, '2026-05-10', 'session1.bin',
+                     content=b'\x00\x01ARDUPILOT_LOG')
+        login_as(client, ALICE_PORT1, ALICE_PASS)
+        r = client.get('/me/tlogs/2026-05-10/session1.bin')
+        assert r.status_code == 200
+        assert r.data.endswith(b'ARDUPILOT_LOG')
+
+    def test_bin_download_is_no_store(self, client, keydb_path, logs_dir):
+        """Same private/no-store header as tlog downloads — bin contains
+        identical-sensitivity vehicle telemetry."""
+        seed_session(logs_dir, ALICE_PORT2, '2026-05-10', 'session1.bin',
+                     content=b'BIN')
+        login_as(client, ALICE_PORT1, ALICE_PASS)
+        r = client.get('/me/tlogs/2026-05-10/session1.bin')
+        assert r.status_code == 200
+        cc = r.headers.get('Cache-Control', '')
+        assert 'no-store' in cc
+        assert 'private' in cc
+        assert 'public' not in cc
+
+    def test_bogus_extension_still_404s(self, client, logs_dir):
+        """The session-file regex caps the extension to tlog|bin so
+        seeded .log / .txt / .pem files are not exposed."""
+        d = logs_dir / str(ALICE_PORT2) / '2026-05-10'
+        d.mkdir(parents=True, exist_ok=True)
+        (d / 'session1.log').write_bytes(b'X')
+        (d / 'session1.pem').write_bytes(b'X')
+        login_as(client, BOB_PORT1, BOB_PASS)
+        r = client.get('/admin/tlogs/' + str(ALICE_PORT2)
+                       + '/2026-05-10/session1.log')
+        assert r.status_code == 404
+        r = client.get('/admin/tlogs/' + str(ALICE_PORT2)
+                       + '/2026-05-10/session1.pem')
+        assert r.status_code == 404
+
+
 class TestTlogDownloadCacheHeaders:
     """Tlog payloads contain raw vehicle telemetry. They must not be
     cached by browsers or intermediaries — even though the rest of
