@@ -23,24 +23,28 @@ KEY_MAGIC = 0x6b73e867a72cdd1f
 # Pre-flags layout was 96 bytes. Anything smaller is invalid; anything bigger
 # is acceptable (extra trailing bytes belong to a newer schema we ignore).
 #
-# The current C++ struct ends with `uint32_t flags` plus 4 bytes of trailing
-# alignment padding (sizeof(KeyEntry) == 104 with natural alignment because
-# the struct contains uint64_t fields). The trailing 4x in PACK_FORMAT keeps
-# Python's on-disk size identical to C++'s. When a future field is added,
-# replace 4x with the new field's format and add 4x of new trailing pad to
-# match whatever the C++ alignment lands on.
+# The current C++ struct ends with `uint32_t flags`, `float tlog_retention_days`,
+# and `uint32_t reserved[16]`. All three are 4-byte aligned and slot in cleanly
+# after the existing fields, so the struct is 168 bytes with no trailing pad.
+# When a future field is added, append it to PACK_FORMAT and add explicit
+# trailing pad (`Nx`) only if needed to match C++ natural alignment.
 KEYENTRY_MIN_SIZE = 96
-PACK_FORMAT = "<QQ32siIII32sI4x"
-KEYENTRY_CURRENT_SIZE = struct.calcsize(PACK_FORMAT)  # 104
+PACK_FORMAT = "<QQ32siIII32sIf16I"
+KEYENTRY_CURRENT_SIZE = struct.calcsize(PACK_FORMAT)  # 168
 
 # Flag bits — keep in sync with KEY_FLAG_* in keydb.h.
 FLAG_ADMIN     = 1 << 0
 FLAG_BIDI_SIGN = 1 << 1   # require signed MAVLink on the user side too
+FLAG_TLOG      = 1 << 2   # record per-connection MAVProxy-format tlogs
 
 FLAG_NAMES = {
     "admin":     FLAG_ADMIN,
     "bidi_sign": FLAG_BIDI_SIGN,
+    "tlog":      FLAG_TLOG,
 }
+
+DEFAULT_TLOG_RETENTION_DAYS = 7.0
+RESERVED_WORDS = 16
 
 
 class CLIError(Exception):
@@ -58,16 +62,21 @@ class KeyEntry:
         self.count2 = 0
         self.name = ''
         self.flags = 0
+        self.tlog_retention_days = 0.0
+        self.reserved = [0] * RESERVED_WORDS
         self.port2 = port2
         # opaque trailing bytes from a record written by a future schema
         self._tail = b''
 
     def pack(self):
         name = self.name.encode('UTF-8').ljust(32, b'\x00')[:32]
+        reserved = list(self.reserved) + [0] * (RESERVED_WORDS - len(self.reserved))
         body = struct.pack(PACK_FORMAT,
                            self.magic, self.timestamp, bytes(self.secret_key),
                            self.port1, self.connections, self.count1,
-                           self.count2, name, self.flags)
+                           self.count2, name, self.flags,
+                           self.tlog_retention_days,
+                           *reserved[:RESERVED_WORDS])
         return body + self._tail
 
     def unpack(self, data):
@@ -80,9 +89,11 @@ class KeyEntry:
         else:
             body = data[:KEYENTRY_CURRENT_SIZE]
             self._tail = data[KEYENTRY_CURRENT_SIZE:]
+        unpacked = struct.unpack(PACK_FORMAT, body)
         (self.magic, self.timestamp, secret_key, self.port1,
          self.connections, self.count1, self.count2, name,
-         self.flags) = struct.unpack(PACK_FORMAT, body)
+         self.flags, self.tlog_retention_days) = unpacked[:10]
+        self.reserved = list(unpacked[10:10 + RESERVED_WORDS])
         self.secret_key = bytearray(secret_key)
         self.name = name.decode('utf-8', errors='ignore').rstrip('\0')
 
@@ -129,10 +140,16 @@ class KeyEntry:
         flagstr = ''
         if self.flags:
             flagstr = ' flags=' + ','.join(self.flag_names())
-        return ("%u/%u '%s' counts=%u/%u connections=%u ts=%u%s"
+        tlogstr = ''
+        if self.flags & FLAG_TLOG:
+            if self.tlog_retention_days == 0.0:
+                tlogstr = ' tlog_retention=forever'
+            else:
+                tlogstr = ' tlog_retention=%.4g days' % self.tlog_retention_days
+        return ("%u/%u '%s' counts=%u/%u connections=%u ts=%u%s%s"
                 % (self.port1, self.port2, self.name,
                    self.count1, self.count2, self.connections,
-                   self.timestamp, flagstr))
+                   self.timestamp, flagstr, tlogstr))
 
 
 def open_db(path='keys.tdb'):
@@ -287,7 +304,11 @@ def set_flag(db, port2, flag_name):
     ke = KeyEntry(port2)
     if not ke.fetch(db):
         raise CLIError("No entry for port2 %d" % port2)
+    was_set = bool(ke.flags & bit)
     ke.flags |= bit
+    # Auto-default tlog retention on first enable from a fresh-zero state.
+    if bit == FLAG_TLOG and not was_set and ke.tlog_retention_days == 0.0:
+        ke.tlog_retention_days = DEFAULT_TLOG_RETENTION_DAYS
     ke.store(db)
     return ke
 
@@ -298,6 +319,17 @@ def clear_flag(db, port2, flag_name):
     if not ke.fetch(db):
         raise CLIError("No entry for port2 %d" % port2)
     ke.flags &= ~bit
+    ke.store(db)
+    return ke
+
+
+def set_tlog_retention(db, port2, days):
+    ke = KeyEntry(port2)
+    if not ke.fetch(db):
+        raise CLIError("No entry for port2 %d" % port2)
+    if days < 0.0:
+        raise CLIError("retention days must be >= 0 (got %r)" % days)
+    ke.tlog_retention_days = float(days)
     ke.store(db)
     return ke
 
