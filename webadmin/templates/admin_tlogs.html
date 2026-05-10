@@ -25,19 +25,20 @@
 {% if date %}
 <h3>Sessions on {{ date }}</h3>
 <table class="entries">
-  <thead><tr><th>session</th><th>size</th><th></th></tr></thead>
+  <thead><tr><th>session</th><th>size</th><th>last modified</th><th></th></tr></thead>
   <tbody>
     {% for s in sessions %}
     <tr>
       <td>{{ s.name }}</td>
       <td>{{ s.size }} bytes</td>
+      <td><time datetime="{{ s.mtime_iso }}">{{ s.mtime_utc }}</time></td>
       <td>
         <a href="{{ url_for('admin_tlogs.admin_download',
                             port2=entry.port2, date=date, session_name=s.name) }}">download</a>
       </td>
     </tr>
     {% else %}
-    <tr><td colspan="3"><em>(none)</em></td></tr>
+    <tr><td colspan="4"><em>(none)</em></td></tr>
     {% endfor %}
   </tbody>
 </table>

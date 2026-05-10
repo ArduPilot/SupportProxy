@@ -10,6 +10,7 @@ use.
 """
 import os
 import re
+import time
 
 from flask import (Blueprint, abort, current_app, render_template,
                    send_from_directory)
@@ -79,7 +80,21 @@ def _list_sessions(port2, date):
             st = os.stat(path)
         except OSError:
             continue
-        files.append({'name': name, 'size': st.st_size, 'mtime': st.st_mtime})
+        files.append({
+            'name': name,
+            'size': st.st_size,
+            'mtime': st.st_mtime,
+            # ISO 8601 UTC for the <time datetime="..."> attr; the
+            # client-side localtime.js rewrites the visible text in
+            # the viewer's timezone. The fallback ('mtime_utc') is
+            # rendered without a TZ suffix so that JS-on / JS-off
+            # produce identical-width output (no column reflow on
+            # the 5 s auto-refresh).
+            'mtime_iso': time.strftime('%Y-%m-%dT%H:%M:%SZ',
+                                       time.gmtime(st.st_mtime)),
+            'mtime_utc': time.strftime('%Y-%m-%d %H:%M:%S',
+                                       time.gmtime(st.st_mtime)),
+        })
     files.sort(key=lambda f: f['name'])
     return files
 
