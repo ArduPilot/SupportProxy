@@ -6,7 +6,7 @@
 <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 {% block head_extra %}{% endblock %}
 </head>
-<body>
+<body data-auto-refresh="{% block auto_refresh_seconds %}{% endblock %}">
 <header>
   <a class="brand" href="{{ url_for('index') }}">
     <img src="{{ url_for('static', filename='ardupilot_logo.png') }}"
@@ -46,5 +46,6 @@
 {% endif %}
 <script src="{{ url_for('static', filename='password-toggle.js') }}" defer></script>
 <script src="{{ url_for('static', filename='localtime.js') }}" defer></script>
+<script src="{{ url_for('static', filename='auto-refresh.js') }}" defer></script>
 </body>
 </html>
