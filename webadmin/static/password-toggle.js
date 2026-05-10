@@ -52,4 +52,7 @@
     } else {
         init();
     }
+    // Re-scan after auto-refresh.js swaps <main> in-place so any
+    // newly-injected password fields get the eye too.
+    document.addEventListener('pageupdate', init);
 })();

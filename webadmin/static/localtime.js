@@ -53,4 +53,7 @@
     } else {
         rewrite();
     }
+    // auto-refresh.js swaps <main> in-place; rerun after each swap so
+    // newly-injected <time> elements get the localtime treatment too.
+    document.addEventListener('pageupdate', rewrite);
 })();

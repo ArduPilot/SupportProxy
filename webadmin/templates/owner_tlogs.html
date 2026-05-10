@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% block title %}My tlogs — {{ config.WEBUI_TITLE }}{% endblock %}
-{% block head_extra %}<meta http-equiv="refresh" content="5">{% endblock %}
+{% block auto_refresh_seconds %}5{% endblock %}
 {% block content %}
 <h2>My tlogs ({{ entry.port1 }}/{{ entry.port2 }})</h2>
 
