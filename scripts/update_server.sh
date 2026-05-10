@@ -60,11 +60,46 @@ RSYNC_EXCLUDES=(
     --exclude='.webadmin_secret'
 )
 
+if ! command -v git >/dev/null 2>&1; then
+    echo "git not found — needed to enumerate the deploy file list" >&2
+    exit 1
+fi
+
+# Build a clean staging tree of *only* git-tracked files (deny-by-
+# default). Anything in the local working tree that isn't tracked —
+# pass.dat, x.dat, *.orig from a recent merge, .webadmin_secret,
+# fullchain.pem, scratch notes, an unrelated test/ dir — physically
+# can't reach the deploy. Uncommitted edits to TRACKED files do go
+# through (cp from the working tree), so the existing
+# "edit-then-deploy" workflow keeps working; new files have to be
+# git add'd before they ship. The .git directory is also copied so
+# the deployed build's `git rev-parse --short HEAD` succeeds.
+STAGE="$(mktemp -d)"
+trap 'rm -rf "$STAGE"' EXIT
+
+(
+    cd "$REPO_ROOT"
+    # --recurse-submodules so modules/mavlink/* ends up in the list
+    # rather than just the submodule pointer. Filter out any path
+    # that resolves to a directory — those are uninitialised nested
+    # submodules (e.g. modules/mavlink/.../node_modules/...) that we
+    # don't have content for locally and the build doesn't need.
+    git ls-files -z --recurse-submodules | \
+        while IFS= read -r -d '' f; do
+            [ -f "$f" ] && printf '%s\0' "$f"
+        done | \
+        xargs -0 cp --parents -t "$STAGE"
+    cp -a .git "$STAGE/.git"
+)
+
 for host in "$@"; do
     echo
     echo "=== $host: syncing source ==="
+    # RSYNC_EXCLUDES still applies — the staging tree itself is
+    # already clean, but the excludes are what stops --delete from
+    # clobbering the server's own state (keys.tdb, *.pem, logs/, ...).
     rsync -az --delete "${RSYNC_EXCLUDES[@]}" \
-        "$REPO_ROOT/" "$host:SupportProxy/"
+        "$STAGE/" "$host:SupportProxy/"
 
     echo "=== $host: rebuild + restart ==="
     ssh "$host" bash -se <<'SSH_EOF'
