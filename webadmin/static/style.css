@@ -1,11 +1,19 @@
 html { font-family: system-ui, sans-serif; color: #222; background: #fafafa; }
 body { max-width: 960px; margin: 0 auto; padding: 1rem; }
-header { display: flex; justify-content: space-between; align-items: baseline;
-         border-bottom: 1px solid #ccc; padding-bottom: 0.5rem; margin-bottom: 1rem; }
-header h1 { font-size: 1.2rem; margin: 0; }
-header h1 a { color: inherit; text-decoration: none; }
-header nav { display: flex; gap: 1rem; align-items: baseline; font-size: 0.9rem; }
+/* ArduPilot-blue header bar so the logo's transparent PNG blends in. */
+header { display: flex; justify-content: space-between; align-items: center;
+         background: #3a7cb3; color: #fff;
+         border-bottom: 1px solid #2a5e88;
+         padding: 0.4rem 0.8rem; margin: -1rem -1rem 1rem; }
+header h1 { font-size: 1.2rem; margin: 0; color: #fff; }
+header .brand { display: flex; align-items: center; gap: 0.6rem;
+                text-decoration: none; color: inherit; }
+header .brand .logo { height: 2.4rem; width: auto; display: block; }
+header nav { display: flex; gap: 1rem; align-items: center; font-size: 0.9rem; }
+header nav a { color: #fff; }
 header nav form.inline { display: inline; }
+header nav button { background: #fff; color: #3a7cb3; border: 1px solid #2a5e88; }
+header nav button:hover { background: #e6f0fa; }
 main { padding: 0.5rem 0; }
 
 .field { margin: 0.5rem 0; }
@@ -47,3 +55,28 @@ footer.version {
 }
 footer.version a { color: #888; text-decoration: none; }
 footer.version a:hover { text-decoration: underline; }
+
+/* Show/hide eye toggle attached to every password input by
+   static/password-toggle.js. The button sits over the input's right
+   edge; we extend the input's right padding so the text doesn't run
+   under the icon. The selector covers both type=password (default)
+   and type=text (after revealing) since the JS toggles the type. */
+.password-wrap { display: inline-block; position: relative; vertical-align: middle; }
+.password-wrap input[type=password],
+.password-wrap input[type=text] {
+    padding-right: 2.2rem;
+}
+.password-wrap button.toggle {
+    position: absolute;
+    right: 0.3rem;
+    top: 50%;
+    transform: translateY(-50%);
+    background: transparent;
+    border: none;
+    padding: 0.15rem;
+    cursor: pointer;
+    color: #666;
+    line-height: 0;
+}
+.password-wrap button.toggle:hover { color: #222; }
+.password-wrap button.toggle svg { width: 18px; height: 18px; display: block; }
