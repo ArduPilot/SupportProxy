@@ -134,6 +134,37 @@ class TestAdminTlogForm:
 # listing & download
 # ---------------------------------------------------------------------------
 
+class TestTlogDownloadCacheHeaders:
+    """Tlog payloads contain raw vehicle telemetry. They must not be
+    cached by browsers or intermediaries — even though the rest of
+    the app's static assets (logo, CSS, JS) are aggressively cached
+    via SEND_FILE_MAX_AGE_DEFAULT. The download endpoint overrides
+    the cache header explicitly."""
+
+    def test_owner_download_is_no_store(self, client, keydb_path, logs_dir):
+        seed_session(logs_dir, ALICE_PORT2, '2026-05-10', 'session1.tlog',
+                     content=b'TLOG')
+        login_as(client, ALICE_PORT1, ALICE_PASS)
+        r = client.get('/me/tlogs/2026-05-10/session1.tlog')
+        assert r.status_code == 200
+        cc = r.headers.get('Cache-Control', '')
+        assert 'no-store' in cc
+        assert 'private' in cc
+        assert 'public' not in cc
+        assert 'max-age=86400' not in cc
+
+    def test_admin_download_is_no_store(self, client, keydb_path, logs_dir):
+        seed_session(logs_dir, ALICE_PORT2, '2026-05-10', 'session1.tlog',
+                     content=b'TLOG')
+        login_as(client, BOB_PORT1, BOB_PASS)
+        r = client.get('/admin/tlogs/' + str(ALICE_PORT2)
+                       + '/2026-05-10/session1.tlog')
+        assert r.status_code == 200
+        cc = r.headers.get('Cache-Control', '')
+        assert 'no-store' in cc
+        assert 'private' in cc
+
+
 class TestOwnerTlogListing:
     def test_owner_lists_own_dates_and_downloads(self, client, keydb_path,
                                                   logs_dir):
