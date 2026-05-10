@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}My tlogs — {{ config.WEBUI_TITLE }}{% endblock %}
+{% block content %}
+<h2>My tlogs ({{ entry.port1 }}/{{ entry.port2 }})</h2>
+
+<p><a href="{{ url_for('owner.me') }}">back to my entry</a></p>
+
+<h3>Dates</h3>
+<ul class="tlog-dates">
+  {% for d in dates %}
+  <li>
+    {% if date == d %}<strong>{{ d }}</strong>
+    {% else %}<a href="{{ url_for('owner_tlogs.owner_sessions', date=d) }}">{{ d }}</a>
+    {% endif %}
+  </li>
+  {% else %}
+  <li><em>no tlogs recorded yet</em></li>
+  {% endfor %}
+</ul>
+
+{% if date %}
+<h3>Sessions on {{ date }}</h3>
+<table class="entries">
+  <thead><tr><th>session</th><th>size</th><th></th></tr></thead>
+  <tbody>
+    {% for s in sessions %}
+    <tr>
+      <td>{{ s.name }}</td>
+      <td>{{ s.size }} bytes</td>
+      <td>
+        <a href="{{ url_for('owner_tlogs.owner_download',
+                            date=date, session_name=s.name) }}">download</a>
+      </td>
+    </tr>
+    {% else %}
+    <tr><td colspan="3"><em>(none)</em></td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+{% endblock %}

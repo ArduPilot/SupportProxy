@@ -25,6 +25,11 @@ class DefaultConfig:
     # so the web admin should typically be started from the same directory.
     KEYDB_PATH = os.environ.get('WEBADMIN_KEYDB_PATH', 'keys.tdb')
 
+    # Root directory for per-port-pair tlogs written by the supportproxy
+    # binary (logs/<port2>/<YYYY-MM-DD>/sessionN.tlog). Must match the cwd
+    # supportproxy was started from. Tests override this to a tmpdir.
+    LOGS_DIR = os.environ.get('WEBADMIN_LOGS_DIR', 'logs')
+
     # Cookie hardening. Set WEBADMIN_INSECURE_COOKIES=1 only for local HTTP dev.
     SESSION_COOKIE_SECURE = not _bool_env('WEBADMIN_INSECURE_COOKIES')
     SESSION_COOKIE_HTTPONLY = True
