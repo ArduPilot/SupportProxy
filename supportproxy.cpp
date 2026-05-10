@@ -274,6 +274,9 @@ static void main_loop(struct listen_port *p)
     const bool binlog_enabled = (p->flags & KEY_FLAG_BINLOG) != 0;
     // Tap helper: returns true if the message was consumed by binlog
     // and the caller should NOT forward it to the engineer side.
+    // BinlogWriter::handle_block does its own lazy file-open, gated
+    // on seqno==0 so we don't sparse-extend the file from a mid-
+    // stream seqno.
     auto binlog_handle_user_msg = [&](const mavlink_message_t &m) -> bool {
         if (!binlog_enabled) {
             return false;
@@ -283,10 +286,7 @@ static void main_loop(struct listen_port *p)
             return false;
         }
         if (m.msgid == MAVLINK_MSG_ID_REMOTE_LOG_DATA_BLOCK) {
-            if (!binlog.is_open()) {
-                binlog.open(uint32_t(p->port2), session_n);
-            }
-            binlog.handle_block(m);
+            binlog.handle_block(uint32_t(p->port2), session_n, m);
         }
         return true;  // strip from user→engineer
     };

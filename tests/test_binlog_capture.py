@@ -286,6 +286,118 @@ class TestBinlogCapture:
         finally:
             _terminate(proc)
 
+    def test_strict_start_gate_discards_pre_seqno_0(self, proxy_workdir):
+        """A vehicle that was already streaming when SupportProxy
+        activated will have a non-zero seqno on its first DATA_BLOCK.
+        Writing at offset seqno*200 would sparse-extend the file out
+        to GB and produce a bin that doesn't start with FMT records
+        (which DFReader requires). The strict-start gate: drop any
+        DATA_BLOCK with seqno != 0 until a fresh seqno=0 arrives."""
+        _setup_db(proxy_workdir, PORT_USER, PORT_ENG, 'bintest', 'bp',
+                  'binlog')
+        proc = _start_proxy(proxy_workdir, PORT_ENG)
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.bind(('127.0.0.1', 0))
+            dest = ('127.0.0.1', PORT_USER)
+
+            # Mid-stream seqnos: pretend the vehicle has been logging
+            # since seqno=1000.
+            for seq in (1000, 1001, 1002, 1003):
+                _send_data_block(sock, dest, seq, b'\x99' * 50)
+            time.sleep(0.7)
+
+            # No file should exist yet — strict gate.
+            date_dir = (proxy_workdir / 'logs' / str(PORT_ENG)
+                        / _today_str())
+            if date_dir.exists():
+                files = sorted(p.name for p in date_dir.iterdir())
+                assert not any(f.endswith('.bin') for f in files), \
+                    'file created from mid-stream seqno; have %r' % files
+
+            # Also: no ACKs sent (the proxy hasn't latched onto the
+            # session, so even pending_acks should be empty).
+            statuses = _recv_block_statuses(sock, timeout=0.5)
+            assert all(s != 1000 and s != 1001 and s != 1002 and s != 1003
+                       for s, _ in statuses), \
+                'pre-seqno-0 blocks should not be ACKed; saw %r' % statuses
+
+            # Now the vehicle restarts and we see seqno=0. File opens.
+            _send_data_block(sock, dest, 0, b'\x11' * 50)
+            _send_data_block(sock, dest, 1, b'\x22' * 50)
+            assert _wait_for(
+                lambda: _bin_path(proxy_workdir, PORT_ENG).exists()
+                        and _bin_path(proxy_workdir, PORT_ENG).stat().st_size
+                        >= 400,
+                timeout=5.0), \
+                'file not opened after seqno=0; proxy log:\n%s' % (
+                    ''.join(getattr(proc, '_lines', [])))
+            with open(_bin_path(proxy_workdir, PORT_ENG), 'rb') as f:
+                content = f.read()
+            # File is exactly 400 bytes (seqno 0 + 1), no sparse extension.
+            assert len(content) == 400
+            assert content[:50] == b'\x11' * 50
+            assert content[200:250] == b'\x22' * 50
+            sock.close()
+        finally:
+            _terminate(proc)
+
+    def test_bin_parses_with_dfreader(self, proxy_workdir):
+        """End-to-end: pack a minimal-but-valid ArduPilot bin payload
+        (one FMT-of-FMT record) into DATA_BLOCKs, drive them through
+        the proxy with strict seqno-0 start, then open the resulting
+        sessionN.bin with pymavlink.DFReader.DFReader_binary and
+        assert it parses without error and yields the FMT record back.
+
+        This is the test that would have caught the FireVPS
+        session22.bin corruption — without it, the proxy could write
+        any garbage into the file and we'd never notice."""
+        from pymavlink import DFReader
+        _setup_db(proxy_workdir, PORT_USER, PORT_ENG, 'bintest', 'bp',
+                  'binlog')
+
+        # Minimal valid bin: a single FMT-of-FMT record (89 bytes),
+        # padded with zero bytes to 200 to fill one DATA_BLOCK slot.
+        # DFReader_binary's record framer skips the zero padding by
+        # scanning for the next 0xA3 0x95 marker, so this layout is
+        # parseable.
+        HEAD = bytes([0xA3, 0x95])
+        FMT_MSG_TYPE = 0x80
+        fmt_body = (HEAD + bytes([FMT_MSG_TYPE]) +
+                    bytes([FMT_MSG_TYPE, 89]) +
+                    b'FMT\x00' +
+                    b'BBnNZ'.ljust(16, b'\x00') +
+                    b'Type,Length,Name,Format,Columns'.ljust(64, b'\x00'))
+        assert len(fmt_body) == 89
+        block0 = fmt_body + b'\x00' * (200 - len(fmt_body))
+
+        proc = _start_proxy(proxy_workdir, PORT_ENG)
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.bind(('127.0.0.1', 0))
+            dest = ('127.0.0.1', PORT_USER)
+            _send_data_block(sock, dest, 0, block0)
+            assert _wait_for(
+                lambda: _bin_path(proxy_workdir, PORT_ENG).exists()
+                        and _bin_path(proxy_workdir, PORT_ENG).stat().st_size
+                        >= 200,
+                timeout=5.0)
+            sock.close()
+
+            # Parse with DFReader.
+            log = DFReader.DFReader_binary(
+                str(_bin_path(proxy_workdir, PORT_ENG)))
+            types_seen = set()
+            while True:
+                m = log.recv_match()
+                if m is None:
+                    break
+                types_seen.add(m.get_type())
+            assert 'FMT' in types_seen, \
+                "DFReader didn't parse a FMT record; saw %r" % types_seen
+        finally:
+            _terminate(proc)
+
     def test_paired_session_n_with_tlog(self, proxy_workdir):
         """tlog + binlog flags both set on one entry should produce
         sessionN.tlog and sessionN.bin sharing the same N. We drive
