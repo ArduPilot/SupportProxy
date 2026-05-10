@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% block title %}Tlogs for {{ entry.port2 }} — {{ config.WEBUI_TITLE }}{% endblock %}
+{% block head_extra %}<meta http-equiv="refresh" content="5">{% endblock %}
 {% block content %}
 <h2>Tlogs for {{ entry.port1 }}/{{ entry.port2 }} '{{ entry.name }}'</h2>
 

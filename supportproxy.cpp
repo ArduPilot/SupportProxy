@@ -743,13 +743,14 @@ static void main_loop(struct listen_port *p)
 
 	/*
 	  Heartbeat snapshot of live connections to connections.tdb.
-	  Throttled to 10s and forked into a grandchild so we don't
+	  Throttled to 5s and forked into a grandchild so we don't
 	  block main_loop on disk I/O. Same pattern as
-	  save_signing_timestamp() in mavlink.cpp.
+	  save_signing_timestamp() in mavlink.cpp. The web UI's
+	  http-equiv refresh runs at the same cadence.
 	 */
 	{
 	    double snap_now = time_seconds();
-	    if (snap_now - last_conn_save_s > 10) {
+	    if (snap_now - last_conn_save_s > 5) {
 		last_conn_save_s = snap_now;
 		signal(SIGCHLD, SIG_IGN);
 		if (fork() == 0) {

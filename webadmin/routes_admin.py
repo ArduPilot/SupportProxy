@@ -34,7 +34,7 @@ def connections():
 
     Joins connections.tdb with keys.tdb so we can render the entry
     name alongside each connection. Auto-refreshes via meta http-equiv
-    in the template — the proxy heartbeat is 10s.
+    in the template — the proxy heartbeat is 5s.
     """
     active = conn_db.list_active()
     with tdb_readonly() as db:
