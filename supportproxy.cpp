@@ -38,6 +38,7 @@
 #include "keydb.h"
 #include "conntdb.h"
 #include "tlog.h"
+#include "binlog.h"
 #include "session.h"
 #include "cleanup.h"
 #include "websocket.h"
@@ -263,6 +264,33 @@ static void main_loop(struct listen_port *p)
         return tlog_enabled ? &tlog : nullptr;
     };
 
+    // binlog: ArduPilot bin logs over MAVLink. Activates when the
+    // first REMOTE_LOG_DATA_BLOCK arrives from the user side; while
+    // enabled, both REMOTE_LOG_DATA_BLOCK (184) and
+    // REMOTE_LOG_BLOCK_STATUS (185) are stripped from the user→
+    // engineer forward path so the support engineer's session isn't
+    // polluted by log traffic. Engineer→user direction is unchanged.
+    BinlogWriter binlog;
+    const bool binlog_enabled = (p->flags & KEY_FLAG_BINLOG) != 0;
+    // Tap helper: returns true if the message was consumed by binlog
+    // and the caller should NOT forward it to the engineer side.
+    auto binlog_handle_user_msg = [&](const mavlink_message_t &m) -> bool {
+        if (!binlog_enabled) {
+            return false;
+        }
+        if (m.msgid != MAVLINK_MSG_ID_REMOTE_LOG_DATA_BLOCK
+            && m.msgid != MAVLINK_MSG_ID_REMOTE_LOG_BLOCK_STATUS) {
+            return false;
+        }
+        if (m.msgid == MAVLINK_MSG_ID_REMOTE_LOG_DATA_BLOCK) {
+            if (!binlog.is_open()) {
+                binlog.open(uint32_t(p->port2), session_n);
+            }
+            binlog.handle_block(m);
+        }
+        return true;  // strip from user→engineer
+    };
+
     // Live state mirrored into connections.tdb so the web UI can show
     // who is connected right now. Captured here, snapshotted into TDB
     // on a 10s heartbeat below (mirroring save_signing_timestamp's
@@ -436,12 +464,19 @@ static void main_loop(struct listen_port *p)
 		printf("[%d] %s have UDP conn1 for from %s\n", unsigned(p->port2), time_string(), addr_to_str(from));
             }
             mavlink_message_t msg {};
-	    if (conn2_count > 0) {
+	    // Parse user-side bytes whenever there's anywhere for them to
+	    // go: a connected engineer (forward), tlog recording, or
+	    // binlog recording. Without one of those, the bytes are read
+	    // off the socket but discarded.
+	    if (conn2_count > 0 || binlog_enabled) {
 		uint8_t *buf0 = buf;
 		while (n > 0 && mav1.receive_message(buf0, n, msg)) {
 		    mav1_rx_msgs++;
 		    ensure_tlog_open();
 		    tlog_write_message(tlog_ptr(), msg);
+		    if (binlog_handle_user_msg(msg)) {
+			continue;  // strip REMOTE_LOG_* from user→engineer
+		    }
 		    for (uint8_t i=0; i<max_conn2_count; i++) {
 			auto &c2 = conn2[i];
 			if (!c2.used) {
@@ -606,12 +641,17 @@ static void main_loop(struct listen_port *p)
 	    last_pkt1 = now;
             count1++;
 	    mavlink_message_t msg {};
-	    if (conn2_count > 0) {
+	    // Parse whenever a downstream consumer needs it (engineer
+	    // forward, tlog, or binlog). Otherwise just discard.
+	    if (conn2_count > 0 || binlog_enabled) {
 		uint8_t *buf0 = buf;
 		while (n > 0 && mav1.receive_message(buf0, n, msg)) {
 		    mav1_rx_msgs++;
 		    ensure_tlog_open();
 		    tlog_write_message(tlog_ptr(), msg);
+		    if (binlog_handle_user_msg(msg)) {
+			continue;  // strip REMOTE_LOG_* from user→engineer
+		    }
 		    for (uint8_t i=0; i<max_conn2_count; i++) {
 			auto &c2 = conn2[i];
 			if (!c2.used) {
@@ -746,6 +786,12 @@ static void main_loop(struct listen_port *p)
 		    }
 		}
 	    }
+	}
+
+	// Drain any pending REMOTE_LOG_BLOCK_STATUS ACKs/NACKs through
+	// the user-side mav1. Cheap when no binlog session is active.
+	if (binlog.is_open()) {
+	    binlog.tick(mav1);
 	}
 
 	/*

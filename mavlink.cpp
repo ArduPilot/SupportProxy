@@ -94,6 +94,11 @@ ssize_t MAVLink::send_data(const void *buf, ssize_t len)
     return ::send(fd, buf, len, 0);
 }
 
+ssize_t MAVLink::send_buf(const void *buf, ssize_t len)
+{
+    return send_data(buf, len);
+}
+
 bool MAVLink::receive_message(uint8_t *&buf, ssize_t &len, mavlink_message_t &msg)
 {
     mavlink_status_t status {};

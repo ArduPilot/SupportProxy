@@ -12,7 +12,7 @@ CXXFLAGS := $(CXXFLAGS) -DMAVLINK_SIGNING_TIMESTAMP_LIMIT=600
 LIBS := -ltdb -lssl -lcrypto
 
 # Source files
-SOURCES := supportproxy.cpp mavlink.cpp util.cpp keydb.cpp conntdb.cpp tlog.cpp session.cpp cleanup.cpp websocket.cpp
+SOURCES := supportproxy.cpp mavlink.cpp util.cpp keydb.cpp conntdb.cpp tlog.cpp session.cpp binlog.cpp cleanup.cpp websocket.cpp
 OBJECTS := $(SOURCES:.cpp=.o)
 TARGET := supportproxy
 
@@ -80,6 +80,7 @@ keydb.o: keydb.cpp keydb.h
 conntdb.o: conntdb.cpp conntdb.h
 tlog.o: tlog.cpp tlog.h session.h
 session.o: session.cpp session.h
+binlog.o: binlog.cpp binlog.h session.h mavlink.h util.h $(MAVLINK_DIR)/protocol.h
 cleanup.o: cleanup.cpp cleanup.h keydb.h
 websocket.o: websocket.cpp websocket.h util.h
 
