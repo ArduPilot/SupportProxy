@@ -101,6 +101,41 @@ def test_flag_names_includes_tlog():
     assert keydb_lib.FLAG_TLOG == 1 << 2
 
 
+def test_flag_names_includes_binlog():
+    """The binlog flag is exposed via FLAG_NAMES so setflag/clearflag work."""
+    assert 'binlog' in keydb_lib.FLAG_NAMES
+    assert keydb_lib.FLAG_NAMES['binlog'] == keydb_lib.FLAG_BINLOG
+    assert keydb_lib.FLAG_BINLOG == 1 << 3
+
+
+def test_binlog_flag_round_trip(tmp_path):
+    """Both tlog and binlog can coexist on the same entry."""
+    p = str(tmp_path / 'keys.tdb')
+    db = keydb_lib.init_db(p)
+    db.transaction_start()
+    keydb_lib.add_entry(db, 18001, 18002, 'bin_test', 'pw')
+    keydb_lib.set_flag(db, 18002, 'binlog')
+    keydb_lib.set_flag(db, 18002, 'tlog')
+    ke = keydb_lib.KeyEntry(18002)
+    ke.fetch(db)
+    db.transaction_cancel()
+    assert ke.flags & keydb_lib.FLAG_BINLOG
+    assert ke.flags & keydb_lib.FLAG_TLOG
+    names = ke.flag_names()
+    assert 'binlog' in names
+    assert 'tlog' in names
+
+
+def test_cli_setflag_binlog(tmp_path):
+    p = str(tmp_path / 'keys.tdb')
+    _run_cli(p, 'initialise')
+    _run_cli(p, 'add', '19001', '19002', 'CliBin', 'pw')
+    r = _run_cli(p, 'setflag', '19002', 'binlog')
+    assert r.returncode == 0
+    r = _run_cli(p, 'flags', '19002')
+    assert 'binlog' in r.stdout
+
+
 def test_setflag_tlog_auto_defaults_retention(tmp_path):
     """Enabling tlog from a fresh-zero state seeds the default retention."""
     p = str(tmp_path / 'keys.tdb')

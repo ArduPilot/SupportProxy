@@ -36,11 +36,13 @@ KEYENTRY_CURRENT_SIZE = struct.calcsize(PACK_FORMAT)  # 168
 FLAG_ADMIN     = 1 << 0
 FLAG_BIDI_SIGN = 1 << 1   # require signed MAVLink on the user side too
 FLAG_TLOG      = 1 << 2   # record per-connection MAVProxy-format tlogs
+FLAG_BINLOG    = 1 << 3   # record ArduPilot bin logs over MAVLink
 
 FLAG_NAMES = {
     "admin":     FLAG_ADMIN,
     "bidi_sign": FLAG_BIDI_SIGN,
     "tlog":      FLAG_TLOG,
+    "binlog":    FLAG_BINLOG,
 }
 
 DEFAULT_TLOG_RETENTION_DAYS = 7.0

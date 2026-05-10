@@ -32,6 +32,7 @@
 #define KEY_FLAG_ADMIN     (1u << 0)
 #define KEY_FLAG_BIDI_SIGN (1u << 1)  // require signed MAVLink on the user side too
 #define KEY_FLAG_TLOG      (1u << 2)  // record per-connection MAVProxy-format tlogs
+#define KEY_FLAG_BINLOG    (1u << 3)  // record ArduPilot bin logs over MAVLink
 
 struct KeyEntry {
     uint64_t magic;
