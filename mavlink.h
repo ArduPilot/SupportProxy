@@ -30,6 +30,16 @@ public:
     void init(int fd, mavlink_channel_t chan, bool signing_required, bool allow_websocket, bool is_tcp, int key_id=-1);
     bool receive_message(uint8_t *&buf, ssize_t &len, mavlink_message_t &msg);
     bool send_message(const mavlink_message_t &msg);
+    /*
+      Send already-serialised MAVLink bytes (header + payload + CRC,
+      optionally signature) to the peer through this connection's
+      transport (UDP/TCP/WebSocket). Use when the message has already
+      been pack_chan'd + mavlink_msg_to_send_buffer'd elsewhere and
+      double-finalising via send_message() would corrupt the payload
+      (zero-trimmed bytes have CRC bytes written into the payload
+      area; a second finalize then treats them as live payload).
+     */
+    ssize_t send_buf(const void *buf, ssize_t len);
     void set_ws(WebSocket *_ws) {
 	ws = _ws;
     }
