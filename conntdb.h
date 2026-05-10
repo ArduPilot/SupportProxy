@@ -37,6 +37,15 @@
 // ever decide to drop a field (we shouldn't).
 #define CONNENTRY_MIN_SIZE 64
 
+// flag bits on ConnEntry.flags
+//
+// CONN_FLAG_DROP_REQUESTED:  the web admin has asked the per-port-pair
+//   child to drop this specific connection. The webadmin sets the bit
+//   in TDB and sends SIGUSR1 to the child; the child's main_loop scans
+//   for entries matching its port2 with this bit set, closes the
+//   matching slot, and deletes the record.
+#define CONN_FLAG_DROP_REQUESTED (1u << 0)
+
 struct ConnEntry {
     uint64_t magic;            // CONN_MAGIC
     uint64_t connected_at;     // unix seconds

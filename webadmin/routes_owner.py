@@ -6,9 +6,29 @@ import keydb_lib
 from . import connections as conn_db
 from .auth import current_owner, require_login
 from .db import tdb_readonly, tdb_transaction
-from .forms import OwnerEditForm
+from .forms import KillForm, OwnerEditForm
 
 bp = Blueprint('owner', __name__, url_prefix='/me')
+
+
+@bp.route('/kill/<int:conn_index>', methods=['POST'])
+@require_login
+def kill_connection(conn_index):
+    """Drop a single connection on the owner's port2.
+
+    conn_index 0 is the user side: dropping it ends the whole session
+    (the proxy can't run without conn1). conn_index >= 1 is an engineer
+    slot — the child closes just that slot and keeps everything else.
+    """
+    form = KillForm()
+    if not form.validate_on_submit():
+        abort(400)
+    port2 = current_owner()
+    if conn_db.request_drop(port2, conn_index):
+        flash('Drop requested.', 'success')
+    else:
+        flash('Connection not found or already gone.', 'error')
+    return redirect(url_for('owner.me'))
 
 
 @bp.route('/', methods=['GET', 'POST'])
@@ -68,4 +88,5 @@ def me():
         form.tlog_enabled.data = bool(ke.flags & keydb_lib.FLAG_TLOG)
         form.tlog_retention_days.data = ke.tlog_retention_days
     active = conn_db.list_for_port2(port2)
-    return render_template('owner.html', form=form, entry=ke, active=active)
+    return render_template('owner.html', form=form, entry=ke, active=active,
+                           kill_form=KillForm())
