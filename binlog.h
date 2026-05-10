@@ -47,12 +47,30 @@ public:
     bool is_open() const { return fp != nullptr; }
 
     /*
-      Decode a REMOTE_LOG_DATA_BLOCK message: write its 200 bytes at
-      offset seqno*200, mark the seqno seen, queue an ACK. On a
-      forward jump (seqno > highest_seen + 1) the gap is recorded for
-      NACK in tick().
+      Decode a REMOTE_LOG_DATA_BLOCK message and process it.
+
+      Strict-start gate: the file is opened lazily ONLY when we see a
+      block with seqno == 0. Any DATA_BLOCK arriving before that is
+      silently discarded — the vehicle was already mid-log when
+      SupportProxy activated, and writing at offset seqno*200 from
+      mid-stream produces a multi-gigabyte sparse file that doesn't
+      begin with the FMT records ArduPilot's .bin format requires,
+      so DFReader_binary / mavlogdump.py reject it. This may relax
+      later (e.g. by sending REMOTE_LOG_BLOCK_STATUS=START to nudge
+      the vehicle into restarting its stream), but the strict gate
+      is the simplest correctness anchor for now.
+
+      After the file is open: write the 200 bytes at offset
+      seqno*200, mark the seqno seen, queue an ACK. On a forward
+      jump (seqno > highest_seen + 1) the gap is recorded for NACK
+      in tick().
+
+      port2 + session_n are used only on the (lazy) open. They're
+      passed every call rather than stored so BinlogWriter doesn't
+      need to copy strings.
      */
-    void handle_block(const mavlink_message_t &msg);
+    void handle_block(uint32_t port2, unsigned session_n,
+                      const mavlink_message_t &msg);
 
     /*
       Drain pending ACKs / NACKs through the user-side MAVLink. Called

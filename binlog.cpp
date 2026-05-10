@@ -110,13 +110,26 @@ void BinlogWriter::mark_seqno_seen(uint32_t seqno)
     seen_bitmap[byte] |= uint8_t(1u << (seqno & 7));
 }
 
-void BinlogWriter::handle_block(const mavlink_message_t &msg)
+void BinlogWriter::handle_block(uint32_t port2, unsigned session_n,
+                                 const mavlink_message_t &msg)
 {
-    if (fp == nullptr) {
-        return;
-    }
     mavlink_remote_log_data_block_t blk {};
     mavlink_msg_remote_log_data_block_decode(&msg, &blk);
+
+    // Strict-start gate. Without this we sparse-extend the file out
+    // to whatever the vehicle's current seqno is — a vehicle that
+    // was already streaming when SupportProxy activated will have
+    // seqnos in the millions, producing a multi-GB hole-y file that
+    // doesn't start at byte 0 with FMT records and so won't parse
+    // with DFReader_binary / mavlogdump.py.
+    if (fp == nullptr) {
+        if (blk.seqno != 0) {
+            return;
+        }
+        if (!open(port2, session_n)) {
+            return;
+        }
+    }
 
     // Latch the vehicle's sysid/compid on first block so subsequent
     // ACKs/NACKs go to the right target. We also use the source
