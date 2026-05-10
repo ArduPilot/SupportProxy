@@ -1,9 +1,14 @@
 """Flask-WTF forms. CSRF tokens are added automatically by FlaskForm."""
 from flask_wtf import FlaskForm
-from wtforms import (BooleanField, IntegerField, PasswordField, StringField,
-                     SubmitField)
+from wtforms import (BooleanField, FloatField, IntegerField, PasswordField,
+                     StringField, SubmitField)
 from wtforms.validators import (DataRequired, Length, NumberRange, Optional,
                                 EqualTo)
+
+
+# Owner cap on tlog retention. Anything higher requires admin.
+OWNER_MAX_TLOG_RETENTION_DAYS = 30.0
+ADMIN_MAX_TLOG_RETENTION_DAYS = 36500.0  # ~100 years; effectively unbounded
 
 
 class LoginForm(FlaskForm):
@@ -28,6 +33,11 @@ class OwnerEditForm(FlaskForm):
                                         message='Passphrases do not match.')])
     bidi_sign = BooleanField(
         'Require MAVLink signing on the user side too (bi-directional signing)')
+    tlog_enabled = BooleanField('Record telemetry logs (.tlog) for this entry')
+    tlog_retention_days = FloatField(
+        'Tlog retention (days, 0 = keep forever, owners capped at 30)',
+        validators=[Optional(),
+                    NumberRange(min=0.0, max=OWNER_MAX_TLOG_RETENTION_DAYS)])
     reset_timestamp = BooleanField('Reset signing timestamp (recover from clock skew)')
     submit = SubmitField('Save')
 
@@ -48,6 +58,11 @@ class AdminEditForm(FlaskForm):
     is_admin = BooleanField('Grant admin privilege (KEY_FLAG_ADMIN)')
     bidi_sign = BooleanField(
         'Require MAVLink signing on the user side too (bi-directional signing)')
+    tlog_enabled = BooleanField('Record telemetry logs (.tlog) for this entry')
+    tlog_retention_days = FloatField(
+        'Tlog retention (days, 0 = keep forever)',
+        validators=[Optional(),
+                    NumberRange(min=0.0, max=ADMIN_MAX_TLOG_RETENTION_DAYS)])
     reset_timestamp = BooleanField('Reset signing timestamp (recover from clock skew)')
     submit = SubmitField('Save')
 

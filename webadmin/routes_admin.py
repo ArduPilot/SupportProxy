@@ -105,6 +105,18 @@ def edit(port2):
                 ke.flags |= keydb_lib.FLAG_BIDI_SIGN
             else:
                 ke.flags &= ~keydb_lib.FLAG_BIDI_SIGN
+            was_tlog = bool(ke.flags & keydb_lib.FLAG_TLOG)
+            if form.tlog_enabled.data:
+                ke.flags |= keydb_lib.FLAG_TLOG
+            else:
+                ke.flags &= ~keydb_lib.FLAG_TLOG
+            if form.tlog_retention_days.data is not None:
+                ke.tlog_retention_days = float(form.tlog_retention_days.data)
+            if (form.tlog_enabled.data and not was_tlog
+                    and ke.tlog_retention_days == 0.0
+                    and (form.tlog_retention_days.data is None
+                         or form.tlog_retention_days.data == 0.0)):
+                ke.tlog_retention_days = keydb_lib.DEFAULT_TLOG_RETENTION_DAYS
             if form.reset_timestamp.data:
                 ke.timestamp = 0
             ke.store(db)
@@ -123,6 +135,8 @@ def edit(port2):
         form.port1.data = ke.port1
         form.is_admin.data = ke.is_admin()
         form.bidi_sign.data = bool(ke.flags & keydb_lib.FLAG_BIDI_SIGN)
+        form.tlog_enabled.data = bool(ke.flags & keydb_lib.FLAG_TLOG)
+        form.tlog_retention_days.data = ke.tlog_retention_days
     return render_template('admin_edit.html', form=form, entry=ke,
                            delete_form=delete_form)
 
