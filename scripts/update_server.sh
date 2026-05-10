@@ -85,7 +85,7 @@ make distclean >/dev/null
 # regenerated headers older than the new XML and make won't notice.
 # Run regen_headers.sh up-front to be safe.
 ./regen_headers.sh
-make all
+make -j all
 # pkill -f matches the full argv. We anchor on the bin path so we don't
 # accidentally kill anything named "supportproxy" run from elsewhere.
 pkill -f "$HOME/SupportProxy/supportproxy" 2>/dev/null || true
