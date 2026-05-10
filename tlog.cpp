@@ -2,47 +2,24 @@
   per-connection MAVProxy-format tlog writer
  */
 #include "tlog.h"
+#include "session.h"
 
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/time.h>
 #include <unistd.h>
-#include <dirent.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
 #include <errno.h>
 
-/*
-  mkdir -p for a relative or absolute path. Modes default to 0700 because
-  tlogs may contain sensitive telemetry; admins can chgrp the parent if
-  they want a wider audience.
- */
-static int mkpath(const char *path)
-{
-    char tmp[1024];
-    snprintf(tmp, sizeof(tmp), "%s", path);
-    size_t n = strlen(tmp);
-    for (size_t i = 1; i <= n; i++) {
-        if (tmp[i] == '/' || tmp[i] == 0) {
-            char saved = tmp[i];
-            tmp[i] = 0;
-            if (mkdir(tmp, 0700) != 0 && errno != EEXIST) {
-                return -1;
-            }
-            tmp[i] = saved;
-        }
-    }
-    return 0;
-}
-
 TlogWriter::~TlogWriter()
 {
     close();
 }
 
-bool TlogWriter::open(uint32_t port2, const char *base_dir)
+bool TlogWriter::open(uint32_t port2, unsigned session_n, const char *base_dir)
 {
     if (fp != nullptr) {
         return true;
@@ -59,28 +36,13 @@ bool TlogWriter::open(uint32_t port2, const char *base_dir)
              tm_now.tm_mon + 1,
              tm_now.tm_mday);
 
-    if (mkpath(dir) < 0) {
+    if (mkpath_0700(dir) < 0) {
         ::printf("tlog: mkdir %s failed: %s\n", dir, strerror(errno));
         return false;
     }
 
-    DIR *d = opendir(dir);
-    if (d == nullptr) {
-        ::printf("tlog: opendir %s failed: %s\n", dir, strerror(errno));
-        return false;
-    }
-    unsigned highest = 0;
-    struct dirent *ent;
-    while ((ent = readdir(d)) != nullptr) {
-        unsigned n = 0;
-        if (sscanf(ent->d_name, "session%u.tlog", &n) == 1 && n > highest) {
-            highest = n;
-        }
-    }
-    closedir(d);
-
     char path[1024];
-    snprintf(path, sizeof(path), "%s/session%u.tlog", dir, highest + 1);
+    snprintf(path, sizeof(path), "%s/session%u.tlog", dir, session_n);
 
     fp = fopen(path, "ab");
     if (fp == nullptr) {

@@ -20,11 +20,13 @@ public:
     TlogWriter &operator=(const TlogWriter &) = delete;
 
     /*
-      open logs/<port2>/<YYYY-MM-DD>/sessionN.tlog where N is the smallest
-      positive integer for which no file already exists in that directory.
-      Creates parent dirs as needed. Returns true on success.
+      open logs/<port2>/<YYYY-MM-DD>/sessionN.tlog. The caller supplies
+      session_n via the shared next_session_n() helper so the paired
+      .tlog / .bin files for one child fork share their N. Creates parent
+      dirs as needed. Returns true on success.
      */
-    bool open(uint32_t port2, const char *base_dir = "logs");
+    bool open(uint32_t port2, unsigned session_n,
+              const char *base_dir = "logs");
 
     /*
       write a complete MAVLink frame, prefixed with an 8-byte big-endian

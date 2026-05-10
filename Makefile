@@ -12,7 +12,7 @@ CXXFLAGS := $(CXXFLAGS) -DMAVLINK_SIGNING_TIMESTAMP_LIMIT=600
 LIBS := -ltdb -lssl -lcrypto
 
 # Source files
-SOURCES := supportproxy.cpp mavlink.cpp util.cpp keydb.cpp conntdb.cpp tlog.cpp cleanup.cpp websocket.cpp
+SOURCES := supportproxy.cpp mavlink.cpp util.cpp keydb.cpp conntdb.cpp tlog.cpp session.cpp cleanup.cpp websocket.cpp
 OBJECTS := $(SOURCES:.cpp=.o)
 TARGET := supportproxy
 
@@ -73,12 +73,13 @@ mavlink.o: mavlink.cpp mavlink.h $(MAVLINK_DIR)/protocol.h
 
 # Dependencies. mavlink.h includes keydb.h, so any object that pulls in
 # mavlink.h transitively depends on keydb.h too.
-supportproxy.o: supportproxy.cpp mavlink.h util.h keydb.h conntdb.h tlog.h cleanup.h websocket.h
+supportproxy.o: supportproxy.cpp mavlink.h util.h keydb.h conntdb.h tlog.h session.h cleanup.h websocket.h
 mavlink.o: mavlink.cpp mavlink.h keydb.h $(MAVLINK_DIR)/protocol.h
 util.o: util.cpp util.h
 keydb.o: keydb.cpp keydb.h
 conntdb.o: conntdb.cpp conntdb.h
-tlog.o: tlog.cpp tlog.h
+tlog.o: tlog.cpp tlog.h session.h
+session.o: session.cpp session.h
 cleanup.o: cleanup.cpp cleanup.h keydb.h
 websocket.o: websocket.cpp websocket.h util.h
 
