@@ -46,8 +46,11 @@ class OwnerEditForm(FlaskForm):
     bidi_sign = BooleanField(
         'Require MAVLink signing on the user side too (bi-directional signing)')
     tlog_enabled = BooleanField('Record telemetry logs (.tlog) for this entry')
+    binlog_enabled = BooleanField(
+        'Record ArduPilot bin logs over MAVLink (.bin) — '
+        'firmware must have LOG_BACKEND_TYPE mavlink bit set')
     tlog_retention_days = FloatField(
-        'Tlog retention (days, 0 = keep forever, owners capped at 30)',
+        'Tlog + bin retention (days, 0 = keep forever, owners capped at 30)',
         validators=[Optional(),
                     NumberRange(min=0.0, max=OWNER_MAX_TLOG_RETENTION_DAYS)])
     reset_timestamp = BooleanField('Reset signing timestamp (recover from clock skew)')
@@ -73,8 +76,11 @@ class AdminEditForm(FlaskForm):
     bidi_sign = BooleanField(
         'Require MAVLink signing on the user side too (bi-directional signing)')
     tlog_enabled = BooleanField('Record telemetry logs (.tlog) for this entry')
+    binlog_enabled = BooleanField(
+        'Record ArduPilot bin logs over MAVLink (.bin) — '
+        'firmware must have LOG_BACKEND_TYPE mavlink bit set')
     tlog_retention_days = FloatField(
-        'Tlog retention (days, 0 = keep forever)',
+        'Tlog + bin retention (days, 0 = keep forever)',
         validators=[Optional(),
                     NumberRange(min=0.0, max=ADMIN_MAX_TLOG_RETENTION_DAYS)])
     reset_timestamp = BooleanField('Reset signing timestamp (recover from clock skew)')

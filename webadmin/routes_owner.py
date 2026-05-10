@@ -56,15 +56,25 @@ def me():
                 ke.flags |= keydb_lib.FLAG_BIDI_SIGN
             else:
                 ke.flags &= ~keydb_lib.FLAG_BIDI_SIGN
-            was_tlog = bool(ke.flags & keydb_lib.FLAG_TLOG)
+            was_tlog   = bool(ke.flags & keydb_lib.FLAG_TLOG)
+            was_binlog = bool(ke.flags & keydb_lib.FLAG_BINLOG)
             if form.tlog_enabled.data:
                 ke.flags |= keydb_lib.FLAG_TLOG
             else:
                 ke.flags &= ~keydb_lib.FLAG_TLOG
+            if form.binlog_enabled.data:
+                ke.flags |= keydb_lib.FLAG_BINLOG
+            else:
+                ke.flags &= ~keydb_lib.FLAG_BINLOG
             if form.tlog_retention_days.data is not None:
                 ke.tlog_retention_days = float(form.tlog_retention_days.data)
-            # First-enable default to mirror keydb_lib.set_flag's auto-default.
-            if (form.tlog_enabled.data and not was_tlog
+            # First-enable default: when either recording flag flips
+            # from off to on and retention is still "keep forever",
+            # seed 7 days so freshly-toggled flags have a reasonable
+            # upper bound. Mirrors keydb_lib.set_flag's auto-default.
+            just_enabled = ((form.tlog_enabled.data and not was_tlog)
+                            or (form.binlog_enabled.data and not was_binlog))
+            if (just_enabled
                     and ke.tlog_retention_days == 0.0
                     and (form.tlog_retention_days.data is None
                          or form.tlog_retention_days.data == 0.0)):
@@ -86,6 +96,7 @@ def me():
         form.name.data = ke.name
         form.bidi_sign.data = bool(ke.flags & keydb_lib.FLAG_BIDI_SIGN)
         form.tlog_enabled.data = bool(ke.flags & keydb_lib.FLAG_TLOG)
+        form.binlog_enabled.data = bool(ke.flags & keydb_lib.FLAG_BINLOG)
         form.tlog_retention_days.data = ke.tlog_retention_days
     active = conn_db.list_for_port2(port2)
     return render_template('owner.html', form=form, entry=ke, active=active,
