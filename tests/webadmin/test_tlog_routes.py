@@ -197,6 +197,48 @@ class TestAdminTlogForm:
 # listing & download
 # ---------------------------------------------------------------------------
 
+class TestSessionNaturalSort:
+    """Session files must sort by their numeric N, not lexically. With
+    a plain string sort 'session10.tlog' lands between 'session1.tlog'
+    and 'session2.tlog'."""
+
+    def test_owner_sessions_in_natural_order(self, client, keydb_path,
+                                              logs_dir):
+        # Seed in a deliberately scrambled order so the listing has to
+        # actually sort.
+        for n in (1, 11, 2, 10, 3, 20, 9):
+            seed_session(logs_dir, ALICE_PORT2, '2026-05-10',
+                         'session%d.tlog' % n, content=b'X')
+        login_as(client, ALICE_PORT1, ALICE_PASS)
+        r = client.get('/me/tlogs/2026-05-10/')
+        assert r.status_code == 200
+        body = r.data.decode()
+        names = ['session%d.tlog' % n for n in (1, 11, 2, 10, 3, 20, 9)]
+        positions = sorted((body.index(n), n) for n in names)
+        ordered = [p[1] for p in positions]
+        assert ordered == ['session1.tlog', 'session2.tlog', 'session3.tlog',
+                           'session9.tlog', 'session10.tlog',
+                           'session11.tlog', 'session20.tlog'], \
+            'got order %r' % ordered
+
+    def test_mixed_tlog_and_bin_natural_order(self, client, logs_dir):
+        # tlog9 and bin10 in the same dir — natural sort by numeric N
+        # comes first; ties go to extension order (tlog < bin
+        # alphabetically lower-cased).
+        seed_session(logs_dir, ALICE_PORT2, '2026-05-10',
+                     'session2.tlog', content=b'X')
+        seed_session(logs_dir, ALICE_PORT2, '2026-05-10',
+                     'session10.bin',  content=b'X')
+        seed_session(logs_dir, ALICE_PORT2, '2026-05-10',
+                     'session10.tlog', content=b'X')
+        login_as(client, BOB_PORT1, BOB_PASS)
+        r = client.get('/admin/tlogs/' + str(ALICE_PORT2) + '/2026-05-10/')
+        body = r.data.decode()
+        # session2 (numeric 2) must come before either session10.
+        assert body.index('session2.tlog') < body.index('session10.bin')
+        assert body.index('session2.tlog') < body.index('session10.tlog')
+
+
 class TestBinFileListing:
     """`.bin` files (ArduPilot dataflash logs over MAVLink) live in the
     same per-date dir as `.tlog` files and are surfaced through the
