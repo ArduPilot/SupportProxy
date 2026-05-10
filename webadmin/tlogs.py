@@ -27,6 +27,18 @@ DATE_RE = re.compile(r'^\d{4}-\d{2}-\d{2}$')
 # changes.
 SESSION_RE = re.compile(r'^session\d+\.(tlog|bin)$')
 
+# Natural-sort key: treat embedded digit runs as numbers so that
+# session10.tlog sorts AFTER session2.tlog (not between session1 and
+# session2 as plain lexical sort would). The non-digit chunks are
+# lower-cased so a future mixed-case fixture doesn't fight the
+# digit chunks.
+_NATKEY_RE = re.compile(r'(\d+)')
+
+
+def _natural_key(name):
+    return [int(tok) if tok.isdigit() else tok.lower()
+            for tok in _NATKEY_RE.split(name)]
+
 
 def _logs_root():
     """Absolute path to the tlog tree root."""
@@ -65,7 +77,10 @@ def _list_dates(port2):
             continue
         if os.path.isdir(os.path.join(root, name)):
             out.append(name)
-    out.sort(reverse=True)
+    # Newest first. YYYY-MM-DD sorts correctly under either lexical
+    # or natural order; using the natural key keeps the helper
+    # consistent across both list functions.
+    out.sort(key=_natural_key, reverse=True)
     return out
 
 
@@ -99,7 +114,9 @@ def _list_sessions(port2, date):
             'mtime_utc': time.strftime('%Y-%m-%d %H:%M:%S',
                                        time.gmtime(st.st_mtime)),
         })
-    files.sort(key=lambda f: f['name'])
+    # Natural sort so session10 lands after session9, not between
+    # session1 and session2.
+    files.sort(key=lambda f: _natural_key(f['name']))
     return files
 
 
