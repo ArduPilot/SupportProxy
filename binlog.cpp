@@ -74,6 +74,9 @@ bool BinlogWriter::open(uint32_t port2, unsigned session_n, const char *base_dir
     // file is readable in real time (matching TlogWriter behaviour)
     // and a child crash doesn't lose buffered bytes.
     setvbuf(fp, nullptr, _IONBF, 0);
+    // Remember the location for rotate_for_reboot() to re-scan.
+    port2_ = port2;
+    base_dir_ = base_dir;
     ::printf("binlog: %s\n", path);
     return true;
 }
@@ -266,19 +269,23 @@ void BinlogWriter::tick(MAVLink &user_link)
         // src sysid/compid from the message header anyway, not the
         // body's target fields.
         if (now_s - last_start_sent_s >= START_REPEAT_S) {
-            mavlink_message_t msg {};
-            mavlink_msg_remote_log_block_status_pack_chan(
-                PROXY_SYSID, PROXY_COMPID, CHAN_COMM1, &msg,
-                /*target_system*/ 0, /*target_component*/ 0,
-                /*seqno*/ MAV_REMOTE_LOG_DATA_BLOCK_START,
-                /*status*/ MAV_REMOTE_LOG_DATA_BLOCK_ACK);
-            uint8_t buf[MAVLINK_MAX_PACKET_LEN];
-            uint16_t len = mavlink_msg_to_send_buffer(buf, &msg);
-            if (len > 0 && user_link.send_buf(buf, len) == ssize_t(len)) {
+            if (send_start_packet(user_link)) {
                 last_start_sent_s = now_s;
             }
         }
         return;
+    }
+
+    // Streaming-mode keep-alive START: every START_KEEPALIVE_S we
+    // re-send the magic START so a post-reboot vehicle (whose
+    // _sending_to_client was cleared) resumes streaming. Redundant
+    // STARTs on an already-streaming vehicle just re-set the flag
+    // true, which is a no-op. rotate_for_reboot() zeroes
+    // last_start_sent_s so the very next tick() iteration fires.
+    if (now_s - last_start_sent_s >= START_KEEPALIVE_S) {
+        if (send_start_packet(user_link)) {
+            last_start_sent_s = now_s;
+        }
     }
 
     if (fp == nullptr) {
@@ -320,4 +327,80 @@ void BinlogWriter::tick(MAVLink &user_link)
             nack_budget--;
         }
     }
+}
+
+bool BinlogWriter::send_start_packet(MAVLink &user_link)
+{
+    // See the long comment in send_status() about why we can't use
+    // user_link.send_message() — the pack_chan call finalises the
+    // message, and send_message would finalise it a second time,
+    // corrupting the trimmed-zero handling. Serialise the already-
+    // finalised buffer via send_buf instead.
+    mavlink_message_t msg {};
+    mavlink_msg_remote_log_block_status_pack_chan(
+        PROXY_SYSID, PROXY_COMPID, CHAN_COMM1, &msg,
+        /*target_system*/ target_system,
+        /*target_component*/ target_component,
+        /*seqno*/ MAV_REMOTE_LOG_DATA_BLOCK_START,
+        /*status*/ MAV_REMOTE_LOG_DATA_BLOCK_ACK);
+    uint8_t buf[MAVLINK_MAX_PACKET_LEN];
+    uint16_t len = mavlink_msg_to_send_buffer(buf, &msg);
+    if (len == 0) {
+        return false;
+    }
+    return user_link.send_buf(buf, len) == ssize_t(len);
+}
+
+void BinlogWriter::observe(const mavlink_message_t &msg)
+{
+    if (msg.msgid != MAVLINK_MSG_ID_SYSTEM_TIME) {
+        return;
+    }
+    if (msg.compid != MAV_COMP_ID_AUTOPILOT1) {
+        return;
+    }
+    if (fc_sysid_filter_ != 0 && msg.sysid != fc_sysid_filter_) {
+        return;
+    }
+    mavlink_system_time_t st {};
+    mavlink_msg_system_time_decode(&msg, &st);
+    if (last_system_time_boot_ms_ != 0
+        && st.time_boot_ms + REBOOT_TIME_BACKWARD_MS
+               <= last_system_time_boot_ms_
+        && fp != nullptr) {
+        ::printf("binlog: SYSTEM_TIME backward jump %u -> %u ms, "
+                 "rotating (FC reboot detected)\n",
+                 unsigned(last_system_time_boot_ms_),
+                 unsigned(st.time_boot_ms));
+        rotate_for_reboot();
+    }
+    last_system_time_boot_ms_ = st.time_boot_ms;
+}
+
+bool BinlogWriter::rotate_for_reboot()
+{
+    close();
+
+    // Per-log state: gone with the old file. Vehicle identity and
+    // sysid filter are per-call, so keep them.
+    seen_bitmap.clear();
+    highest_seen = 0;
+    pending_acks.clear();
+    nack_state.clear();
+    // Force the next tick() to fire START immediately so the vehicle
+    // (whose _sending_to_client is now false post-reboot) resumes
+    // streaming without waiting out the keep-alive interval.
+    last_start_sent_s = 0.0;
+    // Re-arm the first-message-seen guard so the new boot's first
+    // SYSTEM_TIME becomes the new watermark, not a spurious second
+    // trigger of the backward-jump check.
+    last_system_time_boot_ms_ = 0;
+    // target_system / target_component: keep (same vehicle).
+    // fc_sysid_filter_: keep (per-entry config).
+    // any_block_seen: keep TRUE — we do NOT re-enter the 1 Hz START
+    //   pre-stream loop; the 5 s keep-alive (re-armed above) covers
+    //   reboot recovery.
+
+    unsigned new_n = next_session_n(port2_, base_dir_.c_str());
+    return open(port2_, new_n, base_dir_.c_str());
 }

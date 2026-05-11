@@ -23,6 +23,7 @@
 #include <stdio.h>
 
 #include <deque>
+#include <string>
 #include <unordered_map>
 #include <vector>
 
@@ -73,11 +74,33 @@ public:
                       const mavlink_message_t &msg);
 
     /*
+      Observe an arbitrary user-side MAVLink message for FC-reboot
+      detection. Called for *every* user→engineer message (cheap;
+      early-returns on non-SYSTEM_TIME). Watches SYSTEM_TIME packets
+      sourced from MAV_COMP_ID_AUTOPILOT1 (and optionally filtered by
+      fc_sysid_filter_) for a >= 10 s backward jump in time_boot_ms,
+      which is the unambiguous signature of an FC reboot —
+      time_boot_ms is monotonic from boot, GPS sync corrections only
+      affect time_unix_usec. On a detected reboot the current
+      sessionN.bin is closed, the per-log state is reset, and a fresh
+      sessionN+1.bin is opened so the new log writes from offset 0.
+     */
+    void observe(const mavlink_message_t &msg);
+
+    /*
+      Per-entry MAVLink sysid filter. 0 (the default) accepts
+      SYSTEM_TIME from any sysid; non-zero restricts reboot detection
+      to packets with msg.sysid == sysid. Sourced from
+      KeyEntry.fc_sysid at fork start.
+     */
+    void set_fc_sysid_filter(uint8_t sysid) { fc_sysid_filter_ = sysid; }
+
+    /*
       Periodic pump. Called once per main_loop iteration whenever
       KEY_FLAG_BINLOG is set on the entry (regardless of whether the
       file has been opened yet).
 
-      Two phases:
+      Three phases:
 
       * Before any DATA_BLOCK has arrived: emit a
         REMOTE_LOG_BLOCK_STATUS(status=ACK, seqno=START_MAGIC) at 1 Hz.
@@ -98,6 +121,12 @@ public:
         at MAX_NACKS_PER_TICK per call so a wide gap can't bury
         legitimate ACKs. The continuous ACK traffic also keeps the
         vehicle's 10-second client-timeout from firing.
+
+      * Defence-in-depth re-START: while streaming, emit a low-rate
+        START every START_KEEPALIVE_S so a post-reboot vehicle (whose
+        _sending_to_client got cleared) resumes streaming within a
+        few seconds. rotate_for_reboot() zeroes last_start_sent_s so
+        the next tick() iteration fires START immediately.
      */
     void tick(MAVLink &user_link);
 
@@ -118,6 +147,17 @@ private:
     // How often to re-send START until the vehicle starts streaming.
     // ArduPilot's client-timeout is 10 s so 1 Hz is comfortable.
     static constexpr double   START_REPEAT_S     = 1.0;
+    // Keep-alive START cadence after streaming has begun: defence in
+    // depth so a post-reboot vehicle (whose _sending_to_client got
+    // cleared) resumes streaming within ~5 s of the next keepalive.
+    // ArduPilot ignores a redundant START on an already-streaming
+    // vehicle (it just sets _sending_to_client = true again).
+    static constexpr double   START_KEEPALIVE_S  = 5.0;
+    // Backward jump in SYSTEM_TIME.time_boot_ms that we treat as an
+    // FC reboot. 10 s is well above any plausible timer-correction
+    // wobble and well below the multi-second pause a real reboot
+    // creates.
+    static constexpr uint32_t REBOOT_TIME_BACKWARD_MS = 10000;
 
     FILE *fp = nullptr;
 
@@ -156,4 +196,29 @@ private:
                          double now_s);
     void drop_stale_nack_state(double now_s);
     bool send_status(MAVLink &user_link, uint32_t seqno, uint8_t status);
+    // The magic START packet emit, factored out so both the pre-stream
+    // 1 Hz loop and the streaming-mode keepalive call it.
+    bool send_start_packet(MAVLink &user_link);
+
+    // Captured on the first successful open() so rotate_for_reboot()
+    // can re-scan the per-day dir for a fresh session N without
+    // dragging port2/base_dir through every observe() / handle_block()
+    // signature.
+    uint32_t    port2_   = 0;
+    std::string base_dir_;
+
+    // Per-entry MAVLink sysid filter for SYSTEM_TIME-based reboot
+    // detection. 0 = match any (default). Set from KeyEntry.fc_sysid
+    // by the per-port-pair child at fork.
+    uint8_t fc_sysid_filter_ = 0;
+
+    // Most-recently-seen SYSTEM_TIME.time_boot_ms from the autopilot.
+    // 0 = nothing seen yet (used as a guard so the very first
+    // SYSTEM_TIME can't trigger a spurious reboot).
+    uint32_t last_system_time_boot_ms_ = 0;
+
+    // Close + reset per-log state + open the next sessionN.bin. Used
+    // when observe() decides the FC has rebooted. Does NOT reset
+    // per-vehicle state (target_system/component, fc_sysid_filter_).
+    bool rotate_for_reboot();
 };

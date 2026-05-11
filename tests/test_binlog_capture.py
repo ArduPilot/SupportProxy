@@ -127,15 +127,30 @@ def _wait_for(predicate, timeout=5.0):
     return False
 
 
-def _send_data_block(sock, dest, seqno, payload):
+def _send_data_block(sock, dest, seqno, payload, sysid=1):
     """Build + send a REMOTE_LOG_DATA_BLOCK from a fake vehicle.
     payload is padded/truncated to 200 bytes."""
     from pymavlink.dialects.v20 import ardupilotmega as mav
-    mav_obj = mav.MAVLink(file=None, srcSystem=1, srcComponent=1)
+    mav_obj = mav.MAVLink(file=None, srcSystem=sysid, srcComponent=1)
     data = (payload + b'\x00' * 200)[:200]
     msg = mav.MAVLink_remote_log_data_block_message(
         target_system=255, target_component=mav.MAV_COMP_ID_LOG,
         seqno=seqno, data=list(data))
+    buf = msg.pack(mav_obj)
+    sock.sendto(buf, dest)
+
+
+def _send_system_time(sock, dest, time_boot_ms, sysid=1,
+                      compid=None):
+    """Send a SYSTEM_TIME from a fake autopilot. Default compid is
+    MAV_COMP_ID_AUTOPILOT1 (= 1) — change it to simulate a camera or
+    companion computer for filter tests."""
+    from pymavlink.dialects.v20 import ardupilotmega as mav
+    if compid is None:
+        compid = mav.MAV_COMP_ID_AUTOPILOT1
+    mav_obj = mav.MAVLink(file=None, srcSystem=sysid, srcComponent=compid)
+    msg = mav.MAVLink_system_time_message(
+        time_unix_usec=0, time_boot_ms=time_boot_ms)
     buf = msg.pack(mav_obj)
     sock.sendto(buf, dest)
 
@@ -536,5 +551,218 @@ class TestBinlogCapture:
             assert (date_dir / 'session1.bin').exists(), \
                 'no session1.bin; have %r\nproxy log:\n%s' % (
                     files, ''.join(getattr(proc, '_lines', [])))
+        finally:
+            _terminate(proc)
+
+    def test_reboot_via_system_time_rotates(self, proxy_workdir):
+        """A SYSTEM_TIME backward jump from MAV_COMP_ID_AUTOPILOT1
+        triggers a rotate to sessionN+1.bin. The pre-reboot file's
+        offset-0 contents must NOT be overwritten by the new boot's
+        seqno=0 block."""
+        _setup_db(proxy_workdir, PORT_USER, PORT_ENG, 'bintest', 'bp',
+                  'binlog')
+        proc = _start_proxy(proxy_workdir, PORT_ENG)
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.bind(('127.0.0.1', 0))
+            dest = ('127.0.0.1', PORT_USER)
+
+            # Pre-reboot: SYSTEM_TIME watermark + 5 blocks of OLD data.
+            _send_system_time(sock, dest, time_boot_ms=60_000)
+            for seq in range(5):
+                _send_data_block(sock, dest, seq, b'\xaa' * 50)
+            assert _wait_for(
+                lambda: _bin_path(proxy_workdir, PORT_ENG, 1).exists()
+                        and _bin_path(proxy_workdir, PORT_ENG, 1)
+                            .stat().st_size >= 5 * 200,
+                timeout=5.0), 'session1.bin not written'
+            with open(_bin_path(proxy_workdir, PORT_ENG, 1), 'rb') as f:
+                old_byte0 = f.read(1)
+            assert old_byte0 == b'\xaa', \
+                'session1.bin offset 0 not OLD payload'
+
+            # Reboot signal: SYSTEM_TIME backward jump from 60s -> 1s.
+            _send_system_time(sock, dest, time_boot_ms=1_000)
+            # New boot's blocks (different payload).
+            for seq in range(3):
+                _send_data_block(sock, dest, seq, b'\xbb' * 50)
+
+            assert _wait_for(
+                lambda: _bin_path(proxy_workdir, PORT_ENG, 2).exists()
+                        and _bin_path(proxy_workdir, PORT_ENG, 2)
+                            .stat().st_size >= 3 * 200,
+                timeout=5.0), \
+                'session2.bin not written; proxy log:\n%s' % (
+                    ''.join(getattr(proc, '_lines', [])))
+
+            # session1.bin offset 0 is UNCHANGED (not overwritten by
+            # the new boot's seqno=0).
+            with open(_bin_path(proxy_workdir, PORT_ENG, 1), 'rb') as f:
+                assert f.read(1) == b'\xaa', \
+                    'session1.bin offset 0 was overwritten — rotation failed'
+
+            # session2.bin offset 0 holds the new boot's data.
+            with open(_bin_path(proxy_workdir, PORT_ENG, 2), 'rb') as f:
+                assert f.read(1) == b'\xbb', \
+                    'session2.bin offset 0 is not the new boot payload'
+
+            sock.close()
+        finally:
+            _terminate(proc)
+
+    def test_reboot_ignored_from_camera_compid(self, proxy_workdir):
+        """A SYSTEM_TIME backward jump from a non-autopilot component
+        (e.g. a camera) must NOT trigger rotation."""
+        from pymavlink.dialects.v20 import ardupilotmega as mav
+        _setup_db(proxy_workdir, PORT_USER, PORT_ENG, 'bintest', 'bp',
+                  'binlog')
+        proc = _start_proxy(proxy_workdir, PORT_ENG)
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.bind(('127.0.0.1', 0))
+            dest = ('127.0.0.1', PORT_USER)
+
+            # Autopilot's SYSTEM_TIME establishes the watermark, then
+            # streams data so session1.bin exists.
+            _send_system_time(sock, dest, time_boot_ms=60_000)
+            for seq in range(3):
+                _send_data_block(sock, dest, seq, b'\xcc' * 50)
+            assert _wait_for(
+                lambda: _bin_path(proxy_workdir, PORT_ENG, 1).exists(),
+                timeout=5.0), 'session1.bin not created'
+
+            # Camera (compid != AUTOPILOT1) sends SYSTEM_TIME with a
+            # huge backward jump.
+            _send_system_time(sock, dest, time_boot_ms=1_000,
+                              compid=mav.MAV_COMP_ID_CAMERA)
+            # Give the proxy a chance to (incorrectly) rotate.
+            time.sleep(0.5)
+            for seq in range(3, 6):
+                _send_data_block(sock, dest, seq, b'\xdd' * 50)
+            time.sleep(0.5)
+
+            assert not _bin_path(proxy_workdir, PORT_ENG, 2).exists(), \
+                'session2.bin should NOT exist — non-autopilot SYSTEM_TIME triggered rotation'
+
+            sock.close()
+        finally:
+            _terminate(proc)
+
+    def test_reboot_blocked_by_fc_sysid_filter(self, proxy_workdir):
+        """With fc_sysid=1 on the entry, a SYSTEM_TIME backward jump
+        from sysid=2 (a second vehicle) must NOT trigger rotation."""
+        _setup_db(proxy_workdir, PORT_USER, PORT_ENG, 'bintest', 'bp',
+                  'binlog')
+        # Pin the filter to sysid 1.
+        db = keydb_lib.open_db(str(proxy_workdir / 'keys.tdb'))
+        db.transaction_start()
+        keydb_lib.set_fc_sysid(db, PORT_ENG, 1)
+        db.transaction_prepare_commit()
+        db.transaction_commit()
+        db.close()
+
+        proc = _start_proxy(proxy_workdir, PORT_ENG)
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.bind(('127.0.0.1', 0))
+            dest = ('127.0.0.1', PORT_USER)
+
+            # Vehicle sysid 1: establish watermark + start streaming.
+            _send_system_time(sock, dest, time_boot_ms=60_000, sysid=1)
+            for seq in range(3):
+                _send_data_block(sock, dest, seq, b'\xee' * 50, sysid=1)
+            assert _wait_for(
+                lambda: _bin_path(proxy_workdir, PORT_ENG, 1).exists(),
+                timeout=5.0), 'session1.bin not created'
+
+            # Second vehicle (sysid 2) sends a backward jump — should
+            # be ignored because the filter is pinned to sysid 1.
+            _send_system_time(sock, dest, time_boot_ms=1_000, sysid=2)
+            time.sleep(0.5)
+            for seq in range(3, 6):
+                _send_data_block(sock, dest, seq, b'\xff' * 50, sysid=1)
+            time.sleep(0.5)
+
+            assert not _bin_path(proxy_workdir, PORT_ENG, 2).exists(), \
+                'session2.bin should NOT exist — fc_sysid filter failed'
+
+            sock.close()
+        finally:
+            _terminate(proc)
+
+    def test_keepalive_start_after_first_block(self, proxy_workdir):
+        """After streaming begins, the proxy keeps sending START at
+        ~5 s cadence so a post-reboot vehicle resumes. Pre-fix the
+        START emit stopped after the first DATA_BLOCK."""
+        from pymavlink.dialects.v20 import ardupilotmega as mav
+        _setup_db(proxy_workdir, PORT_USER, PORT_ENG, 'bintest', 'bp',
+                  'binlog')
+        proc = _start_proxy(proxy_workdir, PORT_ENG)
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.bind(('127.0.0.1', 0))
+            dest = ('127.0.0.1', PORT_USER)
+
+            # A real vehicle continuously emits HEARTBEAT etc., which
+            # keeps the proxy's main_loop select() waking and tick()
+            # firing. Without that the per-child main_loop exits on
+            # idle, so we drive HEARTBEATs at ~10 Hz throughout the
+            # window the way the other "proxy emits START" test does.
+            hb_mav = mav.MAVLink(file=None, srcSystem=1, srcComponent=1)
+            hb_msg = mav.MAVLink_heartbeat_message(
+                type=0, autopilot=0, base_mode=0, custom_mode=0,
+                system_status=0, mavlink_version=3)
+            hb_bytes = hb_msg.pack(hb_mav)
+
+            # Spin a brief HB warmup to register conn1, then send one
+            # DATA_BLOCK to latch any_block_seen.
+            sock.settimeout(0.1)
+            for _ in range(3):
+                sock.sendto(hb_bytes, dest)
+                time.sleep(0.1)
+            _send_data_block(sock, dest, 0, b'\x11' * 50)
+            # Drain the initial flurry (pre-stream START at fork, ACK
+            # for our seqno=0, an immediate post-block keep-alive STAR
+            # since last_start_sent_s was 0 on the first tick).
+            deadline = time.time() + 0.8
+            while time.time() < deadline:
+                sock.sendto(hb_bytes, dest)
+                try:
+                    while True:
+                        sock.recvfrom(2048)
+                except socket.timeout:
+                    pass
+
+            # Now watch for the keep-alive (5 s cadence). Collect for
+            # 6.5 s, driving HEARTBEAT so the proxy doesn't idle.
+            collected = []
+            deadline = time.time() + 6.5
+            while time.time() < deadline:
+                sock.sendto(hb_bytes, dest)
+                try:
+                    while True:
+                        data, _ = sock.recvfrom(2048)
+                        collected.append(data)
+                except socket.timeout:
+                    pass
+
+            decoder = mav.MAVLink(file=None)
+            start_magic = mav.MAV_REMOTE_LOG_DATA_BLOCK_START
+            start_count = 0
+            for blob in collected:
+                try:
+                    msgs = decoder.parse_buffer(blob) or []
+                except mav.MAVError:
+                    continue
+                for m in msgs:
+                    if m.get_type() == 'REMOTE_LOG_BLOCK_STATUS' \
+                            and m.seqno == start_magic \
+                            and m.status == 1:
+                        start_count += 1
+            assert start_count >= 1, \
+                ('no keep-alive START seen in 6.5 s; '
+                 'collected %d packets' % len(collected))
+
+            sock.close()
         finally:
             _terminate(proc)
