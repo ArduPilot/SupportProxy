@@ -1,5 +1,5 @@
 /*
-  hourly tlog cleanup worker
+  hourly session-log cleanup worker (covers .tlog and .bin)
  */
 #include "cleanup.h"
 #include "keydb.h"
@@ -25,7 +25,7 @@ struct PassCtx {
 
 /*
   Predicate for "this is a session file we should age out under
-  tlog_retention_days". Covers both .tlog (raw MAVLink frames) and
+  log_retention_days". Covers both .tlog (raw MAVLink frames) and
   .bin (ArduPilot dataflash logs) so the retention rule is uniform —
   per spec, both file types share the entry's retention setting.
  */
@@ -83,7 +83,7 @@ static void cleanup_for_port2(uint32_t port2, double retention_days,
                     double age = double(now - fst.st_mtime);
                     if (age > cutoff_age_s) {
                         if (unlink(fpath) == 0) {
-                            ::printf("tlog cleanup: removed %s (age %.0fs > %.0fs)\n",
+                            ::printf("log cleanup: removed %s (age %.0fs > %.0fs)\n",
                                      fpath, age, cutoff_age_s);
                             continue;
                         }
@@ -96,7 +96,7 @@ static void cleanup_for_port2(uint32_t port2, double retention_days,
 
         if (remaining == 0) {
             if (rmdir(date_dir) == 0) {
-                ::printf("tlog cleanup: removed empty %s\n", date_dir);
+                ::printf("log cleanup: removed empty %s\n", date_dir);
             }
         }
     }
@@ -121,7 +121,7 @@ static int traverse_cb(struct tdb_context *db, TDB_DATA key, TDB_DATA data, void
     if (k.magic != KEY_MAGIC) {
         return 0;
     }
-    cleanup_for_port2(uint32_t(port2), double(k.tlog_retention_days),
+    cleanup_for_port2(uint32_t(port2), double(k.log_retention_days),
                       ctx->base_dir, ctx->now);
     return 0;
 }
@@ -152,7 +152,7 @@ static void sleep_seconds(double s)
 
 }  // namespace
 
-void tlog_cleanup_once(const char *base_dir)
+void log_cleanup_once(const char *base_dir)
 {
     auto *db = db_open();
     if (db == nullptr) {
@@ -163,13 +163,13 @@ void tlog_cleanup_once(const char *base_dir)
     db_close(db);
 }
 
-void tlog_cleanup_loop(const char *base_dir)
+void log_cleanup_loop(const char *base_dir)
 {
     // Run an immediate pass on startup so a fresh restart still cleans up.
-    tlog_cleanup_once(base_dir);
+    log_cleanup_once(base_dir);
     double interval = cleanup_interval_seconds();
     while (true) {
         sleep_seconds(interval);
-        tlog_cleanup_once(base_dir);
+        log_cleanup_once(base_dir);
     }
 }

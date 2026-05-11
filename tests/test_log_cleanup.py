@@ -45,7 +45,7 @@ def _add_entry(db, port1, port2, name='clean', retention=0.1):
     db.transaction_start()
     keydb_lib.add_entry(db, port1, port2, name, 'pw')
     keydb_lib.set_flag(db, port2, 'tlog')
-    keydb_lib.set_tlog_retention(db, port2, retention)
+    keydb_lib.set_log_retention(db, port2, retention)
     db.transaction_prepare_commit()
     db.transaction_commit()
 
