@@ -1,0 +1,25 @@
+[Unit]
+Description=SupportProxy web admin UI (gunicorn)
+Documentation=https://github.com/ArduPilot/SupportProxy
+After=network-online.target supportproxy.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=support
+Group=support
+WorkingDirectory=/home/support/proxy
+# Wrapper script handles webui.json parsing, .webadmin_secret
+# bootstrap, and the conditional TLS / behind-proxy logic. Keeps
+# webui.json as the single source of truth for host/port/behind_proxy
+# across cron and systemd launch paths.
+ExecStart=/home/support/SupportProxy/start_webadmin.sh
+Restart=on-failure
+RestartSec=5s
+StartLimitIntervalSec=60
+StartLimitBurst=5
+StandardOutput=append:/home/support/proxy/webui.log
+StandardError=inherit
+
+[Install]
+WantedBy=multi-user.target
