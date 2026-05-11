@@ -99,12 +99,16 @@ class AdminEditForm(FlaskForm):
 
 
 class AdminAddForm(FlaskForm):
+    # Port range matches SupportProxy convention: pick from the
+    # 10000–60000 range to stay clear of well-known ports and most
+    # ephemeral allocations. port1 / port2 uniqueness across the
+    # database is enforced by keydb_lib.add_entry().
     port1 = IntegerField('User-side port (port1)',
                          validators=[DataRequired(),
-                                     NumberRange(min=1, max=65535)])
+                                     NumberRange(min=10000, max=60000)])
     port2 = IntegerField('Engineer-side port (port2)',
                          validators=[DataRequired(),
-                                     NumberRange(min=1, max=65535)])
+                                     NumberRange(min=10000, max=60000)])
     name = StringField('Display name',
                        validators=[DataRequired(), Length(max=31)])
     passphrase = PasswordField('Passphrase',
