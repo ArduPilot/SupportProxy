@@ -60,7 +60,15 @@ CERT="/etc/letsencrypt/live/$SP_DOMAIN"
 
 [ -d "$SRC" ]  || { echo "missing source dir $SRC" >&2; exit 1; }
 [ -d "$DATA" ] || { echo "missing data dir $DATA — keys.tdb must live there" >&2; exit 1; }
-[ -d "$CERT" ] || { echo "missing LE cert dir $CERT" >&2; exit 1; }
+# Only require the cert when we're going to write the nginx vhost
+# (which references $CERT/fullchain.pem + privkey.pem). With
+# SP_SKIP_NGINX=1 nginx is already correctly configured and the cert
+# may live at a different LE name (e.g. live/neon.ardupilot.org/
+# rather than live/$SP_DOMAIN/), so the existing nginx config is the
+# source of truth.
+if [ "${SP_SKIP_NGINX:-}" != "1" ]; then
+    [ -d "$CERT" ] || { echo "missing LE cert dir $CERT" >&2; exit 1; }
+fi
 [ -f "$SRC/systemd/supportproxy.service" ] \
     || { echo "missing $SRC/systemd/supportproxy.service — run scripts/update_server.sh first" >&2; exit 1; }
 [ -f "$SRC/start_webadmin.sh" ] \
