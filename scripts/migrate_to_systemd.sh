@@ -193,7 +193,7 @@ WUI=$DATA/webui.json
 if [ -f "$WUI" ]; then
     $SUDO cp -p "$WUI" "$WUI.bak.$(date +%Y%m%d-%H%M%S)"
 fi
-$SUDO -u "$SP_USER" tee "$WUI" >/dev/null <<JSON
+$SUDO tee "$WUI" >/dev/null <<JSON
 {
     "title": "SupportProxy ($SP_DOMAIN)",
     "mode": "standalone",
@@ -202,6 +202,11 @@ $SUDO -u "$SP_USER" tee "$WUI" >/dev/null <<JSON
     "behind_proxy": true
 }
 JSON
+# Make sure the file is owned by the daemon user — `$SUDO tee` writes
+# as root, but the running supportproxy daemon reads as $SP_USER and
+# never writes here, so 0644 + chown is fine.
+$SUDO chown "$SP_USER:$SP_USER" "$WUI"
+$SUDO chmod 644 "$WUI"
 
 # ----- 8. systemd units ----------------------------------------------
 echo
