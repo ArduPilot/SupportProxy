@@ -45,7 +45,8 @@ struct KeyEntry {
     char name[32];
     uint32_t flags;
     float    log_retention_days;    // tlog + bin; 0.0 = forever; fractional values allowed for tests
-    uint32_t reserved[16];
+    uint32_t fc_sysid;              // 0 = match any; otherwise only monitor packets from this MAVLink sysid (binlog reboot detection)
+    uint32_t reserved[15];
 };
 
 /*

@@ -24,12 +24,14 @@ KEY_MAGIC = 0x6b73e867a72cdd1f
 # is acceptable (extra trailing bytes belong to a newer schema we ignore).
 #
 # The current C++ struct ends with `uint32_t flags`, `float log_retention_days`,
-# and `uint32_t reserved[16]`. All three are 4-byte aligned and slot in cleanly
-# after the existing fields, so the struct is 168 bytes with no trailing pad.
-# When a future field is added, append it to PACK_FORMAT and add explicit
-# trailing pad (`Nx`) only if needed to match C++ natural alignment.
+# `uint32_t fc_sysid`, and `uint32_t reserved[15]`. All are 4-byte aligned and
+# slot in cleanly after the existing fields, so the struct is 168 bytes with
+# no trailing pad. When a future field is added, claim another `reserved[]`
+# slot (renumber: shrink reserved by 1, add a named field) so the on-disk byte
+# layout stays compatible — the zero-init paths in db_load_key (C++) and
+# unpack() (Python) handle older records transparently.
 KEYENTRY_MIN_SIZE = 96
-PACK_FORMAT = "<QQ32siIII32sIf16I"
+PACK_FORMAT = "<QQ32siIII32sIfI15I"
 KEYENTRY_CURRENT_SIZE = struct.calcsize(PACK_FORMAT)  # 168
 
 # Flag bits — keep in sync with KEY_FLAG_* in keydb.h.
@@ -46,7 +48,7 @@ FLAG_NAMES = {
 }
 
 DEFAULT_LOG_RETENTION_DAYS = 7.0
-RESERVED_WORDS = 16
+RESERVED_WORDS = 15
 
 
 class CLIError(Exception):
@@ -65,6 +67,7 @@ class KeyEntry:
         self.name = ''
         self.flags = 0
         self.log_retention_days = 0.0
+        self.fc_sysid = 0
         self.reserved = [0] * RESERVED_WORDS
         self.port2 = port2
         # opaque trailing bytes from a record written by a future schema
@@ -78,6 +81,7 @@ class KeyEntry:
                            self.port1, self.connections, self.count1,
                            self.count2, name, self.flags,
                            self.log_retention_days,
+                           self.fc_sysid,
                            *reserved[:RESERVED_WORDS])
         return body + self._tail
 
@@ -94,8 +98,9 @@ class KeyEntry:
         unpacked = struct.unpack(PACK_FORMAT, body)
         (self.magic, self.timestamp, secret_key, self.port1,
          self.connections, self.count1, self.count2, name,
-         self.flags, self.log_retention_days) = unpacked[:10]
-        self.reserved = list(unpacked[10:10 + RESERVED_WORDS])
+         self.flags, self.log_retention_days,
+         self.fc_sysid) = unpacked[:11]
+        self.reserved = list(unpacked[11:11 + RESERVED_WORDS])
         self.secret_key = bytearray(secret_key)
         self.name = name.decode('utf-8', errors='ignore').rstrip('\0')
 
@@ -148,10 +153,13 @@ class KeyEntry:
                 retstr = ' log_retention=forever'
             else:
                 retstr = ' log_retention=%.4g days' % self.log_retention_days
-        return ("%u/%u '%s' counts=%u/%u connections=%u ts=%u%s%s"
+        sysstr = ''
+        if self.fc_sysid:
+            sysstr = ' fc_sysid=%u' % self.fc_sysid
+        return ("%u/%u '%s' counts=%u/%u connections=%u ts=%u%s%s%s"
                 % (self.port1, self.port2, self.name,
                    self.count1, self.count2, self.connections,
-                   self.timestamp, flagstr, retstr))
+                   self.timestamp, flagstr, retstr, sysstr))
 
 
 def open_db(path='keys.tdb'):
@@ -337,6 +345,19 @@ def set_log_retention(db, port2, days):
     if days < 0.0:
         raise CLIError("retention days must be >= 0 (got %r)" % days)
     ke.log_retention_days = float(days)
+    ke.store(db)
+    return ke
+
+
+def set_fc_sysid(db, port2, sysid):
+    """Set the MAVLink sysid filter for this entry. 0 = match any (default);
+    non-zero restricts binlog reboot detection to packets from that sysid."""
+    ke = KeyEntry(port2)
+    if not ke.fetch(db):
+        raise CLIError("No entry for port2 %d" % port2)
+    if sysid < 0 or sysid > 255:
+        raise CLIError("fc_sysid must be in 0..255 (got %r)" % sysid)
+    ke.fc_sysid = int(sysid)
     ke.store(db)
     return ke
 
