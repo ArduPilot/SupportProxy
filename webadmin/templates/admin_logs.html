@@ -1,8 +1,8 @@
 {% extends "base.html" %}
-{% block title %}Tlogs for {{ entry.port2 }} — {{ config.WEBUI_TITLE }}{% endblock %}
+{% block title %}Logs for {{ entry.port2 }} — {{ config.WEBUI_TITLE }}{% endblock %}
 {% block auto_refresh_seconds %}5{% endblock %}
 {% block content %}
-<h2>Tlogs for {{ entry.port1 }}/{{ entry.port2 }} '{{ entry.name }}'</h2>
+<h2>Logs for {{ entry.port1 }}/{{ entry.port2 }} '{{ entry.name }}'</h2>
 
 <p>
   <a href="{{ url_for('admin.edit', port2=entry.port2) }}">edit entry</a> ·
@@ -10,15 +10,15 @@
 </p>
 
 <h3>Dates</h3>
-<ul class="tlog-dates">
+<ul class="log-dates">
   {% for d in dates %}
   <li>
     {% if date == d %}<strong>{{ d }}</strong>
-    {% else %}<a href="{{ url_for('admin_tlogs.admin_sessions', port2=entry.port2, date=d) }}">{{ d }}</a>
+    {% else %}<a href="{{ url_for('admin_logs.admin_sessions', port2=entry.port2, date=d) }}">{{ d }}</a>
     {% endif %}
   </li>
   {% else %}
-  <li><em>no tlogs recorded yet</em></li>
+  <li><em>no logs recorded yet</em></li>
   {% endfor %}
 </ul>
 
@@ -33,7 +33,7 @@
       <td>{{ s.size }} bytes</td>
       <td><time datetime="{{ s.mtime_iso }}">{{ s.mtime_utc }}</time></td>
       <td>
-        <a href="{{ url_for('admin_tlogs.admin_download',
+        <a href="{{ url_for('admin_logs.admin_download',
                             port2=entry.port2, date=date, session_name=s.name) }}">download</a>
       </td>
     </tr>

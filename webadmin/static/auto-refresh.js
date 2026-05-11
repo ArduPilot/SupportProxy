@@ -1,6 +1,6 @@
 /*
   In-place auto-refresh of the page's <main> content. Used by the
-  live-connection and tlog list views; replaces the old
+  live-connection and log list views; replaces the old
   <meta http-equiv="refresh"> approach so the page never blanks
   between paints (Firefox doesn't paint-hold across full-page
   navigations, so meta-refresh visibly flashes the header/logo

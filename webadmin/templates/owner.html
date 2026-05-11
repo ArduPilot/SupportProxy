@@ -53,8 +53,8 @@
   <div class="field">{{ form.bidi_sign() }} {{ form.bidi_sign.label }}</div>
   <div class="field">{{ form.tlog_enabled() }} {{ form.tlog_enabled.label }}</div>
   <div class="field">{{ form.binlog_enabled() }} {{ form.binlog_enabled.label }}</div>
-  <div class="field">{{ form.tlog_retention_days.label }}: {{ form.tlog_retention_days() }}</div>
-  <div class="field"><a href="{{ url_for('owner_tlogs.owner_dates') }}">browse tlogs &rarr;</a></div>
+  <div class="field">{{ form.log_retention_days.label }}: {{ form.log_retention_days() }}</div>
+  <div class="field"><a href="{{ url_for('owner_logs.owner_dates') }}">browse logs &rarr;</a></div>
   <div class="field">{{ form.reset_timestamp() }} {{ form.reset_timestamp.label }}</div>
   <div>{{ form.submit() }}</div>
   {% for field, errors in form.errors.items() %}

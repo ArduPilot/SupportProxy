@@ -20,8 +20,8 @@
       <td>{{ ke.flag_names() | join(', ') or '—' }}</td>
       <td>
         <a href="{{ url_for('admin.edit', port2=ke.port2) }}">edit</a>
-        {% if 'tlog' in ke.flag_names() %}
-        · <a href="{{ url_for('admin_tlogs.admin_dates', port2=ke.port2) }}">tlogs</a>
+        {% if 'tlog' in ke.flag_names() or 'binlog' in ke.flag_names() %}
+        · <a href="{{ url_for('admin_logs.admin_dates', port2=ke.port2) }}">logs</a>
         {% endif %}
       </td>
     </tr>

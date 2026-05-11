@@ -136,16 +136,16 @@ def edit(port2):
                 ke.flags |= keydb_lib.FLAG_BINLOG
             else:
                 ke.flags &= ~keydb_lib.FLAG_BINLOG
-            if form.tlog_retention_days.data is not None:
-                ke.tlog_retention_days = float(form.tlog_retention_days.data)
+            if form.log_retention_days.data is not None:
+                ke.log_retention_days = float(form.log_retention_days.data)
             # First-enable default for either recording flag.
             just_enabled = ((form.tlog_enabled.data and not was_tlog)
                             or (form.binlog_enabled.data and not was_binlog))
             if (just_enabled
-                    and ke.tlog_retention_days == 0.0
-                    and (form.tlog_retention_days.data is None
-                         or form.tlog_retention_days.data == 0.0)):
-                ke.tlog_retention_days = keydb_lib.DEFAULT_TLOG_RETENTION_DAYS
+                    and ke.log_retention_days == 0.0
+                    and (form.log_retention_days.data is None
+                         or form.log_retention_days.data == 0.0)):
+                ke.log_retention_days = keydb_lib.DEFAULT_LOG_RETENTION_DAYS
             if form.reset_timestamp.data:
                 ke.timestamp = 0
             ke.store(db)
@@ -166,7 +166,7 @@ def edit(port2):
         form.bidi_sign.data = bool(ke.flags & keydb_lib.FLAG_BIDI_SIGN)
         form.tlog_enabled.data = bool(ke.flags & keydb_lib.FLAG_TLOG)
         form.binlog_enabled.data = bool(ke.flags & keydb_lib.FLAG_BINLOG)
-        form.tlog_retention_days.data = ke.tlog_retention_days
+        form.log_retention_days.data = ke.log_retention_days
     return render_template('admin_edit.html', form=form, entry=ke,
                            delete_form=delete_form)
 

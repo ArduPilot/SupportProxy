@@ -1,12 +1,17 @@
-"""Routes for browsing and downloading per-entry tlogs.
+"""Routes for browsing and downloading per-entry session logs.
 
-Two parallel views:
-  * admin: /admin/tlogs/<port2>/[<date>] — admin can browse any entry
-  * owner: /me/tlogs/[<date>]            — owner can browse only their own
+Covers both file types written under logs/<port2>/<YYYY-MM-DD>/:
 
-Both share the same listing/download helpers below; the blueprints
-differ only in which port2 they resolve and which auth decorator they
-use.
+  * sessionN.tlog — raw MAVLink frame captures (KEY_FLAG_TLOG)
+  * sessionN.bin  — ArduPilot dataflash logs over MAVLink (KEY_FLAG_BINLOG)
+
+Two parallel views, sharing the listing/download helpers below:
+
+  * admin: /admin/logs/<port2>/[<date>] — admin can browse any entry
+  * owner: /me/logs/[<date>]            — owner can browse only their own
+
+The blueprints differ only in which port2 they resolve and which auth
+decorator they use.
 """
 import os
 import re
@@ -41,7 +46,7 @@ def _natural_key(name):
 
 
 def _logs_root():
-    """Absolute path to the tlog tree root."""
+    """Absolute path to the session-logs tree root."""
     return os.path.abspath(current_app.config['LOGS_DIR'])
 
 
@@ -85,7 +90,7 @@ def _list_dates(port2):
 
 
 def _list_sessions(port2, date):
-    """All sessionN.tlog files under logs/<port2>/<date>/, sorted by name."""
+    """All sessionN.{tlog,bin} files under logs/<port2>/<date>/."""
     _safe_date(date)
     root = os.path.join(_logs_root(), str(port2), date)
     if not os.path.isdir(root):
@@ -120,15 +125,16 @@ def _list_sessions(port2, date):
     return files
 
 
-def _send_tlog(port2, date, session_name):
+def _send_session_file(port2, date, session_name):
     """send_from_directory takes care of path-traversal safety; we still
     pre-validate the date and filename so a malformed URL bounces with a
     404 before touching the filesystem.
 
-    Tlogs contain raw vehicle telemetry: do NOT let intermediaries (or
-    a shared-device browser) cache them. Override the app's default
-    SEND_FILE_MAX_AGE_DEFAULT (set for the logo etc.) with max_age=0
-    and explicit Cache-Control: private, no-store.
+    Session logs (.tlog or .bin) contain raw vehicle telemetry: do NOT
+    let intermediaries (or a shared-device browser) cache them.
+    Override the app's default SEND_FILE_MAX_AGE_DEFAULT (set for the
+    logo etc.) with max_age=0 and explicit Cache-Control: private,
+    no-store.
     """
     _safe_date(date)
     _safe_session(session_name)
@@ -146,7 +152,7 @@ def _send_tlog(port2, date, session_name):
 # admin views: any port2
 # ---------------------------------------------------------------------------
 
-admin_bp = Blueprint('admin_tlogs', __name__, url_prefix='/admin/tlogs')
+admin_bp = Blueprint('admin_logs', __name__, url_prefix='/admin/logs')
 
 
 @admin_bp.route('/<int:port2>/', methods=['GET'])
@@ -155,7 +161,7 @@ def admin_dates(port2):
     entry = _entry_label(port2)
     if entry is None:
         abort(404)
-    return render_template('admin_tlogs.html',
+    return render_template('admin_logs.html',
                            entry=entry, dates=_list_dates(port2),
                            date=None, sessions=None)
 
@@ -167,7 +173,7 @@ def admin_sessions(port2, date):
     entry = _entry_label(port2)
     if entry is None:
         abort(404)
-    return render_template('admin_tlogs.html',
+    return render_template('admin_logs.html',
                            entry=entry, dates=_list_dates(port2),
                            date=date, sessions=_list_sessions(port2, date))
 
@@ -175,14 +181,14 @@ def admin_sessions(port2, date):
 @admin_bp.route('/<int:port2>/<date>/<session_name>', methods=['GET'])
 @require_admin
 def admin_download(port2, date, session_name):
-    return _send_tlog(port2, date, session_name)
+    return _send_session_file(port2, date, session_name)
 
 
 # ---------------------------------------------------------------------------
 # owner views: only their own port2
 # ---------------------------------------------------------------------------
 
-owner_bp = Blueprint('owner_tlogs', __name__, url_prefix='/me/tlogs')
+owner_bp = Blueprint('owner_logs', __name__, url_prefix='/me/logs')
 
 
 @owner_bp.route('/', methods=['GET'])
@@ -192,7 +198,7 @@ def owner_dates():
     entry = _entry_label(port2)
     if entry is None:
         abort(404)
-    return render_template('owner_tlogs.html',
+    return render_template('owner_logs.html',
                            entry=entry, dates=_list_dates(port2),
                            date=None, sessions=None)
 
@@ -205,7 +211,7 @@ def owner_sessions(date):
     entry = _entry_label(port2)
     if entry is None:
         abort(404)
-    return render_template('owner_tlogs.html',
+    return render_template('owner_logs.html',
                            entry=entry, dates=_list_dates(port2),
                            date=date, sessions=_list_sessions(port2, date))
 
@@ -214,4 +220,4 @@ def owner_sessions(date):
 @require_login
 def owner_download(date, session_name):
     port2 = current_owner()
-    return _send_tlog(port2, date, session_name)
+    return _send_session_file(port2, date, session_name)

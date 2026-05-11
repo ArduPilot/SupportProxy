@@ -55,33 +55,33 @@ class TestOwnerTlogForm:
         ke = fetch_entry(keydb_path, ALICE_PORT2)
         assert ke.flags & keydb_lib.FLAG_TLOG
         # First-enable from a fresh-zero state seeds 7 days.
-        assert ke.tlog_retention_days == keydb_lib.DEFAULT_TLOG_RETENTION_DAYS
+        assert ke.log_retention_days == keydb_lib.DEFAULT_LOG_RETENTION_DAYS
 
     def test_owner_set_custom_retention(self, client, keydb_path):
         login_as(client, ALICE_PORT1, ALICE_PASS)
         client.post('/me/', data={
             'name': 'alice',
             'tlog_enabled': 'y',
-            'tlog_retention_days': '15',
+            'log_retention_days': '15',
             'submit': 'Save',
         })
         ke = fetch_entry(keydb_path, ALICE_PORT2)
         assert ke.flags & keydb_lib.FLAG_TLOG
-        assert ke.tlog_retention_days == 15.0
+        assert ke.log_retention_days == 15.0
 
     def test_owner_retention_over_30_rejected(self, client, keydb_path):
         login_as(client, ALICE_PORT1, ALICE_PASS)
         resp = client.post('/me/', data={
             'name': 'alice',
             'tlog_enabled': 'y',
-            'tlog_retention_days': '60',
+            'log_retention_days': '60',
             'submit': 'Save',
         })
         # WTForms re-renders the page (200) on a validator failure.
         assert resp.status_code == 200
         ke = fetch_entry(keydb_path, ALICE_PORT2)
         assert not (ke.flags & keydb_lib.FLAG_TLOG)
-        assert ke.tlog_retention_days == 0.0
+        assert ke.log_retention_days == 0.0
 
     def test_owner_enable_binlog_via_form(self, client, keydb_path):
         login_as(client, ALICE_PORT1, ALICE_PASS)
@@ -94,23 +94,23 @@ class TestOwnerTlogForm:
         ke = fetch_entry(keydb_path, ALICE_PORT2)
         assert ke.flags & keydb_lib.FLAG_BINLOG
         # First-enable seeds 7 days for binlog too (shared with tlog).
-        assert ke.tlog_retention_days == keydb_lib.DEFAULT_TLOG_RETENTION_DAYS
+        assert ke.log_retention_days == keydb_lib.DEFAULT_LOG_RETENTION_DAYS
 
     def test_owner_disable_binlog_keeps_retention(self, client, keydb_path):
         login_as(client, ALICE_PORT1, ALICE_PASS)
         # enable + 20 days
         client.post('/me/', data={
             'name': 'alice', 'binlog_enabled': 'y',
-            'tlog_retention_days': '20', 'submit': 'Save',
+            'log_retention_days': '20', 'submit': 'Save',
         })
         # disable (omit checkbox)
         client.post('/me/', data={
-            'name': 'alice', 'tlog_retention_days': '20',
+            'name': 'alice', 'log_retention_days': '20',
             'submit': 'Save',
         })
         ke = fetch_entry(keydb_path, ALICE_PORT2)
         assert not (ke.flags & keydb_lib.FLAG_BINLOG)
-        assert ke.tlog_retention_days == 20.0
+        assert ke.log_retention_days == 20.0
 
     def test_owner_tlog_and_binlog_independent_toggles(self, client, keydb_path):
         """The two flags are toggled independently on one POST."""
@@ -139,17 +139,17 @@ class TestOwnerTlogForm:
         # enable + 14 days
         client.post('/me/', data={
             'name': 'alice', 'tlog_enabled': 'y',
-            'tlog_retention_days': '14', 'submit': 'Save',
+            'log_retention_days': '14', 'submit': 'Save',
         })
         # disable (omit checkbox)
         client.post('/me/', data={
             'name': 'alice',
-            'tlog_retention_days': '14',
+            'log_retention_days': '14',
             'submit': 'Save',
         })
         ke = fetch_entry(keydb_path, ALICE_PORT2)
         assert not (ke.flags & keydb_lib.FLAG_TLOG)
-        assert ke.tlog_retention_days == 14.0
+        assert ke.log_retention_days == 14.0
 
 
 class TestAdminTlogForm:
@@ -160,13 +160,13 @@ class TestAdminTlogForm:
             'name': 'alice',
             'port1': str(ALICE_PORT1),
             'tlog_enabled': 'y',
-            'tlog_retention_days': '365',
+            'log_retention_days': '365',
             'submit': 'Save',
         })
         assert resp.status_code == 302
         ke = fetch_entry(keydb_path, ALICE_PORT2)
         assert ke.flags & keydb_lib.FLAG_TLOG
-        assert ke.tlog_retention_days == 365.0
+        assert ke.log_retention_days == 365.0
 
     def test_admin_enable_binlog_via_form(self, client, keydb_path):
         login_as(client, BOB_PORT1, BOB_PASS)
@@ -186,11 +186,11 @@ class TestAdminTlogForm:
             'name': 'alice',
             'port1': str(ALICE_PORT1),
             'tlog_enabled': 'y',
-            'tlog_retention_days': '0.5',
+            'log_retention_days': '0.5',
             'submit': 'Save',
         })
         ke = fetch_entry(keydb_path, ALICE_PORT2)
-        assert ke.tlog_retention_days == 0.5
+        assert ke.log_retention_days == 0.5
 
 
 # ---------------------------------------------------------------------------
@@ -210,7 +210,7 @@ class TestSessionNaturalSort:
             seed_session(logs_dir, ALICE_PORT2, '2026-05-10',
                          'session%d.tlog' % n, content=b'X')
         login_as(client, ALICE_PORT1, ALICE_PASS)
-        r = client.get('/me/tlogs/2026-05-10/')
+        r = client.get('/me/logs/2026-05-10/')
         assert r.status_code == 200
         body = r.data.decode()
         names = ['session%d.tlog' % n for n in (1, 11, 2, 10, 3, 20, 9)]
@@ -232,7 +232,7 @@ class TestSessionNaturalSort:
         seed_session(logs_dir, ALICE_PORT2, '2026-05-10',
                      'session10.tlog', content=b'X')
         login_as(client, BOB_PORT1, BOB_PASS)
-        r = client.get('/admin/tlogs/' + str(ALICE_PORT2) + '/2026-05-10/')
+        r = client.get('/admin/logs/' + str(ALICE_PORT2) + '/2026-05-10/')
         body = r.data.decode()
         # session2 (numeric 2) must come before either session10.
         assert body.index('session2.tlog') < body.index('session10.bin')
@@ -243,7 +243,7 @@ class TestBinFileListing:
     """`.bin` files (ArduPilot dataflash logs over MAVLink) live in the
     same per-date dir as `.tlog` files and are surfaced through the
     same listing + download endpoints. The regex broadening in
-    webadmin/tlogs.py is the only change."""
+    webadmin/logs.py is the only change."""
 
     def test_bin_appears_in_owner_listing(self, client, keydb_path,
                                             logs_dir):
@@ -252,7 +252,7 @@ class TestBinFileListing:
         seed_session(logs_dir, ALICE_PORT2, '2026-05-10', 'session1.bin',
                      content=b'BIN')
         login_as(client, ALICE_PORT1, ALICE_PASS)
-        r = client.get('/me/tlogs/2026-05-10/')
+        r = client.get('/me/logs/2026-05-10/')
         assert r.status_code == 200
         assert b'session1.tlog' in r.data
         assert b'session1.bin' in r.data
@@ -261,7 +261,7 @@ class TestBinFileListing:
         seed_session(logs_dir, ALICE_PORT2, '2026-05-10', 'session2.bin',
                      content=b'BIN')
         login_as(client, BOB_PORT1, BOB_PASS)
-        r = client.get('/admin/tlogs/' + str(ALICE_PORT2) + '/2026-05-10/')
+        r = client.get('/admin/logs/' + str(ALICE_PORT2) + '/2026-05-10/')
         assert r.status_code == 200
         assert b'session2.bin' in r.data
 
@@ -269,7 +269,7 @@ class TestBinFileListing:
         seed_session(logs_dir, ALICE_PORT2, '2026-05-10', 'session1.bin',
                      content=b'\x00\x01ARDUPILOT_LOG')
         login_as(client, ALICE_PORT1, ALICE_PASS)
-        r = client.get('/me/tlogs/2026-05-10/session1.bin')
+        r = client.get('/me/logs/2026-05-10/session1.bin')
         assert r.status_code == 200
         assert r.data.endswith(b'ARDUPILOT_LOG')
 
@@ -279,7 +279,7 @@ class TestBinFileListing:
         seed_session(logs_dir, ALICE_PORT2, '2026-05-10', 'session1.bin',
                      content=b'BIN')
         login_as(client, ALICE_PORT1, ALICE_PASS)
-        r = client.get('/me/tlogs/2026-05-10/session1.bin')
+        r = client.get('/me/logs/2026-05-10/session1.bin')
         assert r.status_code == 200
         cc = r.headers.get('Cache-Control', '')
         assert 'no-store' in cc
@@ -294,10 +294,10 @@ class TestBinFileListing:
         (d / 'session1.log').write_bytes(b'X')
         (d / 'session1.pem').write_bytes(b'X')
         login_as(client, BOB_PORT1, BOB_PASS)
-        r = client.get('/admin/tlogs/' + str(ALICE_PORT2)
+        r = client.get('/admin/logs/' + str(ALICE_PORT2)
                        + '/2026-05-10/session1.log')
         assert r.status_code == 404
-        r = client.get('/admin/tlogs/' + str(ALICE_PORT2)
+        r = client.get('/admin/logs/' + str(ALICE_PORT2)
                        + '/2026-05-10/session1.pem')
         assert r.status_code == 404
 
@@ -313,7 +313,7 @@ class TestTlogDownloadCacheHeaders:
         seed_session(logs_dir, ALICE_PORT2, '2026-05-10', 'session1.tlog',
                      content=b'TLOG')
         login_as(client, ALICE_PORT1, ALICE_PASS)
-        r = client.get('/me/tlogs/2026-05-10/session1.tlog')
+        r = client.get('/me/logs/2026-05-10/session1.tlog')
         assert r.status_code == 200
         cc = r.headers.get('Cache-Control', '')
         assert 'no-store' in cc
@@ -325,7 +325,7 @@ class TestTlogDownloadCacheHeaders:
         seed_session(logs_dir, ALICE_PORT2, '2026-05-10', 'session1.tlog',
                      content=b'TLOG')
         login_as(client, BOB_PORT1, BOB_PASS)
-        r = client.get('/admin/tlogs/' + str(ALICE_PORT2)
+        r = client.get('/admin/logs/' + str(ALICE_PORT2)
                        + '/2026-05-10/session1.tlog')
         assert r.status_code == 200
         cc = r.headers.get('Cache-Control', '')
@@ -341,17 +341,17 @@ class TestOwnerTlogListing:
         login_as(client, ALICE_PORT1, ALICE_PASS)
 
         # date listing
-        r = client.get('/me/tlogs/')
+        r = client.get('/me/logs/')
         assert r.status_code == 200
         assert b'2026-05-10' in r.data
 
         # session listing for that date
-        r = client.get('/me/tlogs/2026-05-10/')
+        r = client.get('/me/logs/2026-05-10/')
         assert r.status_code == 200
         assert b'session1.tlog' in r.data
 
         # download
-        r = client.get('/me/tlogs/2026-05-10/session1.tlog')
+        r = client.get('/me/logs/2026-05-10/session1.tlog')
         assert r.status_code == 200
         assert r.data.endswith(b'ALICE_TLOG')
 
@@ -362,15 +362,15 @@ class TestOwnerTlogListing:
                      content=b'BOB_TLOG')
         login_as(client, ALICE_PORT1, ALICE_PASS)
         # Owner route is scoped to the session's port2 (alice's), so
-        # /me/tlogs/<date>/session1.tlog reads from logs/ALICE_PORT2/...
+        # /me/logs/<date>/session1.tlog reads from logs/ALICE_PORT2/...
         # which doesn't exist -> 404.
-        r = client.get('/me/tlogs/2026-05-10/session1.tlog')
+        r = client.get('/me/logs/2026-05-10/session1.tlog')
         assert r.status_code == 404
 
     def test_owner_cannot_use_admin_tlog_route(self, client, logs_dir):
         seed_session(logs_dir, BOB_PORT2, '2026-05-10', 'session1.tlog')
         login_as(client, ALICE_PORT1, ALICE_PASS)
-        r = client.get('/admin/tlogs/' + str(BOB_PORT2) + '/')
+        r = client.get('/admin/logs/' + str(BOB_PORT2) + '/')
         assert r.status_code == 403
 
 
@@ -379,7 +379,7 @@ class TestAdminTlogListing:
         seed_session(logs_dir, ALICE_PORT2, '2026-05-09', 'session1.tlog')
         seed_session(logs_dir, ALICE_PORT2, '2026-05-10', 'session1.tlog')
         login_as(client, BOB_PORT1, BOB_PASS)
-        r = client.get('/admin/tlogs/' + str(ALICE_PORT2) + '/')
+        r = client.get('/admin/logs/' + str(ALICE_PORT2) + '/')
         assert r.status_code == 200
         assert b'2026-05-09' in r.data
         assert b'2026-05-10' in r.data
@@ -388,14 +388,14 @@ class TestAdminTlogListing:
         seed_session(logs_dir, ALICE_PORT2, '2026-05-10', 'session3.tlog',
                      content=b'\x01\x02\x03ADMIN_DL')
         login_as(client, BOB_PORT1, BOB_PASS)
-        r = client.get('/admin/tlogs/' + str(ALICE_PORT2)
+        r = client.get('/admin/logs/' + str(ALICE_PORT2)
                        + '/2026-05-10/session3.tlog')
         assert r.status_code == 200
         assert r.data.endswith(b'ADMIN_DL')
 
     def test_admin_404_for_unknown_port2(self, client):
         login_as(client, BOB_PORT1, BOB_PASS)
-        r = client.get('/admin/tlogs/99999/')
+        r = client.get('/admin/logs/99999/')
         assert r.status_code == 404
 
 
@@ -410,29 +410,29 @@ class TestPathSafety:
         login_as(client, BOB_PORT1, BOB_PASS)
         # admin route is the most permissive auth-wise, so it's the
         # interesting one for path-safety.
-        r = client.get('/admin/tlogs/' + str(ALICE_PORT2) + '/' + bad + '/')
+        r = client.get('/admin/logs/' + str(ALICE_PORT2) + '/' + bad + '/')
         assert r.status_code == 404
 
     def test_bad_session_name_404(self, client, logs_dir):
         seed_session(logs_dir, ALICE_PORT2, '2026-05-10', 'session1.tlog')
         login_as(client, BOB_PORT1, BOB_PASS)
-        r = client.get('/admin/tlogs/' + str(ALICE_PORT2)
+        r = client.get('/admin/logs/' + str(ALICE_PORT2)
                        + '/2026-05-10/notatlog')
         assert r.status_code == 404
         # send_from_directory blocks any traversal that escapes the date dir
-        r = client.get('/admin/tlogs/' + str(ALICE_PORT2)
+        r = client.get('/admin/logs/' + str(ALICE_PORT2)
                        + '/2026-05-10/..%2fsession1.tlog')
         assert r.status_code == 404
 
 
 class TestUnauthenticated:
     def test_owner_routes_redirect_to_login(self, client):
-        r = client.get('/me/tlogs/', follow_redirects=False)
+        r = client.get('/me/logs/', follow_redirects=False)
         assert r.status_code == 302
         assert '/login' in r.location
 
     def test_admin_routes_redirect_to_login(self, client):
-        r = client.get('/admin/tlogs/' + str(ALICE_PORT2) + '/',
+        r = client.get('/admin/logs/' + str(ALICE_PORT2) + '/',
                        follow_redirects=False)
         # require_admin aborts 403 for unauthenticated _refresh_role:
         # they're not logged in, so role check fails. Acceptable: 403.
