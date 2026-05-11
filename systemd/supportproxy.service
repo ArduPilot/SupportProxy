@@ -10,8 +10,17 @@ User=support
 Group=support
 WorkingDirectory=/home/support/proxy
 ExecStart=/home/support/SupportProxy/supportproxy
-Restart=on-failure
+# Respawn on any exit except a deliberate `systemctl stop/restart` —
+# this matches the cron model of "if pidof shows nothing, launch
+# it" and covers crashes (SIGSEGV / SIGABRT / OOM-kill) as well as
+# an accidental external pkill.
+Restart=always
 RestartSec=5s
+# Bail out of the restart loop if the binary is genuinely broken:
+# 5 restarts within 60 s puts the unit into failed state for an
+# operator to investigate (journalctl -u supportproxy will show
+# why). Resume with `systemctl reset-failed supportproxy &&
+# systemctl start supportproxy` once fixed.
 StartLimitIntervalSec=60
 StartLimitBurst=5
 # The daemon's printf output is the activity log; mirror it to the
