@@ -8,6 +8,8 @@
 
 #include "libraries/mavlink2/generated/ardupilotmega/mavlink.h"
 
+#include <algorithm>
+#include <dirent.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -77,8 +79,71 @@ bool BinlogWriter::open(uint32_t port2, unsigned session_n, const char *base_dir
     // Remember the location for rotate_for_reboot() to re-scan.
     port2_ = port2;
     base_dir_ = base_dir;
+    current_file_size_ = 0;
+    // Sum the sizes of the other .tlog/.bin files under logs/<port2>/
+    // so the per-port-pair quota check has a baseline to add this
+    // file's growth onto. Refreshed periodically below to absorb any
+    // deletions the cleanup child does in the meantime.
+    refresh_other_sessions_bytes();
+    writes_since_quota_refresh_ = 0;
     ::printf("binlog: %s\n", path);
     return true;
+}
+
+void BinlogWriter::refresh_other_sessions_bytes()
+{
+    other_sessions_bytes_ = 0;
+    if (base_dir_.empty() || port2_ == 0) {
+        return;
+    }
+    char root[768];
+    snprintf(root, sizeof(root), "%s/%u", base_dir_.c_str(), unsigned(port2_));
+    DIR *d = opendir(root);
+    if (d == nullptr) {
+        return;
+    }
+    struct dirent *de;
+    while ((de = readdir(d)) != nullptr) {
+        if (de->d_name[0] == '.') {
+            continue;
+        }
+        // Each entry is a <YYYY-MM-DD> date dir.
+        char date_dir[1024];
+        snprintf(date_dir, sizeof(date_dir), "%s/%s", root, de->d_name);
+        DIR *dd = opendir(date_dir);
+        if (dd == nullptr) {
+            continue;
+        }
+        struct dirent *fe;
+        while ((fe = readdir(dd)) != nullptr) {
+            size_t n = strlen(fe->d_name);
+            bool is_session_file =
+                (n > 5 && strcmp(fe->d_name + n - 5, ".tlog") == 0) ||
+                (n > 4 && strcmp(fe->d_name + n - 4, ".bin")  == 0);
+            if (!is_session_file) {
+                continue;
+            }
+            char fpath[2048];
+            snprintf(fpath, sizeof(fpath), "%s/%s", date_dir, fe->d_name);
+            struct stat st;
+            if (stat(fpath, &st) != 0) {
+                continue;
+            }
+            // Skip our own currently-open file — its size is tracked
+            // by current_file_size_ instead.
+            if (fp != nullptr) {
+                struct stat fst;
+                if (fstat(fileno(fp), &fst) == 0
+                    && fst.st_dev == st.st_dev
+                    && fst.st_ino == st.st_ino) {
+                    continue;
+                }
+            }
+            other_sessions_bytes_ += st.st_size;
+        }
+        closedir(dd);
+    }
+    closedir(d);
 }
 
 void BinlogWriter::close()
@@ -124,14 +189,48 @@ void BinlogWriter::handle_block(uint32_t port2, unsigned session_n,
     // was already streaming when SupportProxy activated will have
     // seqnos in the millions, producing a multi-GB hole-y file that
     // doesn't start at byte 0 with FMT records and so won't parse
-    // with DFReader_binary / mavlogdump.py.
+    // with DFReader_binary / mavlogdump.py. The same gate also
+    // protects the post-reboot rotation case: rotate_for_reboot()
+    // closes fp without re-opening, so a delayed pre-reboot block
+    // (or any seqno != 0) hits this gate and is dropped until the
+    // vehicle's new boot sends seqno=0 to start the new file.
     if (fp == nullptr) {
         if (blk.seqno != 0) {
             return;
         }
-        if (!open(port2, session_n)) {
+        unsigned n = (pending_session_n_ != 0) ? pending_session_n_ : session_n;
+        if (!open(port2, n)) {
             return;
         }
+        pending_session_n_ = 0;
+    }
+
+    // Caps to limit damage from a malicious or buggy peer sending a
+    // giant seqno on the unsigned-by-default user-side port. Both
+    // are checked BEFORE we seek/write/grow-the-bitmap so the
+    // offending block leaves no trace. Silent drop (no ACK) matches
+    // a real "we never got that packet" — the vehicle re-sends from
+    // its pending queue, or gives up after NACK_GIVEUP semantics on
+    // its side.
+    off_t offset = off_t(blk.seqno) * off_t(BLOCK_BYTES);
+    off_t prospective_size = std::max(current_file_size_,
+                                      offset + off_t(BLOCK_BYTES));
+    off_t expansion = prospective_size - current_file_size_;
+    if (expansion > MAX_FORWARD_JUMP_BYTES) {
+        ::printf("binlog: dropping seqno=%u (forward jump %lld bytes "
+                 "> %lld byte per-write cap)\n",
+                 unsigned(blk.seqno), (long long)expansion,
+                 (long long)MAX_FORWARD_JUMP_BYTES);
+        return;
+    }
+    if (other_sessions_bytes_ + prospective_size > MAX_PER_PORT2_BYTES) {
+        ::printf("binlog: dropping seqno=%u (port2=%u total would be "
+                 "%lld > %lld byte quota; cleanup pass will age out "
+                 "old sessions)\n",
+                 unsigned(blk.seqno), unsigned(port2_),
+                 (long long)(other_sessions_bytes_ + prospective_size),
+                 (long long)MAX_PER_PORT2_BYTES);
+        return;
     }
 
     // Latch the vehicle's sysid/compid on first block so subsequent
@@ -146,7 +245,6 @@ void BinlogWriter::handle_block(uint32_t port2, unsigned session_n,
 
     // Sparse write. fseeko + fwrite at seqno * 200; if seqno < highest
     // we just fill an old gap.
-    off_t offset = off_t(blk.seqno) * off_t(BLOCK_BYTES);
     if (fseeko(fp, offset, SEEK_SET) != 0) {
         ::printf("binlog: seek seqno=%u failed: %s\n",
                  unsigned(blk.seqno), strerror(errno));
@@ -158,6 +256,15 @@ void BinlogWriter::handle_block(uint32_t port2, unsigned session_n,
                  unsigned(blk.seqno), wrote, strerror(errno));
         // Don't ACK a partial write — let the vehicle re-send.
         return;
+    }
+    current_file_size_ = prospective_size;
+
+    // Re-scan the per-port2 dir periodically so the cap check picks
+    // up files the cleanup child has deleted. 10000 writes at 400/s
+    // is ~25 s, comfortably less than the hourly cleanup interval.
+    if (++writes_since_quota_refresh_ >= 10000) {
+        refresh_other_sessions_bytes();
+        writes_since_quota_refresh_ = 0;
     }
 
     bool was_seen = seqno_seen(blk.seqno);
@@ -401,6 +508,14 @@ bool BinlogWriter::rotate_for_reboot()
     //   pre-stream loop; the 5 s keep-alive (re-armed above) covers
     //   reboot recovery.
 
-    unsigned new_n = next_session_n(port2_, base_dir_.c_str());
-    return open(port2_, new_n, base_dir_.c_str());
+    // Pre-compute the next session N but do NOT open the file yet.
+    // The handle_block() strict-start gate (fp == nullptr + seqno!=0
+    // is dropped) keeps the file unopened until a fresh seqno=0 from
+    // the rebooted vehicle, so any delayed pre-reboot blocks still
+    // in flight can't sparse-write into sessionN+1.bin. The open()
+    // happens lazily in handle_block using pending_session_n_.
+    pending_session_n_ = next_session_n(port2_, base_dir_.c_str());
+    ::printf("binlog: rotation armed; next open will be session%u.bin "
+             "(awaiting fresh seqno=0)\n", pending_session_n_);
+    return true;
 }

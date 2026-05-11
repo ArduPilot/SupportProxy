@@ -158,6 +158,22 @@ private:
     // wobble and well below the multi-second pause a real reboot
     // creates.
     static constexpr uint32_t REBOOT_TIME_BACKWARD_MS = 10000;
+    // Caps to limit the damage from an attacker (or a buggy vehicle)
+    // sending a giant seqno on the unsigned-by-default user-side port.
+    // A bare seqno=0 followed by seqno=2^32-1 would otherwise sparse-
+    // extend the file to ~800 GB and grow the bitmap to 512 MB. Both
+    // caps are enforced in handle_block(); on breach the block is
+    // silently dropped without ACK so the vehicle (if legitimate) can
+    // retry, and so the cleanup loop can age-out other sessions
+    // before retrying eventually succeeds.
+    // 1. Per-write expansion cap: the file may grow by at most 100 MB
+    //    in a single seqno step. Covers ~30 minutes of streaming at
+    //    400 blocks/s; anything bigger is unambiguously bogus.
+    static constexpr off_t MAX_FORWARD_JUMP_BYTES = off_t(100) * 1024 * 1024;
+    // 2. Per-port-pair on-disk quota: total size of all .tlog + .bin
+    //    files under logs/<port2>/ may not exceed 1 GiB. The hourly
+    //    cleanup loop also enforces this by deleting oldest files.
+    static constexpr off_t MAX_PER_PORT2_BYTES   = off_t(1024) * 1024 * 1024;
 
     FILE *fp = nullptr;
 
@@ -207,6 +223,17 @@ private:
     uint32_t    port2_   = 0;
     std::string base_dir_;
 
+    // Current size of fp (= the largest seqno+1 we've written * 200).
+    // Tracked locally rather than fstat'ing on every write.
+    off_t current_file_size_ = 0;
+    // Bytes consumed by all .tlog/.bin files under logs/<port2>/
+    // *other than* fp. Computed at open() and refreshed periodically
+    // (the cleanup child can delete files while we're writing). Used
+    // alongside current_file_size_ to enforce MAX_PER_PORT2_BYTES.
+    off_t other_sessions_bytes_ = 0;
+    unsigned writes_since_quota_refresh_ = 0;
+    void refresh_other_sessions_bytes();
+
     // Per-entry MAVLink sysid filter for SYSTEM_TIME-based reboot
     // detection. 0 = match any (default). Set from KeyEntry.fc_sysid
     // by the per-port-pair child at fork.
@@ -217,8 +244,17 @@ private:
     // SYSTEM_TIME can't trigger a spurious reboot).
     uint32_t last_system_time_boot_ms_ = 0;
 
-    // Close + reset per-log state + open the next sessionN.bin. Used
-    // when observe() decides the FC has rebooted. Does NOT reset
-    // per-vehicle state (target_system/component, fc_sysid_filter_).
+    // Close + reset per-log state + arm pending_session_n_ for the
+    // NEXT open. Used when observe() decides the FC has rebooted.
+    // Does NOT re-open here — the new file is only opened when a
+    // fresh seqno=0 arrives, so the existing strict-start gate keeps
+    // protecting the rotated file from delayed pre-reboot blocks.
+    // Does NOT reset per-vehicle state (target_system/component,
+    // fc_sysid_filter_).
     bool rotate_for_reboot();
+
+    // Session N to use on the NEXT open(), set by rotate_for_reboot()
+    // and consumed on the gate-triggered open in handle_block.
+    // 0 = no pending rotation; use the caller's session_n argument.
+    unsigned pending_session_n_ = 0;
 };
