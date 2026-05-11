@@ -67,6 +67,8 @@ struct listen_port {
     int sock1_tcp, sock2_listen;
     pid_t pid;
     uint32_t flags;
+    uint8_t  fc_sysid;     // 0 = match any; otherwise the FC's MAVLink
+                           // sysid for binlog reboot detection
     bool seen;     // set true by handle_record() during reload_ports()
                    // for any entry that's still in the DB; entries left
                    // unseen after a reload have been removed.
@@ -112,7 +114,7 @@ static void close_sockets(struct listen_port *p);
   Used both at startup and on each reload; reload_ports() handles the
   flip side (entries that were in keys.tdb last time and aren't now).
  */
-static void upsert_port(int port1, int port2, uint32_t flags)
+static void upsert_port(int port1, int port2, uint32_t flags, uint8_t fc_sysid)
 {
     for (auto *p = ports; p; p=p->next) {
         if (p->port2 == port2) {
@@ -123,6 +125,7 @@ static void upsert_port(int port1, int port2, uint32_t flags)
                 p->removed = false;
                 p->port1 = port1;
                 p->flags = flags;
+                p->fc_sysid = fc_sysid;
                 if (p->pid == 0) {
                     open_sockets(p);
                 }
@@ -137,11 +140,13 @@ static void upsert_port(int port1, int port2, uint32_t flags)
                 }
                 p->port1 = port1;
                 p->flags = flags;
+                p->fc_sysid = fc_sysid;
                 if (p->pid == 0) {
                     open_sockets(p);
                 }
             } else {
                 p->flags = flags;
+                p->fc_sysid = fc_sysid;
             }
             return;
         }
@@ -156,6 +161,7 @@ static void upsert_port(int port1, int port2, uint32_t flags)
     p->sock2_listen = -1;
     p->pid = 0;
     p->flags = flags;
+    p->fc_sysid = fc_sysid;
     p->seen = true;
     p->removed = false;
     ports = p;
@@ -175,7 +181,10 @@ static int handle_record(struct tdb_context *db, TDB_DATA key, TDB_DATA data, vo
     memcpy(&port2, key.dptr, sizeof(int));
     size_t copy = data.dsize < sizeof(KeyEntry) ? data.dsize : sizeof(KeyEntry);
     memcpy(&k, data.dptr, copy);
-    upsert_port(k.port1, port2, k.flags);
+    // KeyEntry.fc_sysid is uint32 for forward compat; the wire value is
+    // a MAVLink sysid (0..255), so truncate to uint8 once it crosses the
+    // C++/binlog boundary. The CLI / web UI already cap at 255.
+    upsert_port(k.port1, port2, k.flags, uint8_t(k.fc_sysid));
     return 0;
 }
 
@@ -273,15 +282,22 @@ static void main_loop(struct listen_port *p)
     // polluted by log traffic. Engineer→user direction is unchanged.
     BinlogWriter binlog;
     const bool binlog_enabled = (p->flags & KEY_FLAG_BINLOG) != 0;
+    if (binlog_enabled) {
+        // Per-entry sysid filter for SYSTEM_TIME-based reboot
+        // detection. 0 (default) accepts any sysid.
+        binlog.set_fc_sysid_filter(p->fc_sysid);
+    }
     // Tap helper: returns true if the message was consumed by binlog
     // and the caller should NOT forward it to the engineer side.
     // BinlogWriter::handle_block does its own lazy file-open, gated
     // on seqno==0 so we don't sparse-extend the file from a mid-
-    // stream seqno.
+    // stream seqno. observe() is called on every message for
+    // SYSTEM_TIME-based reboot detection and never strips.
     auto binlog_handle_user_msg = [&](const mavlink_message_t &m) -> bool {
         if (!binlog_enabled) {
             return false;
         }
+        binlog.observe(m);
         if (m.msgid != MAVLINK_MSG_ID_REMOTE_LOG_DATA_BLOCK
             && m.msgid != MAVLINK_MSG_ID_REMOTE_LOG_BLOCK_STATUS) {
             return false;
