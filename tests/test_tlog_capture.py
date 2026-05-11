@@ -273,6 +273,55 @@ class TestTlogCapture:
         assert 'HEARTBEAT' in types, (
             'pymavlink did not decode any HEARTBEAT; saw %r' % types)
 
+    def test_user_only_traffic_records_to_tlog(self, proxy_workdir):
+        """KEY_FLAG_TLOG is supposed to mean 'record this port pair's
+        traffic'. Before the fix at supportproxy.cpp the parse loop
+        was gated on (conn2_count>0 || binlog_enabled), so a tlog-only
+        entry with no engineer connected silently discarded the
+        user-side packets without parsing them. With tlog_enabled in
+        the gate, user-only traffic shows up in sessionN.tlog from
+        the first packet."""
+        from pymavlink import mavutil
+        proc = _start_proxy(proxy_workdir)
+        try:
+            user = mavutil.mavlink_connection(
+                'udpout:127.0.0.1:%d' % PORT_USER,
+                source_system=10, source_component=20)
+            # Drive only the user side. No engineer ever connects.
+            deadline = time.time() + 2.0
+            n_sent = 0
+            while time.time() < deadline:
+                user.mav.heartbeat_send(
+                    mavutil.mavlink.MAV_TYPE_QUADROTOR,
+                    mavutil.mavlink.MAV_AUTOPILOT_ARDUPILOTMEGA,
+                    0, 0, 0)
+                n_sent += 1
+                time.sleep(0.05)
+            user.close()
+            time.sleep(0.5)
+        finally:
+            _terminate(proc)
+
+        tlog = (proxy_workdir / 'logs' / str(PORT_ENG)
+                / _today_str() / 'session1.tlog')
+        proxy_log = ''.join(getattr(proc, '_lines', []))
+        assert tlog.exists(), \
+            ('session1.tlog missing — user-only traffic was discarded.\n'
+             'sent %d heartbeats. proxy log:\n%s' % (n_sent, proxy_log))
+        assert tlog.stat().st_size > 0, \
+            'tlog is empty; parse loop did not write the user frames'
+        # The tlog should contain user heartbeats (sysid=10).
+        records = list(_read_tlog_records(str(tlog)))
+        assert records, 'no records in tlog'
+        user_frames = 0
+        for _, frame in records:
+            if frame[0] == 0xFD and frame[5] == 10:
+                user_frames += 1
+            elif frame[0] == 0xFE and frame[3] == 10:
+                user_frames += 1
+        assert user_frames > 0, \
+            'no user-sysid frames in tlog despite tlog-only traffic'
+
     def test_second_connection_creates_session2(self, proxy_workdir):
         proc = _start_proxy(proxy_workdir)
         try:

@@ -485,7 +485,7 @@ static void main_loop(struct listen_port *p)
 	    // go: a connected engineer (forward), tlog recording, or
 	    // binlog recording. Without one of those, the bytes are read
 	    // off the socket but discarded.
-	    if (conn2_count > 0 || binlog_enabled) {
+	    if (conn2_count > 0 || binlog_enabled || tlog_enabled) {
 		uint8_t *buf0 = buf;
 		while (n > 0 && mav1.receive_message(buf0, n, msg)) {
 		    mav1_rx_msgs++;
@@ -660,7 +660,7 @@ static void main_loop(struct listen_port *p)
 	    mavlink_message_t msg {};
 	    // Parse whenever a downstream consumer needs it (engineer
 	    // forward, tlog, or binlog). Otherwise just discard.
-	    if (conn2_count > 0 || binlog_enabled) {
+	    if (conn2_count > 0 || binlog_enabled || tlog_enabled) {
 		uint8_t *buf0 = buf;
 		while (n > 0 && mav1.receive_message(buf0, n, msg)) {
 		    mav1_rx_msgs++;
