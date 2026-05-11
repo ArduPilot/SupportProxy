@@ -55,6 +55,10 @@ class OwnerEditForm(FlaskForm):
         'covers both .tlog and .bin files',
         validators=[Optional(),
                     NumberRange(min=0.0, max=OWNER_MAX_LOG_RETENTION_DAYS)])
+    fc_sysid = IntegerField(
+        'Flight-controller MAVLink sysid (0 = any) — restricts binlog '
+        'reboot detection to packets from this sysid',
+        validators=[Optional(), NumberRange(min=0, max=255)])
     reset_timestamp = BooleanField('Reset signing timestamp (recover from clock skew)')
     submit = SubmitField('Save')
 
@@ -86,6 +90,10 @@ class AdminEditForm(FlaskForm):
         'covers both .tlog and .bin files',
         validators=[Optional(),
                     NumberRange(min=0.0, max=ADMIN_MAX_LOG_RETENTION_DAYS)])
+    fc_sysid = IntegerField(
+        'Flight-controller MAVLink sysid (0 = any) — restricts binlog '
+        'reboot detection to packets from this sysid',
+        validators=[Optional(), NumberRange(min=0, max=255)])
     reset_timestamp = BooleanField('Reset signing timestamp (recover from clock skew)')
     submit = SubmitField('Save')
 

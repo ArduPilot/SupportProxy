@@ -146,6 +146,8 @@ def edit(port2):
                     and (form.log_retention_days.data is None
                          or form.log_retention_days.data == 0.0)):
                 ke.log_retention_days = keydb_lib.DEFAULT_LOG_RETENTION_DAYS
+            if form.fc_sysid.data is not None:
+                ke.fc_sysid = int(form.fc_sysid.data)
             if form.reset_timestamp.data:
                 ke.timestamp = 0
             ke.store(db)
@@ -167,6 +169,7 @@ def edit(port2):
         form.tlog_enabled.data = bool(ke.flags & keydb_lib.FLAG_TLOG)
         form.binlog_enabled.data = bool(ke.flags & keydb_lib.FLAG_BINLOG)
         form.log_retention_days.data = ke.log_retention_days
+        form.fc_sysid.data = ke.fc_sysid
     return render_template('admin_edit.html', form=form, entry=ke,
                            delete_form=delete_form)
 
