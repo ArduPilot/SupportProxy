@@ -14,7 +14,10 @@ WorkingDirectory=/home/support/proxy
 # webui.json as the single source of truth for host/port/behind_proxy
 # across cron and systemd launch paths.
 ExecStart=/home/support/SupportProxy/start_webadmin.sh
-Restart=on-failure
+# Match the supportproxy.service policy: respawn on any exit except a
+# deliberate `systemctl stop/restart`. Covers crashes, OOM-kill, and
+# someone running `pkill -f webadmin.wsgi:application` by hand.
+Restart=always
 RestartSec=5s
 StartLimitIntervalSec=60
 StartLimitBurst=5
