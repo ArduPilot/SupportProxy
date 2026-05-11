@@ -58,39 +58,82 @@
         });
     }
 
-    function attachPassphraseGenerator() {
+    function makeGenerateButton(label, onClick) {
+        var btn = document.createElement('button');
+        btn.type = 'button';
+        btn.textContent = 'Generate';
+        btn.className = 'generate-passphrase';
+        btn.setAttribute('aria-label', label);
+        btn.addEventListener('click', onClick);
+        return btn;
+    }
+
+    // Add-form variant: single "passphrase" field. Used on
+    // /admin/add via the admin_list.html "Add a new entry" form.
+    function attachAddFormGenerator() {
         var pw = document.getElementById('passphrase');
         if (!pw || pw.dataset.generatorAttached) {
             return;
         }
         pw.dataset.generatorAttached = '1';
 
-        var btn = document.createElement('button');
-        btn.type = 'button';
-        btn.textContent = 'Generate';
-        btn.className = 'generate-passphrase';
-        btn.setAttribute('aria-label',
-                         'Generate a random 12-character passphrase');
-        btn.addEventListener('click', function () {
-            pw.value = generatePassphrase(PASSPHRASE_LEN);
-            // Flip to text so the admin can read + copy it. The
-            // password-toggle eye widget still lets them switch back.
-            pw.type = 'text';
-            pw.focus();
-            pw.select();
-        });
+        var btn = makeGenerateButton(
+            'Generate a random 12-character passphrase',
+            function () {
+                pw.value = generatePassphrase(PASSPHRASE_LEN);
+                // Flip to text so the admin can read + copy it.
+                // The password-toggle eye widget still lets them
+                // switch back to dots.
+                pw.type = 'text';
+                pw.focus();
+                pw.select();
+            });
 
-        // password-toggle.js (loaded before us) wraps the input in a
-        // <span class="password-wrap">. Place the Generate button
-        // next to that wrap, inside the same .field div, so it sits
-        // alongside the eye button.
+        // password-toggle.js (loaded before us) wraps the input in
+        // <span class="password-wrap">. Place Generate inside the
+        // same .field div so it sits alongside the eye button.
         var field = pw.closest('.field') || pw.parentNode;
+        field.appendChild(btn);
+    }
+
+    // Edit-form variant: dual "new_passphrase" + "confirm_passphrase"
+    // fields. Used on the admin and owner edit pages. The button
+    // fills BOTH so the EqualTo validator passes immediately and the
+    // admin/owner can save without retyping. We avoid the existing
+    // KeyEntry's hashed-only design by NOT trying to show the
+    // current passphrase (we don't have it) — clicking Generate
+    // rotates the passphrase instead.
+    function attachEditFormGenerator() {
+        var newpw = document.getElementById('new_passphrase');
+        var confirm = document.getElementById('confirm_passphrase');
+        if (!newpw || !confirm || newpw.dataset.generatorAttached) {
+            return;
+        }
+        newpw.dataset.generatorAttached = '1';
+
+        var btn = makeGenerateButton(
+            'Generate a new random 12-character passphrase',
+            function () {
+                var v = generatePassphrase(PASSPHRASE_LEN);
+                newpw.value = v;
+                confirm.value = v;
+                // Reveal both so the admin can verify + copy before
+                // submitting. The password-toggle eye buttons still
+                // let either be hidden again.
+                newpw.type = 'text';
+                confirm.type = 'text';
+                newpw.focus();
+                newpw.select();
+            });
+
+        var field = newpw.closest('.field') || newpw.parentNode;
         field.appendChild(btn);
     }
 
     function attach() {
         attachPortAutosuggest();
-        attachPassphraseGenerator();
+        attachAddFormGenerator();
+        attachEditFormGenerator();
     }
 
     document.addEventListener('DOMContentLoaded', attach);
