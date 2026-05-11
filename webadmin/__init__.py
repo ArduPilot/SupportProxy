@@ -99,12 +99,12 @@ def create_app(test_config=None):
     from .auth import bp as auth_bp
     from .routes_owner import bp as owner_bp
     from .routes_admin import bp as admin_bp
-    from .tlogs import admin_bp as admin_tlogs_bp, owner_bp as owner_tlogs_bp
+    from .logs import admin_bp as admin_logs_bp, owner_bp as owner_logs_bp
     app.register_blueprint(auth_bp)
     app.register_blueprint(owner_bp)
     app.register_blueprint(admin_bp)
-    app.register_blueprint(admin_tlogs_bp)
-    app.register_blueprint(owner_tlogs_bp)
+    app.register_blueprint(admin_logs_bp)
+    app.register_blueprint(owner_logs_bp)
 
     @app.route('/')
     def index():

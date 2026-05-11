@@ -6,9 +6,10 @@ from wtforms.validators import (DataRequired, Length, NumberRange, Optional,
                                 EqualTo)
 
 
-# Owner cap on tlog retention. Anything higher requires admin.
-OWNER_MAX_TLOG_RETENTION_DAYS = 30.0
-ADMIN_MAX_TLOG_RETENTION_DAYS = 36500.0  # ~100 years; effectively unbounded
+# Owner cap on log retention (shared by .tlog and .bin files).
+# Anything higher requires admin.
+OWNER_MAX_LOG_RETENTION_DAYS = 30.0
+ADMIN_MAX_LOG_RETENTION_DAYS = 36500.0  # ~100 years; effectively unbounded
 
 # Render-kwargs for "this is a brand-new passphrase, browser, don't
 # autofill the user's saved login passphrase here". Without this Chrome
@@ -49,10 +50,11 @@ class OwnerEditForm(FlaskForm):
     binlog_enabled = BooleanField(
         'Record ArduPilot bin logs over MAVLink (.bin) — '
         'firmware must have LOG_BACKEND_TYPE mavlink bit set')
-    tlog_retention_days = FloatField(
-        'Tlog + bin retention (days, 0 = keep forever, owners capped at 30)',
+    log_retention_days = FloatField(
+        'Log retention (days, 0 = keep forever, owners capped at 30) — '
+        'covers both .tlog and .bin files',
         validators=[Optional(),
-                    NumberRange(min=0.0, max=OWNER_MAX_TLOG_RETENTION_DAYS)])
+                    NumberRange(min=0.0, max=OWNER_MAX_LOG_RETENTION_DAYS)])
     reset_timestamp = BooleanField('Reset signing timestamp (recover from clock skew)')
     submit = SubmitField('Save')
 
@@ -79,10 +81,11 @@ class AdminEditForm(FlaskForm):
     binlog_enabled = BooleanField(
         'Record ArduPilot bin logs over MAVLink (.bin) — '
         'firmware must have LOG_BACKEND_TYPE mavlink bit set')
-    tlog_retention_days = FloatField(
-        'Tlog + bin retention (days, 0 = keep forever)',
+    log_retention_days = FloatField(
+        'Log retention (days, 0 = keep forever) — '
+        'covers both .tlog and .bin files',
         validators=[Optional(),
-                    NumberRange(min=0.0, max=ADMIN_MAX_TLOG_RETENTION_DAYS)])
+                    NumberRange(min=0.0, max=ADMIN_MAX_LOG_RETENTION_DAYS)])
     reset_timestamp = BooleanField('Reset signing timestamp (recover from clock skew)')
     submit = SubmitField('Save')
 

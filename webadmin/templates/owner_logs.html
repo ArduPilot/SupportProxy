@@ -1,21 +1,21 @@
 {% extends "base.html" %}
-{% block title %}My tlogs — {{ config.WEBUI_TITLE }}{% endblock %}
+{% block title %}My logs — {{ config.WEBUI_TITLE }}{% endblock %}
 {% block auto_refresh_seconds %}5{% endblock %}
 {% block content %}
-<h2>My tlogs ({{ entry.port1 }}/{{ entry.port2 }})</h2>
+<h2>My logs ({{ entry.port1 }}/{{ entry.port2 }})</h2>
 
 <p><a href="{{ url_for('owner.me') }}">back to my entry</a></p>
 
 <h3>Dates</h3>
-<ul class="tlog-dates">
+<ul class="log-dates">
   {% for d in dates %}
   <li>
     {% if date == d %}<strong>{{ d }}</strong>
-    {% else %}<a href="{{ url_for('owner_tlogs.owner_sessions', date=d) }}">{{ d }}</a>
+    {% else %}<a href="{{ url_for('owner_logs.owner_sessions', date=d) }}">{{ d }}</a>
     {% endif %}
   </li>
   {% else %}
-  <li><em>no tlogs recorded yet</em></li>
+  <li><em>no logs recorded yet</em></li>
   {% endfor %}
 </ul>
 
@@ -30,7 +30,7 @@
       <td>{{ s.size }} bytes</td>
       <td><time datetime="{{ s.mtime_iso }}">{{ s.mtime_utc }}</time></td>
       <td>
-        <a href="{{ url_for('owner_tlogs.owner_download',
+        <a href="{{ url_for('owner_logs.owner_download',
                             date=date, session_name=s.name) }}">download</a>
       </td>
     </tr>
