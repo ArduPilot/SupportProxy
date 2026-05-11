@@ -17,9 +17,15 @@ $WEBADMIN_KEYDB_PATH is /home/proxy/keys.tdb then create_app() reads
 
     {
         "title": "Support Proxy",   # site name shown in nav + <title>
-        "mode":  "standalone",      # or "apache" — sets BEHIND_PROXY
+        "mode":  "standalone",      # or "apache" — sets BEHIND_PROXY.
+                                    # Use the explicit "behind_proxy"
+                                    # field below if you also want
+                                    # start_proxy.sh to launch gunicorn.
         "host":  "127.0.0.1",       # used by start_proxy.sh, not the app
-        "port":  8080               # used by start_proxy.sh, not the app
+        "port":  8080,              # used by start_proxy.sh, not the app
+        "behind_proxy": true        # set BEHIND_PROXY=True independently
+                                    # of the "mode" field (nginx /
+                                    # Apache reverse proxy in front).
     }
 """
 import json
@@ -72,6 +78,8 @@ def _load_webui_json(app):
         if isinstance(cfg.get('title'), str):
             app.config['WEBUI_TITLE'] = cfg['title']
         if cfg.get('mode') == 'apache':
+            app.config['BEHIND_PROXY'] = True
+        if cfg.get('behind_proxy') is True:
             app.config['BEHIND_PROXY'] = True
         if isinstance(cfg.get('github_repo'), str):
             app.config['GITHUB_REPO_URL'] = cfg['github_repo']
