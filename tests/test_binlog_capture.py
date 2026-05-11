@@ -286,6 +286,98 @@ class TestBinlogCapture:
         finally:
             _terminate(proc)
 
+    def test_proxy_sends_remote_log_start_when_idle(self, proxy_workdir):
+        """ArduPilot's mavlink-backend logger sits in
+        _sending_to_client = false until it receives a STATUS message
+        with seqno=MAV_REMOTE_LOG_DATA_BLOCK_START (2147483646) +
+        status=ACK. While in that state, logging_failed() returns
+        true and pre-arm rejects the vehicle. The proxy must
+        therefore send START periodically (1 Hz) any time
+        KEY_FLAG_BINLOG is set and no DATA_BLOCK has arrived yet.
+
+        Test: drive a single user-side packet (HEARTBEAT) so the
+        proxy registers conn1, then wait and assert the proxy emits
+        REMOTE_LOG_BLOCK_STATUS(seqno=START_MAGIC, status=ACK) back
+        through the user-side socket."""
+        START_MAGIC = 2147483646
+        _setup_db(proxy_workdir, PORT_USER, PORT_ENG, 'bintest', 'bp',
+                  'binlog')
+        proc = _start_proxy(proxy_workdir, PORT_ENG)
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.bind(('127.0.0.1', 0))
+            dest = ('127.0.0.1', PORT_USER)
+
+            # Drive HEARTBEATs the way a real ArduPilot does (~1 Hz) so
+            # the proxy's select() keeps waking and main_loop.tick()
+            # has a chance to fire. A single quiet HEARTBEAT would
+            # only trigger one tick before main_loop's idle-timeout
+            # kicks in.
+            from pymavlink.dialects.v20 import ardupilotmega as mav
+            hb_mav = mav.MAVLink(file=None, srcSystem=1, srcComponent=1)
+            hb_msg = mav.MAVLink_heartbeat_message(
+                type=0, autopilot=0, base_mode=0, custom_mode=0,
+                system_status=0, mavlink_version=3)
+            hb_bytes = hb_msg.pack(hb_mav)
+            collected = []
+            sock.settimeout(0.1)
+            deadline = time.time() + 3.0
+            while time.time() < deadline:
+                sock.sendto(hb_bytes, dest)
+                # Drain whatever's queued in the kernel buffer.
+                try:
+                    while True:
+                        data, _ = sock.recvfrom(2048)
+                        collected.append(data)
+                except socket.timeout:
+                    pass
+            from pymavlink.dialects.v20 import ardupilotmega as mav2
+            decoder = mav2.MAVLink(file=None)
+            start_seqnos = []
+            for blob in collected:
+                try:
+                    msgs = decoder.parse_buffer(blob) or []
+                except mav2.MAVError:
+                    continue
+                for m in msgs:
+                    if m.get_type() == 'REMOTE_LOG_BLOCK_STATUS' \
+                       and m.seqno == START_MAGIC and m.status == 1:
+                        start_seqnos.append(m.seqno)
+            assert len(start_seqnos) >= 2, \
+                'expected ≥ 2 START messages in 3s, got %d' % len(start_seqnos)
+            sock.close()
+        finally:
+            _terminate(proc)
+
+    def test_proxy_stops_sending_start_after_first_data_block(self, proxy_workdir):
+        """Once the vehicle starts streaming (any DATA_BLOCK arrives),
+        the proxy no longer needs to nudge it — the continuous ACK
+        traffic from the proxy's data path keeps ArduPilot's 10 s
+        client-timeout from firing. Verify START stops once a real
+        DATA_BLOCK arrives."""
+        START_MAGIC = 2147483646
+        _setup_db(proxy_workdir, PORT_USER, PORT_ENG, 'bintest', 'bp',
+                  'binlog')
+        proc = _start_proxy(proxy_workdir, PORT_ENG)
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.bind(('127.0.0.1', 0))
+            dest = ('127.0.0.1', PORT_USER)
+
+            # Vehicle starts streaming right away.
+            _send_data_block(sock, dest, 0, b'\x10' * 50)
+            _send_data_block(sock, dest, 1, b'\x11' * 50)
+            time.sleep(0.5)
+            # Drain the ACKs we expect for the data blocks.
+            _recv_block_statuses(sock, timeout=0.5)
+            # Now wait 2 s and confirm NO new START messages.
+            statuses = _recv_block_statuses(sock, timeout=2.0)
+            assert not any(s == START_MAGIC for s, _ in statuses), \
+                'unexpected START after data flowing; saw %r' % statuses
+            sock.close()
+        finally:
+            _terminate(proc)
+
     def test_strict_start_gate_discards_pre_seqno_0(self, proxy_workdir):
         """A vehicle that was already streaming when SupportProxy
         activated will have a non-zero seqno on its first DATA_BLOCK.

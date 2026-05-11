@@ -788,9 +788,13 @@ static void main_loop(struct listen_port *p)
 	    }
 	}
 
-	// Drain any pending REMOTE_LOG_BLOCK_STATUS ACKs/NACKs through
-	// the user-side mav1. Cheap when no binlog session is active.
-	if (binlog.is_open()) {
+	// Pump binlog state: before the first DATA_BLOCK this emits the
+	// magic START to nudge the vehicle into streaming (and to make
+	// its pre-arm logging check pass); afterwards it drains pending
+	// ACKs / NACKs. Needs to fire whenever binlog is enabled, not
+	// just when the file is open, since the START phase predates
+	// the file.
+	if (binlog_enabled && have_conn1) {
 	    binlog.tick(mav1);
 	}
 

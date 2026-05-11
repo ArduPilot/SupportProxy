@@ -251,11 +251,43 @@ bool BinlogWriter::send_status(MAVLink &user_link, uint32_t seqno,
 
 void BinlogWriter::tick(MAVLink &user_link)
 {
-    if (fp == nullptr || !any_block_seen) {
+    double now_s = time_seconds();
+
+    if (!any_block_seen) {
+        // Vehicle hasn't begun streaming yet. Send the magic
+        // REMOTE_LOG_BLOCK_STATUS(status=ACK,
+        // seqno=MAV_REMOTE_LOG_DATA_BLOCK_START) at 1 Hz: that's what
+        // flips ArduPilot's _sending_to_client = true (so its
+        // pre-arm logging_failed() check passes) AND resets the
+        // vehicle's seqno counter to 0, which our file-open gate is
+        // already waiting for. target_system/target_component are
+        // left at 0 (broadcast) because we haven't latched a vehicle
+        // sysid yet — ArduPilot's handle_ack() picks up the proxy's
+        // src sysid/compid from the message header anyway, not the
+        // body's target fields.
+        if (now_s - last_start_sent_s >= START_REPEAT_S) {
+            mavlink_message_t msg {};
+            mavlink_msg_remote_log_block_status_pack_chan(
+                PROXY_SYSID, PROXY_COMPID, CHAN_COMM1, &msg,
+                /*target_system*/ 0, /*target_component*/ 0,
+                /*seqno*/ MAV_REMOTE_LOG_DATA_BLOCK_START,
+                /*status*/ MAV_REMOTE_LOG_DATA_BLOCK_ACK);
+            uint8_t buf[MAVLINK_MAX_PACKET_LEN];
+            uint16_t len = mavlink_msg_to_send_buffer(buf, &msg);
+            if (len > 0 && user_link.send_buf(buf, len) == ssize_t(len)) {
+                last_start_sent_s = now_s;
+            }
+        }
+        return;
+    }
+
+    if (fp == nullptr) {
         return;
     }
 
     // Drain ACKs first — they're cheap and keep the vehicle happy.
+    // The continuous ACK traffic also resets ArduPilot's 10-second
+    // _last_response_time client-timeout (see AP_Logger_MAVLink.cpp).
     unsigned ack_budget = MAX_ACKS_PER_TICK;
     while (ack_budget > 0 && !pending_acks.empty()) {
         uint32_t s = pending_acks.front();
@@ -264,7 +296,6 @@ void BinlogWriter::tick(MAVLink &user_link)
         ack_budget--;
     }
 
-    double now_s = time_seconds();
     drop_stale_nack_state(now_s);
 
     // Re-NACK any missing seqno whose 100 ms throttle has elapsed.
