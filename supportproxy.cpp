@@ -78,9 +78,10 @@ struct listen_port {
 
 static struct listen_port *ports;
 
-// PID of the long-lived tlog-cleanup child forked from main(). Tracked
-// separately from per-port-pair children so check_children() can
-// respawn it if it dies, rather than printing "No child for X found".
+// PID of the long-lived log-cleanup child forked from main() that
+// ages out old .tlog / .bin files. Tracked separately from
+// per-port-pair children so check_children() can respawn it if it
+// dies, rather than printing "No child for X found".
 static pid_t cleanup_child_pid = 0;
 static void fork_cleanup_child(void);
 
@@ -954,7 +955,7 @@ static void check_children(void)
             break;
         }
         if (pid == cleanup_child_pid) {
-            printf("tlog cleanup child %d exited; respawning\n", int(pid));
+            printf("log cleanup child %d exited; respawning\n", int(pid));
             cleanup_child_pid = 0;
             fork_cleanup_child();
             continue;
@@ -985,7 +986,7 @@ static void check_children(void)
 /*
   fork the long-lived cleanup child once. The child closes all listening
   sockets it inherited from the parent (so it doesn't keep the ports
-  bound), then runs tlog_cleanup_loop forever.
+  bound), then runs log_cleanup_loop forever.
  */
 static void fork_cleanup_child(void)
 {
@@ -994,7 +995,7 @@ static void fork_cleanup_child(void)
         for (auto *p = ports; p; p = p->next) {
             close_sockets(p);
         }
-        tlog_cleanup_loop();
+        log_cleanup_loop();
         _exit(0);
     }
     if (pid < 0) {
@@ -1002,7 +1003,7 @@ static void fork_cleanup_child(void)
         return;
     }
     cleanup_child_pid = pid;
-    printf("tlog cleanup child %d started\n", int(pid));
+    printf("log cleanup child %d started\n", int(pid));
 }
 
 /*
