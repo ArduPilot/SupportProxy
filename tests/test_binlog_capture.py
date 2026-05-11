@@ -766,3 +766,147 @@ class TestBinlogCapture:
             sock.close()
         finally:
             _terminate(proc)
+
+    def test_seqno_jump_above_100mb_rejected(self, proxy_workdir):
+        """A peer that opens the file with seqno=0 and then sends a
+        block whose offset is more than 100 MB ahead must be silently
+        dropped (no ACK, no bitmap growth, no write). Without the cap
+        a malicious user-side peer can sparse-extend the file to many
+        GB and grow seen_bitmap to hundreds of MB of RSS."""
+        _setup_db(proxy_workdir, PORT_USER, PORT_ENG, 'bintest', 'bp',
+                  'binlog')
+        proc = _start_proxy(proxy_workdir, PORT_ENG)
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.bind(('127.0.0.1', 0))
+            dest = ('127.0.0.1', PORT_USER)
+
+            # seqno=0 opens the file legitimately.
+            _send_data_block(sock, dest, 0, b'\x11' * 50)
+            assert _wait_for(
+                lambda: _bin_path(proxy_workdir, PORT_ENG).exists()
+                        and _bin_path(proxy_workdir, PORT_ENG).stat().st_size
+                            >= 200,
+                timeout=5.0), 'session1.bin not opened on seqno=0'
+
+            # seqno=524289 -> offset 104,857,800 = 100 MB + 200 B.
+            # Expansion 104,857,800 > MAX_FORWARD_JUMP_BYTES (100 MiB).
+            _send_data_block(sock, dest, 524289, b'\xff' * 50)
+            time.sleep(0.5)
+            size = _bin_path(proxy_workdir, PORT_ENG).stat().st_size
+            # File must still be just 200 bytes (the seqno=0 block).
+            assert size == 200, \
+                'forward-jump cap failed: file is %d bytes' % size
+
+            # A legitimate small forward jump (seqno=10) still works.
+            _send_data_block(sock, dest, 10, b'\x22' * 50)
+            assert _wait_for(
+                lambda: _bin_path(proxy_workdir, PORT_ENG).stat().st_size
+                        == 11 * 200,
+                timeout=3.0), 'follow-on legitimate block was wrongly dropped'
+
+            sock.close()
+        finally:
+            _terminate(proc)
+
+    def test_disk_quota_blocks_writes_when_over_cap(self, proxy_workdir):
+        """Pre-seed the per-port2 logs/<port2>/ tree with sparse files
+        totalling > 1 GiB. Subsequent legitimate blocks must be
+        dropped at write time because the per-port-pair quota
+        (MAX_PER_PORT2_BYTES = 1 GiB in binlog.h) is already
+        breached."""
+        _setup_db(proxy_workdir, PORT_USER, PORT_ENG, 'bintest', 'bp',
+                  'binlog')
+        # Pre-seed BEFORE starting the proxy so the cleanup pass
+        # doesn't get a chance to age them out.
+        date_dir = (proxy_workdir / 'logs' / str(PORT_ENG) / _today_str())
+        date_dir.mkdir(parents=True, exist_ok=True)
+        prefilled = date_dir / 'prefill.bin'
+        # Sparse: 1.2 GiB apparent size, ~0 bytes actually allocated.
+        with open(prefilled, 'wb') as f:
+            f.truncate(int(1.2 * 1024 * 1024 * 1024))
+
+        proc = _start_proxy(proxy_workdir, PORT_ENG)
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.bind(('127.0.0.1', 0))
+            dest = ('127.0.0.1', PORT_USER)
+
+            # seqno=0 will pass the strict-start gate and open
+            # session1.bin, but the quota check should reject the
+            # actual write — session1.bin should stay empty.
+            _send_data_block(sock, dest, 0, b'\xaa' * 50)
+            time.sleep(1.0)
+
+            bin_path = _bin_path(proxy_workdir, PORT_ENG)
+            # session1.bin may or may not exist (open() succeeds; write
+            # is rejected). Either is acceptable. If it exists, it must
+            # be 0 bytes.
+            if bin_path.exists():
+                sz = bin_path.stat().st_size
+                assert sz == 0, \
+                    ('quota check failed: session1.bin is %d bytes '
+                     '(should be 0 — write rejected)' % sz)
+
+            sock.close()
+        finally:
+            _terminate(proc)
+
+    def test_late_old_block_after_rotation_dropped(self, proxy_workdir):
+        """After SYSTEM_TIME-detected reboot, rotate_for_reboot()
+        closes the file and arms pending_session_n_ but does NOT
+        re-open. A delayed pre-reboot block (seqno > 0) arriving
+        before the new vehicle boot's seqno=0 must be silently
+        dropped — session2.bin must not be created until a fresh
+        seqno=0 from the rebooted vehicle."""
+        _setup_db(proxy_workdir, PORT_USER, PORT_ENG, 'bintest', 'bp',
+                  'binlog')
+        proc = _start_proxy(proxy_workdir, PORT_ENG)
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.bind(('127.0.0.1', 0))
+            dest = ('127.0.0.1', PORT_USER)
+
+            # Bring up session1.bin and accumulate enough blocks to
+            # cross the reboot-detection threshold semantics.
+            _send_system_time(sock, dest, time_boot_ms=60_000)
+            for seq in range(5):
+                _send_data_block(sock, dest, seq, b'\xaa' * 50)
+            assert _wait_for(
+                lambda: _bin_path(proxy_workdir, PORT_ENG, 1).exists()
+                        and _bin_path(proxy_workdir, PORT_ENG, 1)
+                            .stat().st_size >= 5 * 200,
+                timeout=5.0), 'session1.bin not written'
+
+            # Reboot signal — backward jump.
+            _send_system_time(sock, dest, time_boot_ms=1_000)
+            time.sleep(0.3)
+
+            # NOW a stale pre-reboot block (seqno > 0) arrives. Without
+            # the deferred-open fix this would sparse-write into the
+            # newly-opened session2.bin at offset 12345*200.
+            _send_data_block(sock, dest, 12345, b'\xbb' * 50)
+            time.sleep(0.5)
+
+            assert not _bin_path(proxy_workdir, PORT_ENG, 2).exists(), \
+                'session2.bin should NOT exist before fresh seqno=0'
+
+            # Now the rebooted vehicle sends seqno=0 — session2.bin
+            # opens lazily via the gate.
+            _send_data_block(sock, dest, 0, b'\xcc' * 50)
+            assert _wait_for(
+                lambda: _bin_path(proxy_workdir, PORT_ENG, 2).exists()
+                        and _bin_path(proxy_workdir, PORT_ENG, 2)
+                            .stat().st_size >= 200,
+                timeout=5.0), \
+                'session2.bin not created after fresh seqno=0'
+            # Must be the NEW boot's payload, not the stale block.
+            with open(_bin_path(proxy_workdir, PORT_ENG, 2), 'rb') as f:
+                assert f.read(1) == b'\xcc'
+            assert (_bin_path(proxy_workdir, PORT_ENG, 2).stat().st_size
+                    == 200), \
+                'session2.bin grew beyond the seqno=0 block — stale block leaked in'
+
+            sock.close()
+        finally:
+            _terminate(proc)
