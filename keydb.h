@@ -44,7 +44,7 @@ struct KeyEntry {
     uint32_t count2;
     char name[32];
     uint32_t flags;
-    float    tlog_retention_days;   // 0.0 = forever; fractional values allowed for tests
+    float    log_retention_days;    // tlog + bin; 0.0 = forever; fractional values allowed for tests
     uint32_t reserved[16];
 };
 

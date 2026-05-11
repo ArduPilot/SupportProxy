@@ -56,7 +56,7 @@ def proxy_workdir(tmp_path):
     db.transaction_start()
     keydb_lib.add_entry(db, PORT_USER, PORT_ENG, 'tlog_test', 'tlogpw')
     keydb_lib.set_flag(db, PORT_ENG, 'tlog')
-    keydb_lib.set_tlog_retention(db, PORT_ENG, 7.0)
+    keydb_lib.set_log_retention(db, PORT_ENG, 7.0)
     db.transaction_prepare_commit()
     db.transaction_commit()
     db.close()

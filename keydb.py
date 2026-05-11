@@ -113,11 +113,11 @@ def main():
             except ValueError:
                 raise CLIError("retention DAYS must be a number, got %r"
                                % args.args[1])
-            ke = keydb_lib.set_tlog_retention(db, int(args.args[0]), days)
+            ke = keydb_lib.set_log_retention(db, int(args.args[0]), days)
             if days == 0.0:
-                print("Set tlog retention=0 (keep forever) for %s" % ke)
+                print("Set log retention=0 (keep forever) for %s" % ke)
             else:
-                print("Set tlog retention=%.4g days for %s" % (days, ke))
+                print("Set log retention=%.4g days for %s" % (days, ke))
 
         elif args.action == "stats":
             # Live-connection stats from connections.tdb (sibling of
