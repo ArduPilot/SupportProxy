@@ -3,6 +3,8 @@ Description=SupportProxy web admin UI (gunicorn)
 Documentation=https://github.com/ArduPilot/SupportProxy
 After=network-online.target supportproxy.service
 Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
 
 [Service]
 Type=simple
@@ -19,8 +21,6 @@ ExecStart=/home/support/SupportProxy/start_webadmin.sh
 # someone running `pkill -f webadmin.wsgi:application` by hand.
 Restart=always
 RestartSec=5s
-StartLimitIntervalSec=60
-StartLimitBurst=5
 StandardOutput=append:/home/support/proxy/webui.log
 StandardError=inherit
 

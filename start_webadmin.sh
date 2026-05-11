@@ -36,6 +36,11 @@ export WEBADMIN_SECRET_KEY="$(cat .webadmin_secret)"
 export WEBADMIN_KEYDB_PATH="$(pwd)/keys.tdb"
 export PYTHONPATH="$HOME/SupportProxy"
 
+# Prepend ~/.local/bin for pip user-install gunicorn (the README's
+# alternative to a venv). systemd's default PATH doesn't include it,
+# so without this exec gunicorn would exit 127.
+export PATH="$HOME/.local/bin:$PATH"
+
 gunicorn_args=( -w 1 -k gthread --threads 4
                 --timeout 60 --graceful-timeout 30
                 -b "$webui_host:$webui_port" )
