@@ -125,6 +125,45 @@ class TestAdminAdd:
         assert ke.port1 == 15000
         assert ke.passphrase_matches('newpass')
 
+    def test_admin_rejects_port_below_range(self, client, keydb_path):
+        """Port numbers must be in 10000..60000."""
+        login_as(client, BOB_PORT1, BOB_PASS)
+        client.post('/admin/add', data={
+            'port1': 9999,
+            'port2': 10999,
+            'name': 'belowrange',
+            'passphrase': 'newpass',
+            'submit': 'Add',
+        })
+        assert fetch_entry(keydb_path, 10999) is None
+
+    def test_admin_rejects_port_above_range(self, client, keydb_path):
+        login_as(client, BOB_PORT1, BOB_PASS)
+        client.post('/admin/add', data={
+            'port1': 50001,
+            'port2': 60001,
+            'name': 'aboverange',
+            'passphrase': 'newpass',
+            'submit': 'Add',
+        })
+        assert fetch_entry(keydb_path, 60001) is None
+
+    def test_admin_rejects_overlapping_port(self, client, keydb_path):
+        """add_entry already enforces uniqueness across port1+port2;
+        confirm the route surfaces the failure rather than silently
+        succeeding."""
+        login_as(client, BOB_PORT1, BOB_PASS)
+        # ALICE_PORT1 is already taken; trying to reuse it must fail.
+        resp = client.post('/admin/add', data={
+            'port1': ALICE_PORT1,
+            'port2': 15999,
+            'name': 'overlap',
+            'passphrase': 'newpass',
+            'submit': 'Add',
+        }, follow_redirects=True)
+        assert b'already exists' in resp.data or b'Add failed' in resp.data
+        assert fetch_entry(keydb_path, 15999) is None
+
 
 class TestAdminDelete:
     def test_admin_can_delete_other(self, client, keydb_path):

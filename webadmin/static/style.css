@@ -80,3 +80,14 @@ footer.version a:hover { text-decoration: underline; }
 }
 .password-wrap button.toggle:hover { color: #222; }
 .password-wrap button.toggle svg { width: 18px; height: 18px; display: block; }
+
+/* "Generate" button next to a passphrase field on the admin-add
+   form, injected by admin-add.js. Sits alongside the password-wrap
+   eye button on the same .field row. */
+button.generate-passphrase {
+    margin-left: 0.5rem;
+    padding: 0.15rem 0.6rem;
+    font-size: 0.9em;
+    cursor: pointer;
+    vertical-align: middle;
+}
