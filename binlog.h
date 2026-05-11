@@ -73,11 +73,29 @@ public:
                       const mavlink_message_t &msg);
 
     /*
-      Drain pending ACKs / NACKs through the user-side MAVLink. Called
-      once per main_loop iteration. Internally rate-limits NACKs to
-      one per missing-seqno per 0.1 s; ACKs go out as fast as the
-      caller drives us, capped at MAX_ACKS_PER_TICK so a backlog can't
-      starve other work.
+      Periodic pump. Called once per main_loop iteration whenever
+      KEY_FLAG_BINLOG is set on the entry (regardless of whether the
+      file has been opened yet).
+
+      Two phases:
+
+      * Before any DATA_BLOCK has arrived: emit a
+        REMOTE_LOG_BLOCK_STATUS(status=ACK, seqno=START_MAGIC) at 1 Hz.
+        That magic seqno (MAV_REMOTE_LOG_DATA_BLOCK_START) flips
+        ArduPilot's AP_Logger_MAVLink::_sending_to_client to true,
+        which is what makes logging_failed() return false (and so
+        ArduPilot pre-arm pass) — see
+        AP_Logger_MAVLink::handle_ack in libraries/AP_Logger. The
+        side-effect on the vehicle is that it resets its seqno
+        counter to 0 and starts streaming, which dovetails with our
+        strict seqno==0 file-open gate.
+
+      * After the first DATA_BLOCK (any_block_seen = true): drain
+        pending ACKs and emit NACKs for gaps, rate-limited (NACK at
+        ≤ 10 Hz per missing seqno, ACKs as fast as the caller drives
+        us, capped at MAX_ACKS_PER_TICK so a backlog can't starve
+        other work). The continuous ACK traffic also keeps the
+        vehicle's 10-second client-timeout from firing.
      */
     void tick(MAVLink &user_link);
 
@@ -94,6 +112,9 @@ private:
     // highest-seen seqno is this many blocks ahead — whichever first.
     static constexpr double   NACK_GIVEUP_S      = 60.0;
     static constexpr uint32_t NACK_GIVEUP_BLOCKS = 200;
+    // How often to re-send START until the vehicle starts streaming.
+    // ArduPilot's client-timeout is 10 s so 1 Hz is comfortable.
+    static constexpr double   START_REPEAT_S     = 1.0;
 
     FILE *fp = nullptr;
 
@@ -105,6 +126,10 @@ private:
 
     uint32_t highest_seen = 0;
     bool any_block_seen = false;
+    // Monotonic timestamp of the most recent START we sent. Used by
+    // tick() to throttle the 1 Hz start-loop while the vehicle hasn't
+    // begun streaming yet.
+    double last_start_sent_s = 0.0;
 
     // First-seen sysid/compid of the vehicle on this log session,
     // used as target_{system,component} when we send ACK/NACK back.
