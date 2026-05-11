@@ -19,6 +19,16 @@
 #                        away. Re-run with this flag once the new
 #                        stack has bedded in for a day or two.
 #
+#   SP_SKIP_NGINX=1    — skip everything web-server-related (steps
+#                        1-6: apache stop, nginx install, vhost
+#                        write, landing page, nginx reload, certbot
+#                        renewer migration). Use on hosts where
+#                        nginx + /dashboard are already configured
+#                        correctly AND have a custom vhost (e.g. a
+#                        root redirect) that must be preserved.
+#                        Run only the webui.json / systemd / verify
+#                        steps.
+#
 # What it does:
 #   1. Sanity-check the user, home dir, source dir, data dir, cert dir.
 #   2. Stop + disable apache2 (preserves binary + config for rollback).
@@ -61,6 +71,10 @@ SUDO=
 
 echo "===== migrate $SP_DOMAIN (user=$SP_USER home=$HOMEDIR) ====="
 echo
+
+if [ "${SP_SKIP_NGINX:-}" = "1" ]; then
+echo "--- SP_SKIP_NGINX=1: skipping steps 1-6 (apache stop, nginx install, vhost, landing page, reload, certbot renewer migration) ---"
+else
 
 # ----- 1. Stop + disable apache2 -------------------------------------
 echo "--- step 1/9: stop and disable apache2 (preserved on disk for rollback) ---"
@@ -185,6 +199,8 @@ if [ -f "$RENEW_CONF" ]; then
 else
     echo "no $RENEW_CONF — cert may have been issued differently; check certbot manually"
 fi
+
+fi   # end of SP_SKIP_NGINX guard
 
 # ----- 7. webui.json -------------------------------------------------
 echo
