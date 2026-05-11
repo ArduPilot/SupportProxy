@@ -21,7 +21,7 @@ KEYDB_PY = os.path.join(_REPO_ROOT, 'keydb.py')
 
 
 def test_pack_format_size_is_168():
-    """The on-disk record is 168 bytes after appending tlog_retention_days
+    """The on-disk record is 168 bytes after appending log_retention_days
     + reserved[16]."""
     assert struct.calcsize(keydb_lib.PACK_FORMAT) == 168
     assert keydb_lib.KEYENTRY_CURRENT_SIZE == 168
@@ -33,7 +33,7 @@ def test_pack_unpack_roundtrip():
     e.name = 'TestEntry'
     e.set_passphrase('hunter2')
     e.flags = keydb_lib.FLAG_TLOG | keydb_lib.FLAG_ADMIN
-    e.tlog_retention_days = 0.0001
+    e.log_retention_days = 0.0001
     data = e.pack()
     assert len(data) == 168
 
@@ -43,7 +43,7 @@ def test_pack_unpack_roundtrip():
     assert e2.name == 'TestEntry'
     assert e2.flags == keydb_lib.FLAG_TLOG | keydb_lib.FLAG_ADMIN
     # float32 quantisation: tolerate ~1e-7 relative error
-    assert abs(e2.tlog_retention_days - 0.0001) < 1e-7
+    assert abs(e2.log_retention_days - 0.0001) < 1e-7
     assert e2.reserved == [0] * 16
 
 
@@ -67,7 +67,7 @@ def test_legacy_104byte_record_zero_extends():
     decoded.unpack(legacy)
     assert decoded.port1 == 20001
     assert decoded.flags == keydb_lib.FLAG_ADMIN
-    assert decoded.tlog_retention_days == 0.0
+    assert decoded.log_retention_days == 0.0
     assert decoded.reserved == [0] * 16
 
     # Re-pack: should emit the full 168-byte modern layout.
@@ -147,7 +147,7 @@ def test_setflag_tlog_auto_defaults_retention(tmp_path):
     ke.fetch(db)
     db.transaction_cancel()
     assert ke.flags & keydb_lib.FLAG_TLOG
-    assert ke.tlog_retention_days == keydb_lib.DEFAULT_TLOG_RETENTION_DAYS
+    assert ke.log_retention_days == keydb_lib.DEFAULT_LOG_RETENTION_DAYS
 
 
 def test_setflag_tlog_keeps_explicit_zero(tmp_path):
@@ -167,30 +167,30 @@ def test_setflag_tlog_keeps_explicit_zero(tmp_path):
     keydb_lib.add_entry(db, 12001, 12002, 'persist', 'pw')
     # First enable: default kicks in.
     ke = keydb_lib.set_flag(db, 12002, 'tlog')
-    assert ke.tlog_retention_days == keydb_lib.DEFAULT_TLOG_RETENTION_DAYS
+    assert ke.log_retention_days == keydb_lib.DEFAULT_LOG_RETENTION_DAYS
     # Owner explicitly raises retention; later toggle flag off then on:
-    keydb_lib.set_tlog_retention(db, 12002, 14.0)
+    keydb_lib.set_log_retention(db, 12002, 14.0)
     keydb_lib.clear_flag(db, 12002, 'tlog')
     # Cleared flag; retention still 14 (not zeroed).
     ke2 = keydb_lib.KeyEntry(12002)
     ke2.fetch(db)
-    assert ke2.tlog_retention_days == 14.0
+    assert ke2.log_retention_days == 14.0
     # Re-enabling from non-zero retention should NOT touch retention.
     keydb_lib.set_flag(db, 12002, 'tlog')
     ke3 = keydb_lib.KeyEntry(12002)
     ke3.fetch(db)
     db.transaction_cancel()
-    assert ke3.tlog_retention_days == 14.0
+    assert ke3.log_retention_days == 14.0
     assert ke3.flags & keydb_lib.FLAG_TLOG
 
 
-def test_set_tlog_retention_rejects_negative(tmp_path):
+def test_set_log_retention_rejects_negative(tmp_path):
     p = str(tmp_path / 'keys.tdb')
     db = keydb_lib.init_db(p)
     db.transaction_start()
     keydb_lib.add_entry(db, 13001, 13002, 'neg', 'pw')
     with pytest.raises(keydb_lib.CLIError):
-        keydb_lib.set_tlog_retention(db, 13002, -1.0)
+        keydb_lib.set_log_retention(db, 13002, -1.0)
     db.transaction_cancel()
 
 
@@ -235,4 +235,4 @@ def test_cli_setflag_tlog_then_list_shows_retention(tmp_path):
     assert r.returncode == 0
     r = _run_cli(p, 'list')
     assert 'flags=tlog' in r.stdout
-    assert 'tlog_retention=7' in r.stdout
+    assert 'log_retention=7' in r.stdout

@@ -23,7 +23,7 @@ KEY_MAGIC = 0x6b73e867a72cdd1f
 # Pre-flags layout was 96 bytes. Anything smaller is invalid; anything bigger
 # is acceptable (extra trailing bytes belong to a newer schema we ignore).
 #
-# The current C++ struct ends with `uint32_t flags`, `float tlog_retention_days`,
+# The current C++ struct ends with `uint32_t flags`, `float log_retention_days`,
 # and `uint32_t reserved[16]`. All three are 4-byte aligned and slot in cleanly
 # after the existing fields, so the struct is 168 bytes with no trailing pad.
 # When a future field is added, append it to PACK_FORMAT and add explicit
@@ -45,7 +45,7 @@ FLAG_NAMES = {
     "binlog":    FLAG_BINLOG,
 }
 
-DEFAULT_TLOG_RETENTION_DAYS = 7.0
+DEFAULT_LOG_RETENTION_DAYS = 7.0
 RESERVED_WORDS = 16
 
 
@@ -64,7 +64,7 @@ class KeyEntry:
         self.count2 = 0
         self.name = ''
         self.flags = 0
-        self.tlog_retention_days = 0.0
+        self.log_retention_days = 0.0
         self.reserved = [0] * RESERVED_WORDS
         self.port2 = port2
         # opaque trailing bytes from a record written by a future schema
@@ -77,7 +77,7 @@ class KeyEntry:
                            self.magic, self.timestamp, bytes(self.secret_key),
                            self.port1, self.connections, self.count1,
                            self.count2, name, self.flags,
-                           self.tlog_retention_days,
+                           self.log_retention_days,
                            *reserved[:RESERVED_WORDS])
         return body + self._tail
 
@@ -94,7 +94,7 @@ class KeyEntry:
         unpacked = struct.unpack(PACK_FORMAT, body)
         (self.magic, self.timestamp, secret_key, self.port1,
          self.connections, self.count1, self.count2, name,
-         self.flags, self.tlog_retention_days) = unpacked[:10]
+         self.flags, self.log_retention_days) = unpacked[:10]
         self.reserved = list(unpacked[10:10 + RESERVED_WORDS])
         self.secret_key = bytearray(secret_key)
         self.name = name.decode('utf-8', errors='ignore').rstrip('\0')
@@ -142,16 +142,16 @@ class KeyEntry:
         flagstr = ''
         if self.flags:
             flagstr = ' flags=' + ','.join(self.flag_names())
-        tlogstr = ''
-        if self.flags & FLAG_TLOG:
-            if self.tlog_retention_days == 0.0:
-                tlogstr = ' tlog_retention=forever'
+        retstr = ''
+        if self.flags & (FLAG_TLOG | FLAG_BINLOG):
+            if self.log_retention_days == 0.0:
+                retstr = ' log_retention=forever'
             else:
-                tlogstr = ' tlog_retention=%.4g days' % self.tlog_retention_days
+                retstr = ' log_retention=%.4g days' % self.log_retention_days
         return ("%u/%u '%s' counts=%u/%u connections=%u ts=%u%s%s"
                 % (self.port1, self.port2, self.name,
                    self.count1, self.count2, self.connections,
-                   self.timestamp, flagstr, tlogstr))
+                   self.timestamp, flagstr, retstr))
 
 
 def open_db(path='keys.tdb'):
@@ -308,9 +308,12 @@ def set_flag(db, port2, flag_name):
         raise CLIError("No entry for port2 %d" % port2)
     was_set = bool(ke.flags & bit)
     ke.flags |= bit
-    # Auto-default tlog retention on first enable from a fresh-zero state.
-    if bit == FLAG_TLOG and not was_set and ke.tlog_retention_days == 0.0:
-        ke.tlog_retention_days = DEFAULT_TLOG_RETENTION_DAYS
+    # Auto-default the shared log retention on first enable from a
+    # fresh-zero state. Applies to either tlog or binlog — both file
+    # types share the same per-entry retention.
+    if (bit == FLAG_TLOG or bit == FLAG_BINLOG) \
+            and not was_set and ke.log_retention_days == 0.0:
+        ke.log_retention_days = DEFAULT_LOG_RETENTION_DAYS
     ke.store(db)
     return ke
 
@@ -325,13 +328,15 @@ def clear_flag(db, port2, flag_name):
     return ke
 
 
-def set_tlog_retention(db, port2, days):
+def set_log_retention(db, port2, days):
+    """Set the per-entry log retention (days). Applies to both .tlog
+    and .bin files — they share one retention value per entry."""
     ke = KeyEntry(port2)
     if not ke.fetch(db):
         raise CLIError("No entry for port2 %d" % port2)
     if days < 0.0:
         raise CLIError("retention days must be >= 0 (got %r)" % days)
-    ke.tlog_retention_days = float(days)
+    ke.log_retention_days = float(days)
     ke.store(db)
     return ke
 
