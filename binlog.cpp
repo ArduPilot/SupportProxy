@@ -285,15 +285,20 @@ void BinlogWriter::tick(MAVLink &user_link)
         return;
     }
 
-    // Drain ACKs first — they're cheap and keep the vehicle happy.
-    // The continuous ACK traffic also resets ArduPilot's 10-second
-    // _last_response_time client-timeout (see AP_Logger_MAVLink.cpp).
-    unsigned ack_budget = MAX_ACKS_PER_TICK;
-    while (ack_budget > 0 && !pending_acks.empty()) {
+    // Drain ALL pending ACKs each tick. They're cheap (one small
+    // UDP send each) and the sooner the vehicle gets them the
+    // sooner its pending-block queue frees up. The MAX_ACKS_PER_TICK
+    // cap was a historical carry-over from MAVProxy's 100 Hz idle
+    // loop where 10/loop already gave 1 kHz throughput; our
+    // main_loop wakes on each incoming packet, so under a TCP burst
+    // (one recv() can return ~45 frames) the cap would let an ACK
+    // backlog age 4+ ticks before catching up. The continuous ACK
+    // traffic also resets ArduPilot's 10-second _last_response_time
+    // client-timeout (see AP_Logger_MAVLink.cpp).
+    while (!pending_acks.empty()) {
         uint32_t s = pending_acks.front();
         pending_acks.pop_front();
         send_status(user_link, s, MAV_REMOTE_LOG_DATA_BLOCK_ACK);
-        ack_budget--;
     }
 
     drop_stale_nack_state(now_s);
