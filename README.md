@@ -130,9 +130,41 @@ this directory, or use symlinks to the system certificates.
 
 ### Automatic Startup
 
-#### The cron way
+#### The systemd way (recommended for production)
 
-For production deployment, you can use cron for automatic startup and restart:
+Two units in `systemd/` — one for the proxy daemon, one for the
+web UI gunicorn — so the UI can be restarted without dropping live
+engineer/user MAVLink sessions. Install once:
+
+```bash
+sudo cp systemd/supportproxy.service \
+        systemd/supportproxy-webadmin.service \
+        /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now supportproxy.service supportproxy-webadmin.service
+```
+
+The units assume the layout in this README (user `support`, source
+at `~/SupportProxy`, data at `~/proxy`). Edit the `User=`,
+`WorkingDirectory=`, and `ExecStart=` paths if your deploy differs.
+Status:
+
+```bash
+systemctl status supportproxy supportproxy-webadmin
+journalctl -u supportproxy -f
+journalctl -u supportproxy-webadmin -f
+```
+
+Restart just the UI:
+
+```bash
+sudo systemctl restart supportproxy-webadmin
+```
+
+#### The cron way (single-host / simple deploys)
+
+For deployments that don't use systemd, cron will respawn the
+all-in-one launcher every minute:
 
 ```bash
 # Edit crontab
@@ -146,7 +178,13 @@ crontab -e
 The `start_proxy.sh` script will:
 - Check if supportproxy is already running
 - Start it if not running
+- Also (re)launch the web UI gunicorn when `webui.json` has
+  `mode: standalone`
 - Log output to `proxy.log` and cron activity to `cron.log`
+
+**Don't run both cron and systemd at the same time** — they'll race
+on the pidof check. Remove the cron entries once the systemd units
+are active.
 
 ### Monitoring
 
@@ -155,8 +193,8 @@ The `start_proxy.sh` script will:
 pgrep supportproxy
 
 # View logs
-tail -f proxy.log      # Proxy output
-tail -f cron.log       # Cron activity
+tail -f proxy.log      # Proxy output (also via journalctl -u supportproxy)
+tail -f cron.log       # Cron activity (cron deploys only)
 
 # List current users
 ./keydb.py list
