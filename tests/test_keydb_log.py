@@ -44,7 +44,7 @@ def test_pack_unpack_roundtrip():
     assert e2.flags == keydb_lib.FLAG_TLOG | keydb_lib.FLAG_ADMIN
     # float32 quantisation: tolerate ~1e-7 relative error
     assert abs(e2.log_retention_days - 0.0001) < 1e-7
-    assert e2.reserved == [0] * 16
+    assert e2.reserved == [0] * 15
 
 
 def test_legacy_104byte_record_zero_extends():
@@ -68,7 +68,8 @@ def test_legacy_104byte_record_zero_extends():
     assert decoded.port1 == 20001
     assert decoded.flags == keydb_lib.FLAG_ADMIN
     assert decoded.log_retention_days == 0.0
-    assert decoded.reserved == [0] * 16
+    assert decoded.fc_sysid == 0
+    assert decoded.reserved == [0] * 15
 
     # Re-pack: should emit the full 168-byte modern layout.
     re = decoded.pack()
@@ -236,3 +237,73 @@ def test_cli_setflag_tlog_then_list_shows_retention(tmp_path):
     r = _run_cli(p, 'list')
     assert 'flags=tlog' in r.stdout
     assert 'log_retention=7' in r.stdout
+
+
+def test_fc_sysid_default_is_zero(tmp_path):
+    p = str(tmp_path / 'keys.tdb')
+    db = keydb_lib.init_db(p)
+    db.transaction_start()
+    keydb_lib.add_entry(db, 17001, 17002, 'default', 'pw')
+    ke = keydb_lib.KeyEntry(17002)
+    ke.fetch(db)
+    db.transaction_cancel()
+    assert ke.fc_sysid == 0
+
+
+def test_set_fc_sysid_round_trip(tmp_path):
+    p = str(tmp_path / 'keys.tdb')
+    db = keydb_lib.init_db(p)
+    db.transaction_start()
+    keydb_lib.add_entry(db, 17101, 17102, 'sysid', 'pw')
+    keydb_lib.set_fc_sysid(db, 17102, 42)
+    ke = keydb_lib.KeyEntry(17102)
+    ke.fetch(db)
+    db.transaction_cancel()
+    assert ke.fc_sysid == 42
+
+
+def test_set_fc_sysid_rejects_out_of_range(tmp_path):
+    p = str(tmp_path / 'keys.tdb')
+    db = keydb_lib.init_db(p)
+    db.transaction_start()
+    keydb_lib.add_entry(db, 17201, 17202, 'oob', 'pw')
+    with pytest.raises(keydb_lib.CLIError):
+        keydb_lib.set_fc_sysid(db, 17202, -1)
+    with pytest.raises(keydb_lib.CLIError):
+        keydb_lib.set_fc_sysid(db, 17202, 256)
+    db.transaction_cancel()
+
+
+def test_cli_setsysid_then_list_shows_sysid(tmp_path):
+    p = str(tmp_path / 'keys.tdb')
+    _run_cli(p, 'initialise')
+    _run_cli(p, 'add', '17301', '17302', 'CliSysid', 'pw')
+    r = _run_cli(p, 'setsysid', '17302', '7')
+    assert r.returncode == 0, r.stderr
+    assert 'fc_sysid=7' in r.stdout
+    r = _run_cli(p, 'list')
+    assert 'fc_sysid=7' in r.stdout
+    # Clearing back to 0 hides it from list output again.
+    r = _run_cli(p, 'setsysid', '17302', '0')
+    assert r.returncode == 0
+    r = _run_cli(p, 'list')
+    assert 'fc_sysid' not in r.stdout
+
+
+def test_legacy_104byte_record_decodes_fc_sysid_zero(tmp_path):
+    """A pre-tlog 104-byte record zero-extends; fc_sysid lands at the
+    same offset as one of the now-reserved slots, so it must decode to
+    0 on records written by the old schema."""
+    LEGACY_FMT = '<QQ32siIII32sI4x'
+    e = keydb_lib.KeyEntry(17402)
+    e.port1 = 17401
+    e.name = 'LegacyFcSysid'
+    e.set_passphrase('legacy')
+    name = e.name.encode('UTF-8').ljust(32, b'\x00')[:32]
+    legacy = struct.pack(LEGACY_FMT,
+                         e.magic, e.timestamp, bytes(e.secret_key),
+                         e.port1, e.connections, e.count1, e.count2,
+                         name, e.flags)
+    decoded = keydb_lib.KeyEntry(0)
+    decoded.unpack(legacy)
+    assert decoded.fc_sysid == 0

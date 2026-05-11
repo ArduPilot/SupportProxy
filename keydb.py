@@ -26,6 +26,7 @@ def main():
                                  'initialise', 'resettimestamp',
                                  'setflag', 'clearflag', 'flags',
                                  'setretention',
+                                 'setsysid',
                                  'stats'],
                         help="action to perform")
     parser.add_argument("args", default=[], nargs=argparse.REMAINDER)
@@ -118,6 +119,21 @@ def main():
                 print("Set log retention=0 (keep forever) for %s" % ke)
             else:
                 print("Set log retention=%.4g days for %s" % (days, ke))
+
+        elif args.action == "setsysid":
+            _expect(args.args, 2,
+                    "keydb.py setsysid PORT2 SYSID  "
+                    "(0 = match any, 1..255 = filter to that MAVLink sysid)")
+            try:
+                sysid = int(args.args[1])
+            except ValueError:
+                raise CLIError("SYSID must be an integer, got %r"
+                               % args.args[1])
+            ke = keydb_lib.set_fc_sysid(db, int(args.args[0]), sysid)
+            if sysid == 0:
+                print("Cleared fc_sysid (match any) for %s" % ke)
+            else:
+                print("Set fc_sysid=%u for %s" % (sysid, ke))
 
         elif args.action == "stats":
             # Live-connection stats from connections.tdb (sibling of
