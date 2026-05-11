@@ -91,10 +91,12 @@ public:
         strict seqno==0 file-open gate.
 
       * After the first DATA_BLOCK (any_block_seen = true): drain
-        pending ACKs and emit NACKs for gaps, rate-limited (NACK at
-        ≤ 10 Hz per missing seqno, ACKs as fast as the caller drives
-        us, capped at MAX_ACKS_PER_TICK so a backlog can't starve
-        other work). The continuous ACK traffic also keeps the
+        pending ACKs and emit NACKs for gaps. ACKs are uncapped per
+        tick — freeing the vehicle's pending-block queue faster
+        reduces its drop rate, and one UDP send per ACK is cheap.
+        NACKs are throttled to ~10 Hz per missing seqno and capped
+        at MAX_NACKS_PER_TICK per call so a wide gap can't bury
+        legitimate ACKs. The continuous ACK traffic also keeps the
         vehicle's 10-second client-timeout from firing.
      */
     void tick(MAVLink &user_link);
@@ -103,8 +105,9 @@ public:
 
 private:
     static constexpr size_t BLOCK_BYTES = 200;
-    // Mirrors MAVProxy's "10 ACK/NACK per idle loop" throttle.
-    static constexpr unsigned MAX_ACKS_PER_TICK  = 10;
+    // NACK throttle from MAVProxy's "10/loop". ACKs are unlimited
+    // per tick — see the comment in tick() — because freeing the
+    // vehicle's pending queue faster reduces drop rate.
     static constexpr unsigned MAX_NACKS_PER_TICK = 10;
     // NACK throttle: minimum 100 ms between re-NACKs of the same seqno.
     static constexpr double   NACK_REPEAT_S      = 0.1;
