@@ -32,7 +32,15 @@
 <main>
   {% with msgs = get_flashed_messages(with_categories=true) %}
     {% for cat, msg in msgs %}
+      {% if cat == 'partner_text' %}
+      <div class="flash flash-partner-text">
+        <p><strong>Send this to the partner:</strong></p>
+        <textarea class="partner-text-box" rows="14" readonly>{{ msg }}</textarea>
+        <button type="button" class="copy-partner-text">Copy to clipboard</button>
+      </div>
+      {% else %}
       <div class="flash flash-{{ cat }}">{{ msg }}</div>
+      {% endif %}
     {% endfor %}
   {% endwith %}
   {% block content %}{% endblock %}

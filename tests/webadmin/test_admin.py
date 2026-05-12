@@ -164,6 +164,76 @@ class TestAdminAdd:
         assert b'already exists' in resp.data or b'Add failed' in resp.data
         assert fetch_entry(keydb_path, 15999) is None
 
+    def test_admin_can_create_multiple_consecutive(self, client, keydb_path):
+        """count=3 -> three IDs: port1 = base+i, port2 = port1+1000,
+        name = '<name><i+1>', all sharing one passphrase. Matches the
+        old add_partner.sh behaviour."""
+        login_as(client, BOB_PORT1, BOB_PASS)
+        resp = client.post('/admin/add', data={
+            'port1': 15200,
+            'count': 3,
+            'port2': 16200,   # ignored when count > 1
+            'name': 'batch',
+            'passphrase': 'sharedpass',
+            'submit': 'Add',
+        }, follow_redirects=True)
+        # All three created.
+        for i in range(3):
+            ke = fetch_entry(keydb_path, 16200 + i)
+            assert ke is not None, 'entry %d not created' % i
+            assert ke.port1 == 15200 + i
+            assert ke.name == 'batch%d' % (i + 1)
+            assert ke.passphrase_matches('sharedpass')
+        # Partner blurb shows up in the redirected page.
+        assert b'I have created 3 SupportProxy connection' in resp.data
+        assert b'/dashboard' in resp.data
+
+    def test_multi_create_is_atomic_on_overlap(self, client, keydb_path):
+        """If any derived port collides with an existing entry, the
+        whole batch is rolled back — no partial create."""
+        login_as(client, BOB_PORT1, BOB_PASS)
+        # base=15300, count=4 -> port1 15300..15303, port2 16300..16303.
+        # Pre-create a collision at 16302 (would be batch3's port2).
+        db = keydb_lib.open_db(keydb_path)
+        db.transaction_start()
+        keydb_lib.add_entry(db, 15999, 16302, 'pre_existing', 'pw')
+        db.transaction_prepare_commit()
+        db.transaction_commit()
+        db.close()
+
+        resp = client.post('/admin/add', data={
+            'port1': 15300,
+            'count': 4,
+            'port2': 16300,
+            'name': 'atomic',
+            'passphrase': 'atomicpw',
+            'submit': 'Add',
+        }, follow_redirects=True)
+        assert b'no entries created' in resp.data
+        # None of the batch ports exist.
+        for i in range(4):
+            assert fetch_entry(keydb_path, 16300 + i) is None or \
+                fetch_entry(keydb_path, 16300 + i).name == 'pre_existing'
+        # The pre-existing one is untouched.
+        assert fetch_entry(keydb_path, 16302).name == 'pre_existing'
+
+    def test_multi_create_rejects_out_of_range_derived_port(self, client,
+                                                           keydb_path):
+        """A count that would push a derived port past 60000 fails the
+        whole batch up front."""
+        login_as(client, BOB_PORT1, BOB_PASS)
+        # base port1=58999, count=3 -> port2 would reach 60001.
+        resp = client.post('/admin/add', data={
+            'port1': 58999,
+            'count': 3,
+            'port2': 59999,
+            'name': 'oob',
+            'passphrase': 'oobpassw',
+            'submit': 'Add',
+        }, follow_redirects=True)
+        assert b'outside the allowed range' in resp.data
+        assert fetch_entry(keydb_path, 59999) is None
+
 
 class TestAdminDelete:
     def test_admin_can_delete_other(self, client, keydb_path):

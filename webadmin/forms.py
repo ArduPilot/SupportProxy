@@ -98,15 +98,32 @@ class AdminEditForm(FlaskForm):
     submit = SubmitField('Save')
 
 
+# Cap on how many consecutive IDs one "Add" can create. Generous
+# enough for any real partner onboarding, small enough that the
+# port1..port1+count-1 and port2..port2+count-1 ranges can never
+# collide with each other (they're 1000 apart).
+MAX_ADD_COUNT = 50
+
+
 class AdminAddForm(FlaskForm):
     # Port range matches SupportProxy convention: pick from the
     # 10000–60000 range to stay clear of well-known ports and most
     # ephemeral allocations. port1 / port2 uniqueness across the
     # database is enforced by keydb_lib.add_entry().
-    port1 = IntegerField('User-side port (port1)',
+    #
+    # port1 is the *base* user-side port. With count == 1 the explicit
+    # port2 field is used; with count > 1 the route derives, for
+    # entry i (1-indexed): port1 = base + i - 1, port2 = port1 + 1000,
+    # name = "<name><i>", all sharing one passphrase — matching the
+    # old add_partner.sh script.
+    port1 = IntegerField('User-side base port (port1)',
                          validators=[DataRequired(),
                                      NumberRange(min=10000, max=60000)])
-    port2 = IntegerField('Engineer-side port (port2)',
+    count = IntegerField(
+        'Count (consecutive IDs to create; port2 = port1+1000 for each)',
+        default=1,
+        validators=[Optional(), NumberRange(min=1, max=MAX_ADD_COUNT)])
+    port2 = IntegerField('Engineer-side port (port2; used only when count=1)',
                          validators=[DataRequired(),
                                      NumberRange(min=10000, max=60000)])
     name = StringField('Display name',
