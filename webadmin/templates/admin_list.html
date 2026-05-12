@@ -32,9 +32,16 @@
 </table>
 
 <h3>Add a new entry</h3>
-<form method="post" action="{{ url_for('admin.add_entry') }}">
+<p class="hint">
+  Set <em>count</em> &gt; 1 to create that many consecutive IDs in one go:
+  port1 runs from the base upward, port2 is port1+1000 for each, and the
+  display name gets an index suffix (<code>Name1</code>, <code>Name2</code>, …).
+  All created IDs share one passphrase.
+</p>
+<form method="post" action="{{ url_for('admin.add_entry') }}" class="admin-add-form">
   {{ add_form.csrf_token }}
   <div class="field">{{ add_form.port1.label }}: {{ add_form.port1() }}</div>
+  <div class="field">{{ add_form.count.label }}: {{ add_form.count(min=1, max=50) }}</div>
   <div class="field">{{ add_form.port2.label }}: {{ add_form.port2() }}</div>
   <div class="field">{{ add_form.name.label }}: {{ add_form.name() }}</div>
   <div class="field">{{ add_form.passphrase.label }}: {{ add_form.passphrase() }}</div>

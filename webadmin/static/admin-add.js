@@ -35,26 +35,82 @@
     function attachPortAutosuggest() {
         var port1 = document.getElementById('port1');
         var port2 = document.getElementById('port2');
+        var count = document.getElementById('count');
         if (!port1 || !port2 || port1.dataset.suggestAttached) {
             return;
         }
         port1.dataset.suggestAttached = '1';
-        port1.addEventListener('input', function () {
+
+        function syncPort2FromPort1() {
             var v = parseInt(port1.value, 10);
             if (isNaN(v)) {
                 return;
             }
             // Only fill port2 if it's empty OR was previously
             // auto-filled by us. Once the admin types into port2
-            // their choice sticks.
+            // manually their choice sticks (until count>1 takes over).
             if (port2.value === '' || port2.dataset.autofilled === '1') {
                 port2.value = String(v + 1000);
                 port2.dataset.autofilled = '1';
             }
-        });
+        }
+        port1.addEventListener('input', syncPort2FromPort1);
         port2.addEventListener('input', function () {
-            // Admin took over — stop auto-suggesting.
             port2.dataset.autofilled = '';
+        });
+
+        // When count > 1 the explicit port2 field is ignored by the
+        // server (port2 is derived as port1+1000 per entry). Signal
+        // that by making port2 readonly and pinning it to the base
+        // port2 (port1+1000). readonly — not disabled — so the field
+        // is still submitted and the DataRequired validator passes.
+        if (count) {
+            function syncCountState() {
+                var c = parseInt(count.value, 10);
+                var v = parseInt(port1.value, 10);
+                if (!isNaN(c) && c > 1) {
+                    port2.readOnly = true;
+                    port2.dataset.autofilled = '1';
+                    if (!isNaN(v)) {
+                        port2.value = String(v + 1000);
+                    }
+                } else if (port2.readOnly) {
+                    port2.readOnly = false;
+                    syncPort2FromPort1();
+                }
+            }
+            count.addEventListener('input', syncCountState);
+            port1.addEventListener('input', syncCountState);
+            syncCountState();
+        }
+    }
+
+    function attachPartnerTextCopy() {
+        var box = document.querySelector('.partner-text-box');
+        var btn = document.querySelector('.copy-partner-text');
+        if (!box || !btn || btn.dataset.copyAttached) {
+            return;
+        }
+        btn.dataset.copyAttached = '1';
+        btn.addEventListener('click', function () {
+            box.focus();
+            box.select();
+            var ok = false;
+            try {
+                ok = document.execCommand('copy');
+            } catch (e) {
+                ok = false;
+            }
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(box.value).then(function () {
+                    btn.textContent = 'Copied';
+                }, function () { /* keep whatever execCommand did */ });
+            }
+            if (ok) {
+                btn.textContent = 'Copied';
+            }
+            setTimeout(function () { btn.textContent = 'Copy to clipboard'; },
+                       2000);
         });
     }
 
@@ -134,6 +190,7 @@
         attachPortAutosuggest();
         attachAddFormGenerator();
         attachEditFormGenerator();
+        attachPartnerTextCopy();
     }
 
     document.addEventListener('DOMContentLoaded', attach);

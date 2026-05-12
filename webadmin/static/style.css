@@ -91,3 +91,25 @@ button.generate-passphrase {
     cursor: pointer;
     vertical-align: middle;
 }
+
+/* The "send this to the partner" blurb shown after creating one or
+   more IDs via the admin add form. */
+.flash-partner-text { background: #f3f8ff; border: 1px solid #b8d4f0; }
+.flash-partner-text p { margin: 0 0 0.4rem; }
+textarea.partner-text-box {
+    display: block;
+    width: 100%;
+    box-sizing: border-box;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.85em;
+    white-space: pre;
+    overflow: auto;
+    margin-bottom: 0.4rem;
+}
+button.copy-partner-text {
+    padding: 0.2rem 0.7rem;
+    font-size: 0.9em;
+    cursor: pointer;
+}
+
+p.hint { font-size: 0.9em; color: #555; max-width: 48em; }

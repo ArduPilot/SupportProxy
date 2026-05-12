@@ -65,6 +65,31 @@ def kill_connection(port2, conn_index):
     return redirect(url_for('admin.connections'))
 
 
+def _build_partner_text(plan, passphrase):
+    """Plain-text blurb the admin pastes back to the partner. `plan`
+    is a list of (port1, port2, name) tuples. Adapted from the old
+    add_partner.sh wording for the web-UI world."""
+    n = len(plan)
+    lines = []
+    lines.append('I have created %d SupportProxy connection%s for you to use. '
+                 'Details:' % (n, '' if n == 1 else 's'))
+    lines.append('')
+    for idx, (p1, p2, nm) in enumerate(plan, start=1):
+        lines.append('  connection %d (%s):' % (idx, nm))
+        lines.append('    user port:             %d' % p1)
+        lines.append('    support engineer port: %d' % p2)
+        lines.append('    passphrase:            %s' % passphrase)
+        lines.append('')
+    lines.append('You can change the passphrase by logging in at')
+    lines.append('https://support.ardupilot.org/dashboard with your user port')
+    lines.append('(or support engineer port) and the passphrase above.')
+    lines.append('')
+    lines.append('Note: do not give the passphrase to your end users — it is')
+    lines.append('only for your support engineers. End users connect to the')
+    lines.append('user port and do not need it.')
+    return '\n'.join(lines)
+
+
 @bp.route('/add', methods=['POST'])
 @require_admin
 def add_entry():
@@ -74,14 +99,43 @@ def add_entry():
             '%s: %s' % (k, ', '.join(v)) for k, v in form.errors.items()),
             'error')
         return redirect(url_for('admin.list_entries'))
+
+    count = form.count.data or 1
+    base_p1 = form.port1.data
+    name = form.name.data
+    passphrase = form.passphrase.data
+
+    # Build the (port1, port2, name) plan.
+    if count == 1:
+        plan = [(base_p1, form.port2.data, name)]
+    else:
+        # Consecutive: port1 = base + i, port2 = port1 + 1000,
+        # name = "<name><i+1>" — exactly what add_partner.sh did.
+        plan = [(base_p1 + i, base_p1 + i + 1000, '%s%d' % (name, i + 1))
+                for i in range(count)]
+
+    # Range-check the whole batch up front so a partial create can't
+    # happen because entry N tripped the validator.
+    for p1, p2, _ in plan:
+        for p in (p1, p2):
+            if not (10000 <= p <= 60000):
+                flash('Add failed: derived port %d is outside the allowed '
+                      'range 10000–60000' % p, 'error')
+                return redirect(url_for('admin.list_entries'))
+
+    # Create them all in one transaction — tdb_transaction cancels on
+    # exception, so a conflict on any entry rolls the whole batch back.
     try:
         with tdb_transaction() as db:
-            keydb_lib.add_entry(db, form.port1.data, form.port2.data,
-                                form.name.data, form.passphrase.data)
+            for p1, p2, nm in plan:
+                keydb_lib.add_entry(db, p1, p2, nm, passphrase)
     except keydb_lib.CLIError as e:
-        flash('Add failed: ' + str(e), 'error')
+        flash('Add failed (no entries created): ' + str(e), 'error')
         return redirect(url_for('admin.list_entries'))
-    flash('Added entry %d/%d.' % (form.port1.data, form.port2.data), 'success')
+
+    n = len(plan)
+    flash(_build_partner_text(plan, passphrase), 'partner_text')
+    flash('Added %d entr%s.' % (n, 'y' if n == 1 else 'ies'), 'success')
     return redirect(url_for('admin.list_entries'))
 
 
