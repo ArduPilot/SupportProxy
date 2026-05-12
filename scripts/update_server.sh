@@ -121,19 +121,41 @@ make distclean >/dev/null
 # Run regen_headers.sh up-front to be safe.
 ./regen_headers.sh
 make -j all
-# pkill -f matches the full argv. We anchor on the bin path so we don't
-# accidentally kill anything named "supportproxy" run from elsewhere.
-pkill -f "$HOME/SupportProxy/supportproxy" 2>/dev/null || true
-# Also kill any running webadmin gunicorn so start_proxy.sh respawns it
-# against the freshly-rsynced source. Without this, an existing gunicorn
-# keeps serving the old code (start_proxy.sh skips relaunching when one
-# is already up).
-pkill -f 'webadmin\.wsgi:application' 2>/dev/null || true
-sleep 1
-./start_proxy.sh
+
+# Bring the new build into service. Two host flavours:
+#
+#  systemd-managed: supportproxy.service / supportproxy-webadmin.service
+#    own the lifecycle (Restart=always). We DON'T have passwordless
+#    sudo for `systemctl restart` here, but we can kill the processes
+#    (they run as us) and systemd's Restart= respawns them with the
+#    new binary after RestartSec. Do NOT call start_proxy.sh — it
+#    no-ops on systemd hosts anyway, but skipping it avoids any window
+#    where a nohup'd copy could fight systemd for the listening ports.
+#
+#  cron-managed (legacy): kill the procs, then start_proxy.sh relaunches.
+#
+# pkill -f matches the full argv; anchor on the bin path so we don't
+# kill anything named "supportproxy" launched from elsewhere.
+if systemctl is-enabled supportproxy.service >/dev/null 2>&1; then
+    echo "(systemd-managed: killing daemon + webadmin; systemd Restart= will respawn the new build)"
+    pkill -f "$HOME/SupportProxy/supportproxy" 2>/dev/null || true
+    pkill -f 'webadmin\.wsgi:application' 2>/dev/null || true
+    # Wait out systemd's RestartSec (5s) so the verify below sees the
+    # respawned process rather than the gap.
+    for _ in $(seq 1 15); do
+        pgrep -f "$HOME/SupportProxy/supportproxy" >/dev/null && break
+        sleep 1
+    done
+else
+    pkill -f "$HOME/SupportProxy/supportproxy" 2>/dev/null || true
+    pkill -f 'webadmin\.wsgi:application' 2>/dev/null || true
+    sleep 1
+    ./start_proxy.sh
+fi
 sleep 1
 echo "running pid:"
-pgrep -af supportproxy || echo "  (no supportproxy detected — check ~/proxy/cron.log)"
+pgrep -af supportproxy \
+    || echo "  (no supportproxy detected — check journalctl -u supportproxy or ~/proxy/cron.log)"
 SSH_EOF
 done
 
