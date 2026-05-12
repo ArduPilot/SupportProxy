@@ -185,7 +185,7 @@ class TestAdminAdd:
             assert ke.name == 'batch%d' % (i + 1)
             assert ke.passphrase_matches('sharedpass')
         # Partner blurb shows up in the redirected page.
-        assert b'I have created 3 SupportProxy connection' in resp.data
+        assert b'Created 3 SupportProxy connections' in resp.data
         assert b'/dashboard' in resp.data
 
     def test_multi_create_is_atomic_on_overlap(self, client, keydb_path):

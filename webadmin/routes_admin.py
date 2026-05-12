@@ -68,11 +68,13 @@ def kill_connection(port2, conn_index):
 def _build_partner_text(plan, passphrase):
     """Plain-text blurb the admin pastes back to the partner. `plan`
     is a list of (port1, port2, name) tuples. Adapted from the old
-    add_partner.sh wording for the web-UI world."""
+    add_partner.sh wording for the web-UI world. Lines are kept short
+    (<= ~50 cols) so the read-only textarea that shows it doesn't need
+    much horizontal scrolling."""
     n = len(plan)
     lines = []
-    lines.append('I have created %d SupportProxy connection%s for you to use. '
-                 'Details:' % (n, '' if n == 1 else 's'))
+    lines.append('Created %d SupportProxy connection%s for you:'
+                 % (n, '' if n == 1 else 's'))
     lines.append('')
     for idx, (p1, p2, nm) in enumerate(plan, start=1):
         lines.append('  connection %d (%s):' % (idx, nm))
@@ -80,13 +82,14 @@ def _build_partner_text(plan, passphrase):
         lines.append('    support engineer port: %d' % p2)
         lines.append('    passphrase:            %s' % passphrase)
         lines.append('')
-    lines.append('You can change the passphrase by logging in at')
-    lines.append('https://support.ardupilot.org/dashboard with your user port')
-    lines.append('(or support engineer port) and the passphrase above.')
+    lines.append('Change the passphrase by logging in at')
+    lines.append('https://support.ardupilot.org/dashboard')
+    lines.append('with your user port (or support engineer port)')
+    lines.append('and the passphrase above.')
     lines.append('')
-    lines.append('Note: do not give the passphrase to your end users — it is')
-    lines.append('only for your support engineers. End users connect to the')
-    lines.append('user port and do not need it.')
+    lines.append('Do not give the passphrase to your end users — it')
+    lines.append('is only for your support engineers. End users')
+    lines.append('connect to the user port without it.')
     return '\n'.join(lines)
 
 
