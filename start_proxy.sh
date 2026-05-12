@@ -6,6 +6,16 @@
 # If $HOME/proxy/webui.json exists with "mode":"standalone", we also
 # (re)launch the web admin UI on the configured port.
 
+# On hosts that use the systemd units (supportproxy.service /
+# supportproxy-webadmin.service), systemd owns the lifecycle —
+# Restart=always handles respawns. A copy launched here would race
+# systemd for the listening ports ("Address already in use" spam from
+# the loser). Bail out: a stray cron entry, or update_server.sh
+# calling us, becomes a harmless no-op.
+if systemctl is-enabled supportproxy.service >/dev/null 2>&1; then
+    exit 0
+fi
+
 cd $HOME/proxy
 
 (
