@@ -124,10 +124,18 @@
         return btn;
     }
 
-    // Add-form variant: single "passphrase" field. Used on
-    // /admin/add via the admin_list.html "Add a new entry" form.
+    // Add-form variant: single "passphrase" field. Scoped to the
+    // admin "Add a new entry" form (admin_list.html), NOT the login
+    // form — both fields are named "passphrase" so WTForms gives them
+    // the same id, but a Generate button has no business on the login
+    // page.
     function attachAddFormGenerator() {
-        var pw = document.getElementById('passphrase');
+        var form = document.querySelector('form.admin-add-form');
+        if (!form) {
+            return;
+        }
+        var pw = form.querySelector('#passphrase')
+                 || form.querySelector('input[name="passphrase"]');
         if (!pw || pw.dataset.generatorAttached) {
             return;
         }
