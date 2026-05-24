@@ -3,7 +3,7 @@
 We launch the real supportproxy binary against a fresh keys.tdb that
 has KEY_FLAG_BINLOG (and optionally KEY_FLAG_TLOG) set on a test
 entry, drive synthetic REMOTE_LOG_DATA_BLOCK packets through the
-user-side UDP port via pymavlink (using the ardupilotmega dialect),
+user-side UDP port via pymavlink (using the all dialect),
 and assert:
 
   * a sessionN.bin file appears at the expected sparse-file path,
@@ -47,7 +47,7 @@ PORT_ENG = 17801 + _W * 4
 PORT_USER_PAIR = 17900 + _W * 4
 PORT_ENG_PAIR = 17901 + _W * 4
 
-os.environ.setdefault('MAVLINK_DIALECT', 'ardupilotmega')
+os.environ.setdefault('MAVLINK_DIALECT', 'all')
 os.environ.setdefault('MAVLINK20', '1')
 
 
@@ -130,7 +130,7 @@ def _wait_for(predicate, timeout=5.0):
 def _send_data_block(sock, dest, seqno, payload, sysid=1):
     """Build + send a REMOTE_LOG_DATA_BLOCK from a fake vehicle.
     payload is padded/truncated to 200 bytes."""
-    from pymavlink.dialects.v20 import ardupilotmega as mav
+    from pymavlink.dialects.v20 import all as mav
     mav_obj = mav.MAVLink(file=None, srcSystem=sysid, srcComponent=1)
     data = (payload + b'\x00' * 200)[:200]
     msg = mav.MAVLink_remote_log_data_block_message(
@@ -145,7 +145,7 @@ def _send_system_time(sock, dest, time_boot_ms, sysid=1,
     """Send a SYSTEM_TIME from a fake autopilot. Default compid is
     MAV_COMP_ID_AUTOPILOT1 (= 1) — change it to simulate a camera or
     companion computer for filter tests."""
-    from pymavlink.dialects.v20 import ardupilotmega as mav
+    from pymavlink.dialects.v20 import all as mav
     if compid is None:
         compid = mav.MAV_COMP_ID_AUTOPILOT1
     mav_obj = mav.MAVLink(file=None, srcSystem=sysid, srcComponent=compid)
@@ -158,7 +158,7 @@ def _send_system_time(sock, dest, time_boot_ms, sysid=1,
 def _recv_block_statuses(sock, timeout=2.0):
     """Drain incoming UDP packets, decode REMOTE_LOG_BLOCK_STATUS,
     return list of (seqno, status) seen within `timeout`."""
-    from pymavlink.dialects.v20 import ardupilotmega as mav
+    from pymavlink.dialects.v20 import all as mav
     mav_obj = mav.MAVLink(file=None)
     sock.settimeout(0.1)
     out = []
@@ -328,7 +328,7 @@ class TestBinlogCapture:
             # has a chance to fire. A single quiet HEARTBEAT would
             # only trigger one tick before main_loop's idle-timeout
             # kicks in.
-            from pymavlink.dialects.v20 import ardupilotmega as mav
+            from pymavlink.dialects.v20 import all as mav
             hb_mav = mav.MAVLink(file=None, srcSystem=1, srcComponent=1)
             hb_msg = mav.MAVLink_heartbeat_message(
                 type=0, autopilot=0, base_mode=0, custom_mode=0,
@@ -346,7 +346,7 @@ class TestBinlogCapture:
                         collected.append(data)
                 except socket.timeout:
                     pass
-            from pymavlink.dialects.v20 import ardupilotmega as mav2
+            from pymavlink.dialects.v20 import all as mav2
             decoder = mav2.MAVLink(file=None)
             start_seqnos = []
             for blob in collected:
@@ -613,7 +613,7 @@ class TestBinlogCapture:
     def test_reboot_ignored_from_camera_compid(self, proxy_workdir):
         """A SYSTEM_TIME backward jump from a non-autopilot component
         (e.g. a camera) must NOT trigger rotation."""
-        from pymavlink.dialects.v20 import ardupilotmega as mav
+        from pymavlink.dialects.v20 import all as mav
         _setup_db(proxy_workdir, PORT_USER, PORT_ENG, 'bintest', 'bp',
                   'binlog')
         proc = _start_proxy(proxy_workdir, PORT_ENG)
@@ -694,7 +694,7 @@ class TestBinlogCapture:
         """After streaming begins, the proxy keeps sending START at
         ~5 s cadence so a post-reboot vehicle resumes. Pre-fix the
         START emit stopped after the first DATA_BLOCK."""
-        from pymavlink.dialects.v20 import ardupilotmega as mav
+        from pymavlink.dialects.v20 import all as mav
         _setup_db(proxy_workdir, PORT_USER, PORT_ENG, 'bintest', 'bp',
                   'binlog')
         proc = _start_proxy(proxy_workdir, PORT_ENG)

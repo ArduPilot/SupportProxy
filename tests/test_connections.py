@@ -18,7 +18,7 @@ from test_config import (TEST_PORTS, TEST_PORTS_BIDI, TEST_PASSPHRASE,
                          MULTIPLE_CONNECTIONS_TEST_DURATION)
 
 # Set up environment for pymavlink
-os.environ['MAVLINK_DIALECT'] = 'ardupilotmega'
+os.environ['MAVLINK_DIALECT'] = 'all'
 os.environ['MAVLINK20'] = '1'  # Ensure MAVLink2 is used
 
 
