@@ -6,7 +6,7 @@
 #include "mavlink.h"
 #include "util.h"
 
-#include "libraries/mavlink2/generated/ardupilotmega/mavlink.h"
+#include "libraries/mavlink2/generated/all/mavlink.h"
 
 #include <algorithm>
 #include <dirent.h>

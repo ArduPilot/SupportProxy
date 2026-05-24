@@ -38,7 +38,7 @@ _W = int(os.environ.get('PYTEST_XDIST_WORKER', 'gw0')[2:]
 PORT_USER = 17500 + _W * 4
 PORT_ENG  = 17501 + _W * 4
 
-os.environ.setdefault('MAVLINK_DIALECT', 'ardupilotmega')
+os.environ.setdefault('MAVLINK_DIALECT', 'all')
 os.environ.setdefault('MAVLINK20', '1')
 
 
