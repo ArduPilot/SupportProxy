@@ -196,6 +196,14 @@ ssize_t WebSocket::decode(uint8_t *buf, size_t n, size_t &used)
         pos += 8;
     }
 
+    // bound payload_len before the completeness checks below: pending[] is
+    // fixed-size, and an attacker-supplied payload_len near UINT64_MAX would
+    // wrap "pos + 4 + payload_len" to a small number, letting the check pass.
+    const size_t mask_bytes = masked ? 4 : 0;
+    if (payload_len > sizeof(pending) - pos - mask_bytes) {
+        return -1;
+    }
+
     if (masked) {
 	if (n < pos + 4 + payload_len) {
 	    return -1;
