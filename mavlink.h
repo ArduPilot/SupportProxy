@@ -48,6 +48,9 @@ public:
 	send_addr = _send_addr;
 	send_len = _send_len;
     }
+    // true once a packet on this channel has validated its signature
+    // against the loaded key. Used by the pre-auth slot deadline.
+    bool is_authenticated(void) const { return got_signed_packet; }
 
 private:
     struct KeyEntry key;

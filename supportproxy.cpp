@@ -51,6 +51,12 @@
   the matching ConnEntry first; the handler just sets a flag and
   main_loop scans connections.tdb to find the target slot(s).
  */
+// Engineer-side conn2 slots that haven't validated a signed packet
+// within CONN2_PREAUTH_SECONDS of accept/first-tuple are closed. Cuts
+// off DoS where unauthenticated clients camp on conn2 slots and block
+// legitimate signed engineers.
+static constexpr time_t CONN2_PREAUTH_SECONDS = 5;
+
 static volatile sig_atomic_t g_drops_pending = 0;
 
 static void sigusr1_handler(int)
@@ -446,17 +452,38 @@ static void main_loop(struct listen_port *p)
 	}
 
 	/*
-	  check for dead UDP conn2
+	  check for dead UDP conn2 + pre-auth deadline on any conn2 slot
 	 */
+	const time_t wall_now = time(nullptr);
 	for (uint8_t i=0; i<max_conn2_count; i++) {
 	    auto &c2 = conn2[i];
-	    if (c2.used && c2.is_udp && now - c2.last_pkt > 10) {
-		printf("[%d] %s dead UDP conn2[%u]\n",
+	    if (!c2.used) {
+		continue;
+	    }
+	    bool close_this = false;
+	    const char *why = "";
+	    if (!c2.mav.is_authenticated() &&
+		wall_now - c2.connected_at > CONN2_PREAUTH_SECONDS) {
+		// pre-auth deadline: applies to TCP, WS and UDP. Compare
+		// against connected_at (not last_pkt) so an attacker can't
+		// keep the slot alive by spamming unsigned/wrong-key
+		// traffic that refreshes last_pkt.
+		close_this = true;
+		why = "pre-auth deadline";
+	    } else if (c2.is_udp && now - c2.last_pkt > 10) {
+		// authenticated UDP: existing idle close
+		close_this = true;
+		why = "idle";
+	    }
+	    if (close_this) {
+		printf("[%d] %s closing %s conn2[%u] (%s)\n",
 		       unsigned(p->port2), time_string(),
-		       unsigned(i));
+		       c2.is_udp ? "UDP" : "TCP",
+		       unsigned(i), why);
 		c2.close();
-		// keep counters in sync: without this, repeated unauthenticated
-		// UDP churn eventually drives conn2_count past MAX_COMM2_LINKS.
+		// keep counters in sync: without this, repeated
+		// unauthenticated churn eventually drives conn2_count past
+		// MAX_COMM2_LINKS.
 		if (conn2_count == max_conn2_count) {
 		    max_conn2_count--;
 		}
