@@ -289,6 +289,27 @@ void MAVLink::load_signing_key(void)
         return;
     }
 
+    // safe-fail on all-zero stored key: leave key_loaded=false so
+    // receive_message() rejects every frame on this channel rather than
+    // wiring NULL signing (which the generated parser treats as
+    // "signature OK") into status->signing.
+    bool stored_all_zero = (key.timestamp == 0);
+    for (uint8_t i=0; stored_all_zero && i<sizeof(key.secret_key); i++) {
+        if (key.secret_key[i] != 0) {
+            stored_all_zero = false;
+        }
+    }
+    if (stored_all_zero) {
+        ::printf("[%d] refusing to load all-zero signing key\n", key_id);
+        mavlink_status_t *status_z = mavlink_get_channel_status(chan);
+        if (status_z != nullptr) {
+            status_z->signing = nullptr;
+            status_z->signing_streams = nullptr;
+        }
+        db_close(db);
+        return;
+    }
+
     key_loaded = true;
 
     memcpy(signing.secret_key, key.secret_key, sizeof(key.secret_key));
@@ -324,22 +345,10 @@ void MAVLink::load_signing_key(void)
     signing.flags = MAVLINK_SIGNING_FLAG_SIGN_OUTGOING;
     signing.accept_unsigned_callback = accept_unsigned_callback;
 
-    // if timestamp and key are all zero then we disable signing
-    bool all_zero = (key.timestamp == 0);
-    for (uint8_t i=0; i<sizeof(key.secret_key); i++) {
-        if (signing.secret_key[i] != 0) {
-            all_zero = false;
-            break;
-        }
-    }
-    if (all_zero) {
-        // disable signing
-        status->signing = nullptr;
-        status->signing_streams = nullptr;
-    } else {
-        status->signing = &signing;
-        status->signing_streams = &signing_streams;
-    }
+    // the all-zero "disable signing" case was already handled with an
+    // early return above, so this branch always wires real signing in.
+    status->signing = &signing;
+    status->signing_streams = &signing_streams;
     db_close(db);
 }
 
@@ -500,6 +509,22 @@ void MAVLink::handle_setup_signing(const mavlink_message_t &msg)
 {
     mavlink_setup_signing_t packet;
     mavlink_msg_setup_signing_decode(&msg, &packet);
+
+    // refuse rotation to an all-zero key + zero timestamp: that combo is
+    // exactly what load_signing_key() treats as "signing disabled", so
+    // accepting it would turn a key-rotation request into a persistent
+    // auth downgrade. Defence in depth — load_signing_key() also
+    // safe-fails on this combination if it lands in keys.tdb some other way.
+    bool all_zero = (packet.initial_timestamp == 0);
+    for (uint8_t i=0; all_zero && i<sizeof(packet.secret_key); i++) {
+        if (packet.secret_key[i] != 0) {
+            all_zero = false;
+        }
+    }
+    if (all_zero) {
+        ::printf("[%d] Rejecting SETUP_SIGNING: all-zero key/timestamp\n", key_id);
+        return;
+    }
 
     auto *db = db_open_transaction();
     if (db == nullptr) {
