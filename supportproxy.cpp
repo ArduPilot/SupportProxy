@@ -436,8 +436,13 @@ static void main_loop(struct listen_port *p)
 	now = time_seconds();
 
 	if (max_conn2_count > MAX_COMM2_LINKS) {
-	    printf("BUG: max_conn2_count=%d\n", int(max_conn2_count));
-	    exit(1);
+	    // formerly exit(1). With the UDP idle-close path now decrementing
+	    // conn2_count properly this should not be reachable, but if some
+	    // other path leaks it we'd rather log loudly and clamp than kill
+	    // the child for the whole port pair.
+	    printf("BUG: max_conn2_count=%d, clamping to %d\n",
+	           int(max_conn2_count), int(MAX_COMM2_LINKS));
+	    max_conn2_count = MAX_COMM2_LINKS;
 	}
 
 	/*
@@ -450,6 +455,12 @@ static void main_loop(struct listen_port *p)
 		       unsigned(p->port2), time_string(),
 		       unsigned(i));
 		c2.close();
+		// keep counters in sync: without this, repeated unauthenticated
+		// UDP churn eventually drives conn2_count past MAX_COMM2_LINKS.
+		if (conn2_count == max_conn2_count) {
+		    max_conn2_count--;
+		}
+		conn2_count--;
 	    }
 	}
 
