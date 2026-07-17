@@ -810,24 +810,39 @@ class TestBinlogCapture:
             _terminate(proc)
 
     def test_disk_quota_blocks_writes_when_over_cap(self, proxy_workdir):
-        """Pre-seed the per-port2 logs/<port2>/ tree with sparse files
+        """Seed the per-port2 logs/<port2>/ tree with sparse files
         totalling > 1 GiB. Subsequent legitimate blocks must be
         dropped at write time because the per-port-pair quota
         (MAX_PER_PORT2_BYTES = 1 GiB in binlog.h) is already
         breached."""
         _setup_db(proxy_workdir, PORT_USER, PORT_ENG, 'bintest', 'bp',
                   'binlog')
-        # Pre-seed BEFORE starting the proxy so the cleanup pass
-        # doesn't get a chance to age them out.
-        date_dir = (proxy_workdir / 'logs' / str(PORT_ENG) / _today_str())
-        date_dir.mkdir(parents=True, exist_ok=True)
-        prefilled = date_dir / 'prefill.bin'
-        # Sparse: 1.2 GiB apparent size, ~0 bytes actually allocated.
-        with open(prefilled, 'wb') as f:
-            f.truncate(int(1.2 * 1024 * 1024 * 1024))
 
         proc = _start_proxy(proxy_workdir, PORT_ENG)
         try:
+            # Seed AFTER startup: log_cleanup_once() runs an immediate
+            # quota pass when the proxy starts and would delete an
+            # over-quota file seeded before it. Seeding now leaves the
+            # write-time gate (refreshed when the binlog file opens on
+            # the first block) as the only line of defence, which is
+            # exactly what this test exercises. The next cleanup pass
+            # is an hour away. The cleanup child forks after the
+            # 'Added port' marker, so wait for its start line (its
+            # startup pass over the still-empty logs tree is
+            # instantaneous) before seeding.
+            deadline = time.time() + 5
+            while time.time() < deadline and not any(
+                    'log cleanup child' in l for l in proc._lines):
+                time.sleep(0.05)
+            time.sleep(0.3)
+            date_dir = (proxy_workdir / 'logs' / str(PORT_ENG)
+                        / _today_str())
+            date_dir.mkdir(parents=True, exist_ok=True)
+            prefilled = date_dir / 'prefill.bin'
+            # Sparse: 1.2 GiB apparent size, ~0 bytes actually allocated.
+            with open(prefilled, 'wb') as f:
+                f.truncate(int(1.2 * 1024 * 1024 * 1024))
+
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             sock.bind(('127.0.0.1', 0))
             dest = ('127.0.0.1', PORT_USER)
