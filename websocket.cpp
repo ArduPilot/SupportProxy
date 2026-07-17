@@ -86,6 +86,22 @@ WebSocket::WebSocket(int _fd)
     check_headers();
 }
 
+/*
+  destructor: release the SSL objects. The socket fd is owned by the
+  caller (Connection2 / listen_port) and is closed there, never here.
+ */
+WebSocket::~WebSocket()
+{
+    if (ssl) {
+	SSL_free(ssl);
+	ssl = nullptr;
+    }
+    if (ctx) {
+	SSL_CTX_free(ctx);
+	ctx = nullptr;
+    }
+}
+
 void WebSocket::check_headers(void)
 {
     auto len = strnlen((const char *)pending, npending);
@@ -127,8 +143,7 @@ void WebSocket::fill_pending(void)
                         return;
                     }
                     ERR_print_errors_fp(stdout);
-                    close(fd);
-                    fd = -1;
+                    fd = -1;  // owner closes the socket
                     return;
                 }
                 printf("SSL handshake completed\n");
@@ -142,13 +157,11 @@ void WebSocket::fill_pending(void)
                 }
                 if (err == SSL_ERROR_ZERO_RETURN) {
                     // orderly shutdown
-                    close(fd);
-                    fd = -1;
+                    fd = -1;  // owner closes the socket
                     return;
                 }
                 ERR_print_errors_fp(stdout);
-                close(fd);
-                fd = -1;
+                fd = -1;  // owner closes the socket
                 return;
             }
         } else {
@@ -157,14 +170,12 @@ void WebSocket::fill_pending(void)
                 if (errno == EAGAIN || errno == EWOULDBLOCK) {
                     return;
                 }
-                close(fd);
-                fd = -1;
+                fd = -1;  // owner closes the socket
                 return;
             }
             if (n == 0) {
                 // EOF
-                close(fd);
-                fd = -1;
+                fd = -1;  // owner closes the socket
                 return;
             }
         }
@@ -291,7 +302,7 @@ bool WebSocket::send_handshake(const std::string &key)
                     return false; // try again later
                 }
                 ERR_print_errors_fp(stdout);
-                close(fd); fd = -1;
+                fd = -1;  // owner closes the socket
                 return false;
             }
         } else {
@@ -300,7 +311,7 @@ bool WebSocket::send_handshake(const std::string &key)
                 if (errno == EAGAIN || errno == EWOULDBLOCK) {
                     return false;
                 }
-                close(fd); fd = -1;
+                fd = -1;  // owner closes the socket
                 return false;
             }
         }
@@ -344,7 +355,7 @@ ssize_t WebSocket::send(const void *buf, size_t n)
                 return 0; // try again later
             }
             ERR_print_errors_fp(stdout);
-            close(fd); fd = -1;
+            fd = -1;  // owner closes the socket
             return -1;
         }
     } else {
@@ -353,7 +364,7 @@ ssize_t WebSocket::send(const void *buf, size_t n)
             if (errno == EAGAIN || errno == EWOULDBLOCK) {
                 return 0;
             }
-            close(fd); fd = -1;
+            fd = -1;  // owner closes the socket
             return -1;
         }
     }
@@ -385,8 +396,7 @@ ssize_t WebSocket::recv(void *buf, size_t n)
     auto decode_len = decode(pending, npending, used);
     if (decode_len == -2) {
 	// unrecoverable frame; fail the connection so the owner closes it
-	close(fd);
-	fd = -1;
+	fd = -1;  // owner closes the socket
 	return -1;
     }
     if (decode_len == -1) {
