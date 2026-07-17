@@ -174,7 +174,9 @@ void WebSocket::fill_pending(void)
 
 /*
   decode an incoming WebSocket packet and overwrite buf with the decoded data
-  return the number of decoded payload bytes, or -1 on error
+  return the number of decoded payload bytes, -1 if the frame is
+  incomplete (wait for more data), or -2 if the frame can never be
+  decoded (it doesn't fit in pending[]; the stream is unrecoverable)
  */
 ssize_t WebSocket::decode(uint8_t *buf, size_t n, size_t &used)
 {
@@ -199,9 +201,12 @@ ssize_t WebSocket::decode(uint8_t *buf, size_t n, size_t &used)
     // bound payload_len before the completeness checks below: pending[] is
     // fixed-size, and an attacker-supplied payload_len near UINT64_MAX would
     // wrap "pos + 4 + payload_len" to a small number, letting the check pass.
+    // fill_pending() keeps one byte for a NUL, so a frame needing more than
+    // sizeof(pending)-1 bytes can never complete: waiting for more data
+    // would wedge the connection forever, so fail it instead.
     const size_t mask_bytes = masked ? 4 : 0;
-    if (payload_len > sizeof(pending) - pos - mask_bytes) {
-        return -1;
+    if (payload_len > (sizeof(pending)-1) - pos - mask_bytes) {
+        return -2;
     }
 
     if (masked) {
@@ -369,9 +374,21 @@ ssize_t WebSocket::recv(void *buf, size_t n)
     }
     if (!done_headers) {
 	check_headers();
+	if (!done_headers) {
+	    // don't decode partial HTTP upgrade headers as a frame:
+	    // that consumed header bytes and broke the handshake when
+	    // the request arrived fragmented
+	    return 0;
+	}
     }
     size_t used;
     auto decode_len = decode(pending, npending, used);
+    if (decode_len == -2) {
+	// unrecoverable frame; fail the connection so the owner closes it
+	close(fd);
+	fd = -1;
+	return -1;
+    }
     if (decode_len == -1) {
 	return 0;
     }
