@@ -12,6 +12,7 @@
 class WebSocket {
 public:
     WebSocket(int fd);
+    ~WebSocket();
 
     static bool detect(int fd);
     ssize_t send(const void *buf, size_t n);
