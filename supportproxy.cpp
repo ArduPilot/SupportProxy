@@ -1201,8 +1201,10 @@ static void reload_ports(void)
     // even if keydb.py / the web admin UI is mutating in parallel
     auto *db = db_open_transaction();
     if (db == nullptr) {
-        printf("Database not found\n");
-        exit(1);
+        // transient open/lock failure: skip this cycle rather than
+        // killing the proxy (and every active session) at runtime
+        printf("reload: failed to open %s - %s\n", KEY_FILE, strerror(errno));
+        return;
     }
     tdb_traverse(db, handle_record, nullptr);
     db_close_cancel(db);
