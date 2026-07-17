@@ -31,6 +31,7 @@
 #include <netinet/in.h>
 #include <sys/wait.h>
 #include <sys/epoll.h>
+#include <sys/prctl.h>
 #include <signal.h>
 
 #include "mavlink.h"
@@ -1114,6 +1115,12 @@ static void fork_cleanup_child(void)
 {
     pid_t pid = fork();
     if (pid == 0) {
+        // die with the parent: this loop never exits on its own, so
+        // without this every proxy shutdown leaked an orphan process
+        prctl(PR_SET_PDEATHSIG, SIGTERM);
+        if (getppid() == 1) {
+            _exit(0);   // parent already gone before prctl took effect
+        }
         if (g_epfd != -1) {
             close(g_epfd);
             g_epfd = -1;
