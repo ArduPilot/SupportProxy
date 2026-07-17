@@ -92,6 +92,13 @@ struct listen_port {
 
 static struct listen_port *ports;
 
+// epoll instance used by wait_connection(). handle_connection() must
+// deregister a pair's sockets from it before closing them at fork
+// time: the child keeps the open file descriptions alive, so close()
+// alone leaves live registrations that wake the parent for every
+// packet the child handles.
+static int g_epfd = -1;
+
 // PID of the long-lived log-cleanup child forked from main() that
 // ages out old .tlog / .bin files. Tracked separately from
 // per-port-pair children so check_children() can respawn it if it
@@ -1101,6 +1108,10 @@ static void fork_cleanup_child(void)
 {
     pid_t pid = fork();
     if (pid == 0) {
+        if (g_epfd != -1) {
+            close(g_epfd);
+            g_epfd = -1;
+        }
         for (auto *p = ports; p; p = p->next) {
             close_sockets(p);
         }
@@ -1116,12 +1127,35 @@ static void fork_cleanup_child(void)
 }
 
 /*
+  deregister a pair's listening sockets from the parent's epoll set
+ */
+static void epoll_del_sockets(struct listen_port *p)
+{
+    if (g_epfd == -1) {
+	return;
+    }
+    const int fds[4] = { p->sock1_udp, p->sock2_udp,
+			 p->sock1_tcp, p->sock2_listen };
+    for (int fd : fds) {
+	if (fd != -1) {
+	    epoll_ctl(g_epfd, EPOLL_CTL_DEL, fd, nullptr);
+	}
+    }
+}
+
+/*
   handle a new connection
  */
 static void handle_connection(struct listen_port *p)
 {
     pid_t pid = fork();
     if (pid == 0) {
+	// the epoll instance is the parent's; drop our copy so a
+	// parent-side close/recreate doesn't leave it pinned here
+	if (g_epfd != -1) {
+	    close(g_epfd);
+	    g_epfd = -1;
+	}
 	for (auto *p2 = ports; p2; p2=p2->next) {
 	    if (p2 != p) {
 		close_sockets(p2);
@@ -1133,6 +1167,9 @@ static void handle_connection(struct listen_port *p)
     p->pid = pid;
     printf("[%d] New child %d\n", p->port2, int(p->pid));
 
+    // deregister before close: fork gave the child references to these
+    // descriptions, so close() alone leaves the registrations live
+    epoll_del_sockets(p);
     close_sockets(p);
 }
 
@@ -1190,6 +1227,7 @@ static void wait_connection(void)
         perror("epoll_create1");
         exit(1);
     }
+    g_epfd = epfd;
 
     /*
       rebuild epoll structure for current list of connections
@@ -1266,6 +1304,7 @@ static void wait_connection(void)
             reload_ports();
             close(epfd);
             epfd = epoll_create1(0);
+            g_epfd = epfd;
             rebuild_epoll_set();
         }
     }
