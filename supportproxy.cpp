@@ -1048,11 +1048,14 @@ static void open_sockets(struct listen_port *p)
 }
 
 /*
-  check for child exit
+  check for child exit. Returns true if a per-port-pair child was
+  reaped (the caller should refresh the epoll set so the reopened
+  listeners are watched again).
  */
-static void check_children(void)
+static bool check_children(void)
 {
     int wstatus = 0;
+    bool reaped = false;
     while (true) {
         pid_t pid = waitpid(-1, &wstatus, WNOHANG);
         if (pid <= 0) {
@@ -1072,6 +1075,7 @@ static void check_children(void)
 		// drop any live-connection records the child wrote
 		conn_remove_port2(p->port2);
 		found_child = true;
+		reaped = true;
 		// Don't reopen listening sockets for an entry that was
 		// removed from keys.tdb between fork and exit; that would
 		// rebind the port for a record that no longer exists.
@@ -1085,6 +1089,7 @@ static void check_children(void)
             printf("No child for %d found\n", int(pid));
         }
     }
+    return reaped;
 }
 
 /*
@@ -1231,19 +1236,6 @@ static void wait_connection(void)
             break;
         }
 
-        if (ret == 0) {
-            check_children();
-            double now = time_seconds();
-            if (now - last_reload > 5) {
-                last_reload = now;
-                reload_ports();
-                close(epfd);
-                epfd = epoll_create1(0);
-                rebuild_epoll_set();
-            }
-            continue;
-        }
-
         for (int i = 0; i < ret; i++) {
             int fd = events[i].data.fd;
 
@@ -1255,6 +1247,26 @@ static void wait_connection(void)
                     break;
                 }
             }
+        }
+
+        /*
+          Housekeeping must run on every iteration, not only when
+          epoll_wait times out. Children inherit the listening sockets,
+          so their traffic can keep waking us via registrations that
+          survived our close() after fork; gating on ret==0 starved
+          child reaping and DB reloads whenever any session was busy,
+          leaving killed connections dead until all sessions went idle.
+          Reaping a child forces an immediate reload so its reopened
+          listeners get back into the epoll set without the 5s wait.
+         */
+        const bool reaped = check_children();
+        double now = time_seconds();
+        if (reaped || now - last_reload > 5) {
+            last_reload = now;
+            reload_ports();
+            close(epfd);
+            epfd = epoll_create1(0);
+            rebuild_epoll_set();
         }
     }
     close(epfd);
