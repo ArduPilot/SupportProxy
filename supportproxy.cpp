@@ -344,6 +344,21 @@ static void main_loop(struct listen_port *p)
     fdmax = MAX(fdmax, p->sock1_tcp);
     fdmax = MAX(fdmax, p->sock2_listen);
 
+    // Close an engineer slot and keep the counters consistent.
+    // max_conn2_count is a scan watermark (highest used slot + 1): it
+    // may only shrink when the top slot(s) become free. Shrinking it
+    // because the counts happened to match dropped still-used higher
+    // slots out of every scan loop, silently freezing those engineers.
+    auto close_conn2 = [&](Connection2 &c2) {
+	c2.close();
+	if (conn2_count > 0) {
+	    conn2_count--;
+	}
+	while (max_conn2_count > 0 && !conn2[max_conn2_count-1].used) {
+	    max_conn2_count--;
+	}
+    };
+
     // Pull DROP_REQUESTED entries for our port2 out of connections.tdb,
     // close the matching slots, and delete the records. Returns true if
     // the user side was dropped (caller should exit main_loop).
@@ -397,13 +412,7 @@ static void main_loop(struct listen_port *p)
                 if (c2.used) {
                     printf("[%d] %s drop conn2[%d] requested\n",
                            p->port2, time_string(), idx - 1);
-                    c2.close();
-                    if (conn2_count > 0) {
-                        conn2_count--;
-                    }
-                    if (max_conn2_count > 0 && idx == max_conn2_count) {
-                        max_conn2_count--;
-                    }
+                    close_conn2(c2);
                 }
             }
         }
@@ -494,14 +503,7 @@ static void main_loop(struct listen_port *p)
 		       unsigned(p->port2), time_string(),
 		       c2.is_udp ? "UDP" : "TCP",
 		       unsigned(i), why);
-		c2.close();
-		// keep counters in sync: without this, repeated
-		// unauthenticated churn eventually drives conn2_count past
-		// MAX_COMM2_LINKS.
-		if (conn2_count == max_conn2_count) {
-		    max_conn2_count--;
-		}
-		conn2_count--;
+		close_conn2(c2);
 	    }
 	}
 
@@ -597,11 +599,7 @@ static void main_loop(struct listen_port *p)
 			}
 			if (!c2.is_udp && c2.sock != -1) {
 			    if (!c2.mav.send_message(msg)) {
-				c2.close();
-				if (conn2_count == max_conn2_count) {
-				    max_conn2_count--;
-				}
-				conn2_count--;
+				close_conn2(c2);
 			    } else {
 				c2.tx_msgs++;
 			    }
@@ -771,11 +769,7 @@ static void main_loop(struct listen_port *p)
 			    continue;
 			}
 			if (!c2.mav.send_message(msg)) {
-			    c2.close();
-			    if (conn2_count == max_conn2_count) {
-				max_conn2_count--;
-			    }
-			    conn2_count--;
+			    close_conn2(c2);
 			} else {
 			    c2.tx_msgs++;
 			}
@@ -859,9 +853,7 @@ static void main_loop(struct listen_port *p)
 		if (c2.ws) {
 		            if (n < 0) {
 		                printf("[%d] %s EOF TCP conn2[%u]\n", unsigned(p->port2), time_string(), unsigned(i+1));
-		                c2.close();
-		                if (conn2_count == max_conn2_count) { max_conn2_count--; }
-		                conn2_count--;
+		                close_conn2(c2);
 		                continue;
 		            }
 		            if (n == 0) {
@@ -871,9 +863,7 @@ static void main_loop(struct listen_port *p)
 		        } else {
 		            if (n <= 0) {
 		                printf("[%d] %s EOF TCP conn2[%u]\n", unsigned(p->port2), time_string(), unsigned(i+1));
-		                c2.close();
-		                if (conn2_count == max_conn2_count) { max_conn2_count--; }
-		                conn2_count--;
+		                close_conn2(c2);
 		                continue;
 		            }
 		        }
