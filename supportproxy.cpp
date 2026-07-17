@@ -57,6 +57,12 @@
 // legitimate signed engineers.
 static constexpr time_t CONN2_PREAUTH_SECONDS = 5;
 
+// User-side conn1 in bidi-sign mode: TCP/WS latch immediately but if
+// no signed user packet validates within this window we break the
+// per-pair child so the parent reopens the listener. UDP defers the
+// latch until validation, so this guard only fires for TCP/WS.
+static constexpr time_t CONN1_BIDI_PREAUTH_SECONDS = 5;
+
 static volatile sig_atomic_t g_drops_pending = 0;
 
 static void sigusr1_handler(int)
@@ -491,6 +497,18 @@ static void main_loop(struct listen_port *p)
 	    }
 	}
 
+	// bidi user-side pre-auth deadline: TCP/WS latches before the
+	// first signed packet validates. If we don't see a valid signed
+	// packet in time, exit the child so the parent reopens the
+	// listener for the legitimate signed user. (UDP defers the latch
+	// until validation, so it never enters this state.)
+	if (bidi && have_conn1 && !mav1.is_authenticated() && mav1_is_tcp &&
+	    wall_now - mav1_connected_at > CONN1_BIDI_PREAUTH_SECONDS) {
+	    printf("[%d] %s bidi conn1 pre-auth timeout — restarting child\n",
+		   unsigned(p->port2), time_string());
+	    break;
+	}
+
 	/*
 	  check for UDP user data
 	 */
@@ -505,18 +523,50 @@ static void main_loop(struct listen_port *p)
             last_pkt1 = now;
             count1++;
             if (!have_conn1) {
-                if (connect(p->sock1_udp, (struct sockaddr *)&from, fromlen) != 0) {
-                    break;
+                if (bidi) {
+                    // bidi pre-auth: validate the signature *before*
+                    // committing the listener to this tuple. Unsigned
+                    // or wrong-key senders cannot latch conn1 and
+                    // deny the legitimate signed user.
+                    mav1.init(p->sock1_udp, CHAN_COMM1, true, false, false, conn1_key_id);
+                    uint8_t *vbuf = buf;
+                    ssize_t vn = n;
+                    mavlink_message_t vmsg{};
+                    bool validated = false;
+                    while (vn > 0 && mav1.receive_message(vbuf, vn, vmsg)) {
+                        validated = true;
+                    }
+                    if (!validated) {
+                        continue;  // drop, leave listener open
+                    }
+                    if (connect(p->sock1_udp, (struct sockaddr *)&from, fromlen) != 0) {
+                        break;
+                    }
+                    have_conn1 = true;
+                    mav1_peer = from;
+                    mav1_connected_at = time(nullptr);
+                    mav1_is_tcp = false;
+                    last_conn_save_s = 0;
+                    printf("[%d] %s have UDP conn1 (bidi-validated) from %s\n",
+                           unsigned(p->port2), time_string(), addr_to_str(from));
+                    // bytes were already consumed during validation;
+                    // skip the main parse path below for this datagram
+                    n = 0;
+                } else {
+                    if (connect(p->sock1_udp, (struct sockaddr *)&from, fromlen) != 0) {
+                        break;
+                    }
+                    mav1.init(p->sock1_udp, CHAN_COMM1, bidi, false, false, conn1_key_id);
+                    have_conn1 = true;
+                    mav1_peer = from;
+                    mav1_connected_at = time(nullptr);
+                    mav1_is_tcp = false;
+                    // trigger an immediate connections.tdb snapshot on
+                    // the next loop iteration so the web UI sees the
+                    // new conn quickly
+                    last_conn_save_s = 0;
+                    printf("[%d] %s have UDP conn1 for from %s\n", unsigned(p->port2), time_string(), addr_to_str(from));
                 }
-		mav1.init(p->sock1_udp, CHAN_COMM1, bidi, false, false, conn1_key_id);
-                have_conn1 = true;
-		mav1_peer = from;
-		mav1_connected_at = time(nullptr);
-		mav1_is_tcp = false;
-		// trigger an immediate connections.tdb snapshot on the next
-		// loop iteration so the web UI sees the new conn quickly
-		last_conn_save_s = 0;
-		printf("[%d] %s have UDP conn1 for from %s\n", unsigned(p->port2), time_string(), addr_to_str(from));
             }
             mavlink_message_t msg {};
 	    // Parse user-side bytes whenever there's anywhere for them to
