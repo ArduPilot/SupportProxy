@@ -912,10 +912,19 @@ static void main_loop(struct listen_port *p)
 	    double snap_now = time_seconds();
 	    if (snap_now - last_conn_save_s > 5) {
 		last_conn_save_s = snap_now;
+		// Safety net: rescan for webadmin drop requests on the
+		// snapshot cadence. A request whose SIGUSR1 raced a
+		// snapshot rewrite would otherwise be lost for good.
+		if (process_drops()) {
+		    break;
+		}
 		signal(SIGCHLD, SIG_IGN);
 		if (fork() == 0) {
 		    auto *db = conn_db_open_transaction();
 		    if (db != nullptr) {
+			// drop requests that landed since we forked must
+			// survive the delete+rewrite below
+			const uint32_t drop_mask = conn_drop_mask(db, p->port2);
 			conn_delete_for_port2(db, p->port2);
 			time_t now_t = time(nullptr);
 			if (have_conn1) {
@@ -936,6 +945,9 @@ static void main_loop(struct listen_port *p)
 				e.transport = mav1_is_tcp ? CONN_TRANSPORT_TCP : CONN_TRANSPORT_UDP;
 			    }
 			    e.is_user = 1;
+			    if (drop_mask & 1u) {
+				e.flags |= CONN_FLAG_DROP_REQUESTED;
+			    }
 			    conn_write(db, e);
 			}
 			for (uint8_t i = 0; i < max_conn2_count; i++) {
@@ -962,6 +974,9 @@ static void main_loop(struct listen_port *p)
 				e.transport = CONN_TRANSPORT_TCP;
 			    }
 			    e.is_user = 0;
+			    if (drop_mask & (1u << (i + 1))) {
+				e.flags |= CONN_FLAG_DROP_REQUESTED;
+			    }
 			    conn_write(db, e);
 			}
 			conn_db_close_commit(db);

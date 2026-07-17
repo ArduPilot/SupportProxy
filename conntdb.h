@@ -82,6 +82,11 @@ bool conn_delete(TDB_CONTEXT *db, int port2, int conn_index);
 // Returns the number of records removed.
 int conn_delete_for_port2(TDB_CONTEXT *db, int port2);
 
+// Bitmask of conn_index values (0..31) whose record for this port2 has
+// CONN_FLAG_DROP_REQUESTED set. Used by the heartbeat snapshot so its
+// delete+rewrite can't wipe a drop request that raced it.
+uint32_t conn_drop_mask(TDB_CONTEXT *db, int port2);
+
 // One-shot helpers used by the parent (open + transaction internally).
 void conn_recreate_empty(void);
 void conn_remove_port2(int port2);
