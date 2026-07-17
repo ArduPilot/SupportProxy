@@ -1313,6 +1313,9 @@ static void wait_connection(void)
 int main(int argc, char *argv[])
 {
     setvbuf(stdout, nullptr, _IOLBF, 4096);
+    // a peer-closed TCP/WS/SSL connection must fail the write with
+    // EPIPE, not kill the child (and its whole session) with SIGPIPE
+    signal(SIGPIPE, SIG_IGN);
     printf("Opening sockets\n");
     // Wipe any connections.tdb records left behind by a previous run.
     // Per-port-pair children write into this file; on a fresh start no
