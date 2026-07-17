@@ -235,6 +235,7 @@ public:
 	close_fd(sock);
 	tcp_active = false;
 	used = false;
+	mav.set_ws(nullptr);
 	delete ws;
 	ws = nullptr;
 	connected_at = 0;
