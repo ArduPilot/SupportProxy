@@ -31,7 +31,8 @@ REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
 PHASES = [
     ('Connection Tests',     ['tests/test_connections.py']),
     ('Authentication Tests', ['tests/test_authentication.py']),
-    ('Robustness Tests',     ['tests/test_parent_housekeeping.py']),
+    ('Robustness Tests',     ['tests/test_parent_housekeeping.py',
+                              'tests/test_conn2_slot_orphan.py']),
     ('Webadmin Tests',       ['tests/webadmin/']),
 ]
 
