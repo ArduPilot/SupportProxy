@@ -52,8 +52,9 @@ int open_socket_in_udp(int port)
 
     setsockopt(res,SOL_SOCKET,SO_REUSEADDR,(char *)&one,sizeof(one));
 
-    if (bind(res, (struct sockaddr *)&sock, sizeof(sock)) < 0) { 
-        return(-1); 
+    if (bind(res, (struct sockaddr *)&sock, sizeof(sock)) < 0) {
+        close(res);
+        return(-1);
     }
 
     return res;
@@ -94,10 +95,12 @@ int open_socket_in_tcp(int port)
     set_tcp_options(res);
 
     if (bind(res, (struct sockaddr *)&sock, sizeof(sock)) < 0) {
-        return(-1); 
+        close(res);
+        return(-1);
     }
 
     if (listen(res, 100) != 0) {
+	close(res);
 	return(-1);
     }
 
