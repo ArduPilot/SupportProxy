@@ -1149,6 +1149,14 @@ static void epoll_del_sockets(struct listen_port *p)
 static void handle_connection(struct listen_port *p)
 {
     pid_t pid = fork();
+    if (pid < 0) {
+	// keep the sockets open and registered; the pending event fires
+	// again and we retry. Storing -1 in p->pid would kill the pair
+	// for good (nothing ever reaps pid -1) and a later
+	// kill(p->pid, ...) would signal every process on the system.
+	printf("[%d] fork failed - %s\n", p->port2, strerror(errno));
+	return;
+    }
     if (pid == 0) {
 	// the epoll instance is the parent's; drop our copy so a
 	// parent-side close/recreate doesn't leave it pinned here
