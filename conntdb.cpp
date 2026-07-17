@@ -145,6 +145,41 @@ static int collect_port2(struct tdb_context *db, TDB_DATA key,
     return 0;
 }
 
+struct drop_mask_ctx {
+    int port2;
+    uint32_t mask;
+};
+
+static int collect_drop_mask(struct tdb_context *db, TDB_DATA key,
+                             TDB_DATA data, void *ptr)
+{
+    (void)db;
+    auto *c = (struct drop_mask_ctx *)ptr;
+    if (key.dsize != sizeof(struct ConnKey) ||
+        data.dsize < CONNENTRY_MIN_SIZE) {
+        return 0;
+    }
+    struct ConnKey k {};
+    memcpy(&k, key.dptr, sizeof(k));
+    if (k.port2 != c->port2 || k.conn_index < 0 || k.conn_index >= 32) {
+        return 0;
+    }
+    struct ConnEntry e {};
+    size_t copy = data.dsize < sizeof(e) ? data.dsize : sizeof(e);
+    memcpy(&e, data.dptr, copy);
+    if (e.magic == CONN_MAGIC && (e.flags & CONN_FLAG_DROP_REQUESTED) != 0) {
+        c->mask |= 1u << k.conn_index;
+    }
+    return 0;
+}
+
+uint32_t conn_drop_mask(TDB_CONTEXT *db, int port2)
+{
+    struct drop_mask_ctx c { port2, 0 };
+    tdb_traverse(db, collect_drop_mask, &c);
+    return c.mask;
+}
+
 int conn_delete_for_port2(TDB_CONTEXT *db, int port2)
 {
     struct port2_filter f { port2, {} };
