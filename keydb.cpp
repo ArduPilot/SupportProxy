@@ -1,10 +1,37 @@
 #include "keydb.h"
 #include <string.h>
 #include <stdlib.h>
+#include <errno.h>
+#include <time.h>
 
+/*
+  Open keys.tdb. EBUSY can happen briefly when a concurrent transaction
+  (keydb.py, the web admin) holds the open lock; retry with a short
+  backoff like conn_db_open() does so a transient collision doesn't
+  fail a reload or a signing-key load.
+ */
 TDB_CONTEXT *db_open(void)
 {
-    return tdb_open(KEY_FILE, 1000, 0, O_RDWR | O_CREAT, 0600);
+    static const struct timespec backoffs[] = {
+        {0, 0},
+        {0, 10  * 1000 * 1000},   // 10ms
+        {0, 50  * 1000 * 1000},
+        {0, 100 * 1000 * 1000},
+        {0, 250 * 1000 * 1000},
+    };
+    for (size_t i = 0; i < sizeof(backoffs) / sizeof(backoffs[0]); i++) {
+        if (i > 0) {
+            nanosleep(&backoffs[i], nullptr);
+        }
+        auto *db = tdb_open(KEY_FILE, 1000, 0, O_RDWR | O_CREAT, 0600);
+        if (db != nullptr) {
+            return db;
+        }
+        if (errno != EBUSY) {
+            return nullptr;
+        }
+    }
+    return nullptr;
 }
 
 TDB_CONTEXT *db_open_transaction(void)
@@ -13,7 +40,10 @@ TDB_CONTEXT *db_open_transaction(void)
     if (db == nullptr) {
         return db;
     }
-    tdb_transaction_start(db);
+    if (tdb_transaction_start(db) != 0) {
+        tdb_close(db);
+        return nullptr;
+    }
     return db;
 }
 
