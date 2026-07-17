@@ -70,6 +70,10 @@ void MAVLink::init(int _fd, mavlink_channel_t _chan, bool signing_required, bool
     allow_websocket = _allow_websocket;
     got_bad_signature[chan] = false;
     use_sendto = false;
+    // slot reuse: a previous WebSocket peer's wrapper is deleted by the
+    // owner on close; without this reset the next (plain) peer on the
+    // same slot would send through the dangling pointer
+    ws = nullptr;
 
     ZERO_STRUCT(signing_streams);
     ZERO_STRUCT(signing);

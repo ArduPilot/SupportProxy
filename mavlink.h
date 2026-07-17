@@ -94,5 +94,5 @@ private:
 
     ssize_t send_data(const void *buf, ssize_t len);
 
-    WebSocket *ws;
+    WebSocket *ws = nullptr;
 };
