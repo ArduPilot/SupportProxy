@@ -26,12 +26,13 @@ import sys
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
 
-# Phases run in this order when no selectors are given. Each is a single
-# pytest target; the runner spawns one pytest invocation per phase.
+# Phases run in this order when no selectors are given. Each entry is a
+# list of pytest targets; the runner spawns one pytest invocation per phase.
 PHASES = [
-    ('Connection Tests',     'tests/test_connections.py'),
-    ('Authentication Tests', 'tests/test_authentication.py'),
-    ('Webadmin Tests',       'tests/webadmin/'),
+    ('Connection Tests',     ['tests/test_connections.py']),
+    ('Authentication Tests', ['tests/test_authentication.py']),
+    ('Robustness Tests',     ['tests/test_parent_housekeeping.py']),
+    ('Webadmin Tests',       ['tests/webadmin/']),
 ]
 
 
@@ -142,10 +143,10 @@ def build_pytest_cmd(j, extra_args, target_args, timing=False):
 
 def cmd_list():
     """Run pytest --collect-only -q across the three phases."""
-    for label, target in PHASES:
+    for label, targets in PHASES:
         print('\n=== %s ===' % label, flush=True)
         subprocess.call([sys.executable, '-m', 'pytest', '--collect-only',
-                         '-q', '--no-header', target])
+                         '-q', '--no-header'] + targets)
 
 
 def main():
@@ -221,9 +222,9 @@ def main():
     else:
         # Default: three separate phases (kept apart so phase 2 can wipe
         # keys.tdb without disturbing phase 1's live supportproxy fixture).
-        for label, target in PHASES:
+        for label, targets in PHASES:
             print('\n=== Running %s ===' % label)
-            run_one([], [target])
+            run_one([], targets)
 
     if args.timing:
         print_combined_timings(all_timings)
