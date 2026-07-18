@@ -65,6 +65,13 @@ static bool is_session_file(const char *name)
   about to overflow. Walks every date dir under logs/<port2>/, sorts
   files by mtime ascending, deletes from the head.
  */
+// Files whose mtime is within this window are treated as belonging to
+// a live session and are never deleted by the quota pass: on Linux the
+// unlink would succeed while the writer keeps appending to an
+// invisible unlinked inode — the log is lost on close and the disk
+// usage stops being counted.
+static constexpr time_t ACTIVE_FILE_GRACE_S = 60;
+
 static void enforce_port2_quota(uint32_t port2, const char *base_dir,
                                 off_t needed = 0)
 {
@@ -113,8 +120,12 @@ static void enforce_port2_quota(uint32_t port2, const char *base_dir,
             // allocated size, not apparent: .bin files are sparse and
             // st_size wildly overstates what they cost on disk
             const off_t alloc = off_t(fst.st_blocks) * 512;
-            items.push_back({fpath, alloc, fst.st_mtime, date_dir});
             total += alloc;
+            if (time(nullptr) - fst.st_mtime < ACTIVE_FILE_GRACE_S) {
+                // live session file: count it, never delete it
+                continue;
+            }
+            items.push_back({fpath, alloc, fst.st_mtime, date_dir});
         }
         closedir(dd);
     }
