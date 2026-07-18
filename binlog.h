@@ -234,6 +234,12 @@ private:
     off_t other_sessions_bytes_ = 0;
     unsigned writes_since_quota_refresh_ = 0;
     void refresh_other_sessions_bytes();
+    // Rate limit for the write-time quota-breach cleanup: when the
+    // gate trips we run the per-port2 quota pass immediately (instead
+    // of dropping blocks until the hourly pass), but at most once per
+    // this interval so a genuinely full dir isn't rescanned per block.
+    static constexpr double QUOTA_CLEANUP_MIN_INTERVAL_S = 30.0;
+    double last_quota_cleanup_s_ = 0.0;
 
     // Per-entry MAVLink sysid filter for SYSTEM_TIME-based reboot
     // detection. 0 = match any (default). Set from KeyEntry.fc_sysid

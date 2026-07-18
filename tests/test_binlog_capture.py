@@ -838,33 +838,60 @@ class TestBinlogCapture:
         os.utime(prefilled, (now - age_seconds, now - age_seconds))
         return prefilled
 
-    def test_disk_quota_blocks_writes_when_over_cap(self, proxy_workdir):
-        """With the per-port2 quota already consumed by real (allocated)
-        bytes, legitimate blocks must be dropped at write time. Uses
-        SUPPORTPROXY_PORT2_QUOTA_BYTES to shrink the quota so the test
-        seeds small real files."""
+    def test_quota_breach_triggers_immediate_cleanup(self, proxy_workdir):
+        """A write-time quota breach must age out old sessions right
+        away and let the write proceed — not silently drop blocks for
+        up to an hour until the next cleanup pass (which is how a
+        preflight-rebooted aircraft ended up with an empty .bin in the
+        field)."""
         _setup_db(proxy_workdir, PORT_USER, PORT_ENG, 'bintest', 'bp',
                   'binlog')
 
         proc = _start_proxy(proxy_workdir, PORT_ENG, quota_bytes=300000)
         try:
-            self._seed_prefill_after_startup(proxy_workdir, proc,
-                                             400 * 1024)
+            prefilled = self._seed_prefill_after_startup(
+                proxy_workdir, proc, 400 * 1024)
 
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             sock.bind(('127.0.0.1', 0))
             dest = ('127.0.0.1', PORT_USER)
 
-            # seqno=0 will pass the strict-start gate and open
-            # session1.bin, but the quota check should reject the
-            # actual write — session1.bin should stay empty.
+            # seqno=0 opens session1.bin; the quota is breached by the
+            # (old) prefill, which the immediate cleanup must delete so
+            # the write lands.
+            _send_data_block(sock, dest, 0, b'\xaa' * 50)
+
+            bin_path = _bin_path(proxy_workdir, PORT_ENG)
+            assert _wait_for(
+                lambda: bin_path.exists() and bin_path.stat().st_size >= 200,
+                timeout=5.0), \
+                'write did not proceed after quota breach; proxy log:\n%s' \
+                % ''.join(proc._lines[-10:])
+            assert not prefilled.exists(), \
+                'old session should have been aged out by immediate cleanup'
+
+            sock.close()
+        finally:
+            _terminate(proc)
+
+    def test_quota_still_blocks_when_nothing_to_free(self, proxy_workdir):
+        """When the quota genuinely can't be met (nothing deletable),
+        blocks must still be dropped rather than written over quota."""
+        _setup_db(proxy_workdir, PORT_USER, PORT_ENG, 'bintest', 'bp',
+                  'binlog')
+
+        # quota smaller than a single 200-byte block: no amount of
+        # cleanup can make the write fit.
+        proc = _start_proxy(proxy_workdir, PORT_ENG, quota_bytes=100)
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.bind(('127.0.0.1', 0))
+            dest = ('127.0.0.1', PORT_USER)
+
             _send_data_block(sock, dest, 0, b'\xaa' * 50)
             time.sleep(1.0)
 
             bin_path = _bin_path(proxy_workdir, PORT_ENG)
-            # session1.bin may or may not exist (open() succeeds; write
-            # is rejected). Either is acceptable. If it exists, it must
-            # be 0 bytes.
             if bin_path.exists():
                 sz = bin_path.stat().st_size
                 assert sz == 0, \

@@ -29,3 +29,10 @@ void log_cleanup_loop(const char *base_dir = "logs");
   test suite so it can drive cleanup without the sleep loop.
  */
 void log_cleanup_once(const char *base_dir = "logs");
+
+/*
+  Run just the quota pass for a single port pair, synchronously.
+  Used by the binlog writer when a write-time quota breach needs
+  relief now rather than at the next hourly pass.
+ */
+void log_cleanup_port2_quota(unsigned port2, const char *base_dir = "logs");
