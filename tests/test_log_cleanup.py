@@ -190,3 +190,39 @@ class TestTlogCleanup:
             assert c.exists(), 'newest file deleted unexpectedly'
         finally:
             _terminate(proc)
+
+    def test_quota_frees_headroom_below_cap(self, proxy_workdir):
+        """The quota pass must free down to ~80% of the cap, not stop
+        just under it — otherwise an active session's growth re-breaches
+        the cap within minutes and binlog writes stall until the next
+        hourly pass."""
+        workdir, _, db = proxy_workdir
+        _add_entry(db, 26501, 26502, retention=0.0)  # forever
+
+        # a (150 KB, oldest), b (150 KB), c (800 KB, newest): total
+        # ~1.1 MB against a 1 MB quota. Deleting a alone gets under the
+        # cap (~950 KB) but not under the 80% target (~819 KB); b must
+        # go too. c (newest) survives.
+        a = _seed(workdir, 26502, '2026-05-08', 'session1.bin',
+                  age_seconds=300)
+        b = _seed(workdir, 26502, '2026-05-09', 'session1.bin',
+                  age_seconds=200)
+        c = _seed(workdir, 26502, '2026-05-10', 'session1.bin',
+                  age_seconds=100)
+        a.write_bytes(b'\xaa' * (150 * 1024))
+        b.write_bytes(b'\xbb' * (150 * 1024))
+        c.write_bytes(b'\xcc' * (800 * 1024))
+        now = time.time()
+        os.utime(a, (now - 300, now - 300))
+        os.utime(b, (now - 200, now - 200))
+        os.utime(c, (now - 100, now - 100))
+
+        proc = _start_proxy(workdir, quota_bytes=1024 * 1024)
+        try:
+            assert _wait_for_state(lambda: not a.exists(), timeout=5.0), \
+                'oldest file should have been removed by quota pass'
+            assert _wait_for_state(lambda: not b.exists(), timeout=5.0), \
+                'quota pass stopped at the cap instead of freeing headroom'
+            assert c.exists(), 'newest file deleted unexpectedly'
+        finally:
+            _terminate(proc)
