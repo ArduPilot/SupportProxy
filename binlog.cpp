@@ -140,7 +140,9 @@ void BinlogWriter::refresh_other_sessions_bytes()
                     continue;
                 }
             }
-            other_sessions_bytes_ += st.st_size;
+            // allocated size, not apparent: sparse .bin files would
+            // otherwise overstate their disk cost and starve the quota
+            other_sessions_bytes_ += off_t(st.st_blocks) * 512;
         }
         closedir(dd);
     }

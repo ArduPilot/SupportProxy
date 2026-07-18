@@ -109,8 +109,11 @@ static void enforce_port2_quota(uint32_t port2, const char *base_dir)
             if (stat(fpath, &fst) != 0) {
                 continue;
             }
-            items.push_back({fpath, fst.st_size, fst.st_mtime, date_dir});
-            total += fst.st_size;
+            // allocated size, not apparent: .bin files are sparse and
+            // st_size wildly overstates what they cost on disk
+            const off_t alloc = off_t(fst.st_blocks) * 512;
+            items.push_back({fpath, alloc, fst.st_mtime, date_dir});
+            total += alloc;
         }
         closedir(dd);
     }
