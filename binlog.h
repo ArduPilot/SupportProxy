@@ -148,8 +148,14 @@ private:
     // ArduPilot's client-timeout is 10 s so 1 Hz is comfortable.
     static constexpr double   START_REPEAT_S     = 1.0;
     // Throttle for the STOP nudge sent while a vehicle streams mid-log
-    // blocks at us with no file open (see gated_midstream_).
+    // blocks at us with no file open (see gated_block_count_).
     static constexpr double   STOP_REPEAT_S      = 2.0;
+    // Gated blocks required before the first STOP: one or two stale
+    // packets (e.g. delayed pre-reboot blocks right after a rotation)
+    // must not stop a healthy stream that is about to deliver its
+    // seqno 0; a genuinely mid-log stream reaches this in well under
+    // a second.
+    static constexpr unsigned STOP_MIN_GATED_BLOCKS = 3;
     // Keep-alive START cadence after streaming has begun: defence in
     // depth so a post-reboot vehicle (whose _sending_to_client got
     // cleared) resumes streaming within ~5 s of the next keepalive.
@@ -227,12 +233,13 @@ private:
     bool send_start_packet(MAVLink &user_link);
     bool send_stop_packet(MAVLink &user_link);
 
-    // True while DATA_BLOCKs are being rejected by the strict-start
-    // gate (no file open, seqno != 0): the vehicle is streaming
-    // mid-log and can only recover by restarting from seqno 0. tick()
-    // sends STOP so that happens now instead of after the vehicle's
-    // 10 s no-ACK client timeout.
-    bool gated_midstream_ = false;
+    // Count of DATA_BLOCKs rejected by the strict-start gate (no file
+    // open, seqno != 0) since the last open/rotation: the vehicle is
+    // streaming mid-log and can only recover by restarting from
+    // seqno 0. Once it passes STOP_MIN_GATED_BLOCKS, tick() sends
+    // STOP so that happens now instead of after the vehicle's 10 s
+    // no-ACK client timeout. Saturating.
+    unsigned gated_block_count_ = 0;
     double last_stop_sent_s = 0.0;
 
     // Captured on the first successful open() so rotate_for_reboot()
