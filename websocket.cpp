@@ -26,20 +26,43 @@ static uint8_t wss_prefix[] { 0x16, 0x03, 0x01 };
   see if this could be a WebSocket connection by looking at the first
   packet
  */
-bool WebSocket::detect(int fd)
+ws_detect_t WebSocket::detect(int fd)
 {
+    const size_t ws_len = strlen(ws_prefix);          // 14 ("GET / HTTP/1.1")
+    const size_t wss_len = sizeof(wss_prefix);        // 3 (TLS ClientHello)
     uint8_t peekbuf[14] {};
 
-    const ssize_t peekn = ::recv(fd, peekbuf, sizeof(peekbuf), MSG_PEEK);
-    if (peekn >= ssize_t(sizeof(wss_prefix)) && memcmp(wss_prefix, peekbuf, sizeof(wss_prefix)) == 0) {
-	// SSL connection
-	return true;
+    ssize_t peekn = ::recv(fd, peekbuf, sizeof(peekbuf), MSG_PEEK);
+    if (peekn <= 0) {
+	return WS_MORE;   // nothing readable yet; try again
     }
-    if (peekn >= ssize_t(sizeof(ws_prefix)) &&
-	strncmp(ws_prefix, (const char *)peekbuf, strlen(ws_prefix)) == 0) {
-	return true;
+    const size_t n = size_t(peekn);
+
+    // TLS ClientHello (wss). Compare only the bytes we have.
+    const size_t wss_cmp = n < wss_len ? n : wss_len;
+    if (memcmp(wss_prefix, peekbuf, wss_cmp) == 0) {
+	if (n >= wss_len) {
+	    return WS_YES;
+	}
+	return WS_MORE;   // matches so far, need more to be sure
     }
-    return false;
+
+    // HTTP upgrade (ws). NOTE: ws_prefix is a char*, so its length is
+    // strlen(), not sizeof() — the old sizeof() admitted an 8-byte
+    // prefix and then strncmp'd 14 bytes against a half-filled buffer,
+    // misclassifying a fragmented "GET / HTTP/1.1" as raw MAVLink.
+    const size_t ws_cmp = n < ws_len ? n : ws_len;
+    if (strncmp(ws_prefix, (const char *)peekbuf, ws_cmp) == 0) {
+	if (n >= ws_len) {
+	    return WS_YES;
+	}
+	return WS_MORE;   // matches so far, need more to be sure
+    }
+
+    // Doesn't match either handshake prefix. A raw MAVLink2 frame
+    // starts with 0xFD (v1: 0xFE), never 'G' or 0x16, so this is a
+    // definite raw connection even from a single byte.
+    return WS_NO;
 }
 
 /*
