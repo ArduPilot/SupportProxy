@@ -74,10 +74,12 @@ def _setup_db(workdir, port_user, port_eng, name, passphrase, *flags):
     db.close()
 
 
-def _start_proxy(workdir, port_eng, quota_bytes=None):
+def _start_proxy(workdir, port_eng, quota_bytes=None, cleanup_interval=None):
     env = os.environ.copy()
     if quota_bytes is not None:
         env['SUPPORTPROXY_PORT2_QUOTA_BYTES'] = str(quota_bytes)
+    if cleanup_interval is not None:
+        env['SUPPORTPROXY_CLEANUP_INTERVAL'] = str(cleanup_interval)
     proc = subprocess.Popen(
         [SUPPORTPROXY_BIN], cwd=str(workdir), env=env,
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -921,6 +923,31 @@ class TestBinlogCapture:
                 'old session should have been aged out'
 
             sock.close()
+        finally:
+            _terminate(proc)
+
+    def test_quota_pass_never_deletes_active_files(self, proxy_workdir):
+        """A live session's files (fresh mtime) must never be unlinked
+        by the quota pass, even when they alone exceed the quota: the
+        writer would keep appending to an invisible unlinked inode and
+        the whole log would be lost on close."""
+        _setup_db(proxy_workdir, PORT_USER, PORT_ENG, 'bintest', 'bp',
+                  'binlog')
+
+        # Fast cleanup ticks so the quota pass runs several times
+        # inside the test window.
+        proc = _start_proxy(proxy_workdir, PORT_ENG, quota_bytes=100000,
+                            cleanup_interval='0.3')
+        try:
+            # 150 KB with a *fresh* mtime — over quota, but "active".
+            prefilled = self._seed_prefill_after_startup(
+                proxy_workdir, proc, 150 * 1024, age_seconds=0)
+
+            # Several 0.3s cleanup ticks pass; the file must survive.
+            time.sleep(2.0)
+            assert prefilled.exists(), \
+                'quota pass deleted an active session file; log:\n%s' \
+                % ''.join(proc._lines[-10:])
         finally:
             _terminate(proc)
 
