@@ -245,7 +245,22 @@ void BinlogWriter::handle_block(uint32_t port2, unsigned session_n,
         return;
     }
     const off_t quota = port2_quota_bytes();
-    if (other_sessions_bytes_ + prospective_size > quota) {
+    // Charge our own file by its allocated size, matching how every
+    // other file is counted: a legitimate forward jump can grow the
+    // sparse logical extent by up to MAX_FORWARD_JUMP_BYTES while
+    // allocating almost nothing, and charging the logical size would
+    // falsely trip the quota (and the cleanup pass, which sees only
+    // allocated bytes, would rightly refuse to free anything).
+    off_t own_alloc = 0;
+    {
+        struct stat fst;
+        if (fstat(fileno(fp), &fst) == 0) {
+            own_alloc = off_t(fst.st_blocks) * 512;
+        }
+    }
+    const off_t projected = other_sessions_bytes_ + own_alloc
+                            + off_t(BLOCK_BYTES);
+    if (projected > quota) {
         // Try to free space now rather than dropping every block until
         // the hourly cleanup pass: age out the oldest sessions for this
         // port2 and re-baseline. Rate-limited so a dir that genuinely
@@ -260,12 +275,13 @@ void BinlogWriter::handle_block(uint32_t port2, unsigned session_n,
             refresh_other_sessions_bytes();
         }
     }
-    if (other_sessions_bytes_ + prospective_size > quota) {
+    if (other_sessions_bytes_ + own_alloc + off_t(BLOCK_BYTES) > quota) {
         ::printf("binlog: dropping seqno=%u (port2=%u total would be "
                  "%lld > %lld byte quota; cleanup pass will age out "
                  "old sessions)\n",
                  unsigned(blk.seqno), unsigned(port2_),
-                 (long long)(other_sessions_bytes_ + prospective_size),
+                 (long long)(other_sessions_bytes_ + own_alloc
+                             + off_t(BLOCK_BYTES)),
                  (long long)quota);
         return;
     }
