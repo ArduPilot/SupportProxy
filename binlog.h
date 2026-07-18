@@ -147,6 +147,9 @@ private:
     // How often to re-send START until the vehicle starts streaming.
     // ArduPilot's client-timeout is 10 s so 1 Hz is comfortable.
     static constexpr double   START_REPEAT_S     = 1.0;
+    // Throttle for the STOP nudge sent while a vehicle streams mid-log
+    // blocks at us with no file open (see gated_midstream_).
+    static constexpr double   STOP_REPEAT_S      = 2.0;
     // Keep-alive START cadence after streaming has begun: defence in
     // depth so a post-reboot vehicle (whose _sending_to_client got
     // cleared) resumes streaming within ~5 s of the next keepalive.
@@ -218,9 +221,19 @@ private:
                          double now_s);
     void drop_stale_nack_state(double now_s);
     bool send_status(MAVLink &user_link, uint32_t seqno, uint8_t status);
-    // The magic START packet emit, factored out so both the pre-stream
-    // 1 Hz loop and the streaming-mode keepalive call it.
+    // The magic START/STOP packet emit, shared by the pre-stream 1 Hz
+    // loop, the streaming-mode keepalive and the mid-log STOP nudge.
+    bool send_magic_packet(MAVLink &user_link, uint32_t magic_seqno);
     bool send_start_packet(MAVLink &user_link);
+    bool send_stop_packet(MAVLink &user_link);
+
+    // True while DATA_BLOCKs are being rejected by the strict-start
+    // gate (no file open, seqno != 0): the vehicle is streaming
+    // mid-log and can only recover by restarting from seqno 0. tick()
+    // sends STOP so that happens now instead of after the vehicle's
+    // 10 s no-ACK client timeout.
+    bool gated_midstream_ = false;
+    double last_stop_sent_s = 0.0;
 
     // Captured on the first successful open() so rotate_for_reboot()
     // can re-scan the per-day dir for a fresh session N without
