@@ -235,37 +235,48 @@ class BaseConnectionTest:
         """
         user_conn = None
         engineer_conn = None
+        stop_sending = threading.Event()
+        sender_threads = []
 
         try:
             port1, port2 = ports if ports is not None else TEST_PORTS
 
-            # Create connections
+            # User connection first; the engineer is connected only
+            # after the user-side wait below. Connecting the engineer
+            # up front left its socket idle while
+            # wait_for_connection_user burned its full 10s in the
+            # bidi negative tests (no conn1 latch by design), and the
+            # proxy's 5s conn2 pre-auth deadline then closed it before
+            # any signed traffic flowed — a flaky handshake/reconnect
+            # race, not proxy misbehaviour. An engineer must start
+            # signing within 5s of connecting.
             user_conn = self.create_connection(user_conn_type, port1,
                                                source_system=1)
-            engineer_conn = self.create_connection(engineer_conn_type, port2,
-                                                   source_system=2)
-
-            # Setup signing for engineer if provided
-            self.setup_signing(engineer_conn, engineer_signing_key,
-                               enable_signing=(engineer_signing_key is not None))
             # Setup signing for user (bidi-sign tests)
             self.setup_signing(user_conn, user_signing_key,
                                enable_signing=(user_signing_key is not None))
 
             # Start continuous message sending
-            stop_sending = threading.Event()
-
             user_sender = self.create_message_sender(
                 user_conn, ['heartbeat_user', 'system_time'], stop_sending)
-            engineer_sender = self.create_message_sender(
-                engineer_conn, ['heartbeat_engineer'], stop_sending)
-
             user_thread = threading.Thread(target=user_sender)
-            engineer_thread = threading.Thread(target=engineer_sender)
 
             user_thread.start()
+            sender_threads.append(user_thread)
             self.wait_for_connection_user(test_server)
+
+            # Now the engineer: connect, sign, and start sending
+            # immediately so it authenticates well inside the proxy's
+            # pre-auth window.
+            engineer_conn = self.create_connection(engineer_conn_type, port2,
+                                                   source_system=2)
+            self.setup_signing(engineer_conn, engineer_signing_key,
+                               enable_signing=(engineer_signing_key is not None))
+            engineer_sender = self.create_message_sender(
+                engineer_conn, ['heartbeat_engineer'], stop_sending)
+            engineer_thread = threading.Thread(target=engineer_sender)
             engineer_thread.start()
+            sender_threads.append(engineer_thread)
 
             # Test for specified duration. Drain *all* available messages
             # per iteration (not just one per type) so a burst of buffered
@@ -287,14 +298,14 @@ class BaseConnectionTest:
                     elif t == 'SYSTEM_TIME':
                         system_time_count += 1
 
-            # Stop sending
-            stop_sending.set()
-            user_thread.join()
-            engineer_thread.join()
-
             return heartbeat_count, system_time_count
 
         finally:
+            # Stop senders before closing their connections, even when
+            # we get here via an exception mid-setup.
+            stop_sending.set()
+            for t in sender_threads:
+                t.join()
             if user_conn:
                 user_conn.close()
             if engineer_conn:
