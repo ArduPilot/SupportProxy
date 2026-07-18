@@ -154,7 +154,11 @@ private:
     // packets (e.g. delayed pre-reboot blocks right after a rotation)
     // must not stop a healthy stream that is about to deliver its
     // seqno 0; a genuinely mid-log stream reaches this in well under
-    // a second.
+    // a second. Residual: ArduPilot has a single remote-log stream
+    // with no ownership check, so if another collector (e.g. a local
+    // MAVProxy dataflash_logger) is also attached to the vehicle, our
+    // STOP restarts its stream too — inherent to the protocol, and
+    // two collectors on one vehicle fight over ACKs regardless.
     static constexpr unsigned STOP_MIN_GATED_BLOCKS = 3;
     // Keep-alive START cadence after streaming has begun: defence in
     // depth so a post-reboot vehicle (whose _sending_to_client got

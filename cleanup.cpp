@@ -79,6 +79,13 @@ static bool is_session_file(const char *name)
 // unlink would succeed while the writer keeps appending to an
 // invisible unlinked inode — the log is lost on close and the disk
 // usage stops being counted.
+//
+// mtime is a heuristic, not ownership: the hourly pass runs in the
+// cleanup child and cannot know which files other children hold open.
+// An open file idle for longer than the grace (a stalled stream) can
+// still be unlinked, and a just-closed session is protected slightly
+// longer than needed. Both are acceptable: a healthy binlog/tlog
+// writes many times per second.
 static constexpr time_t ACTIVE_FILE_GRACE_S = 60;
 
 static void enforce_port2_quota(uint32_t port2, const char *base_dir,

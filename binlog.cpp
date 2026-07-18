@@ -258,15 +258,22 @@ void BinlogWriter::handle_block(uint32_t port2, unsigned session_n,
     // allocating almost nothing, and charging the logical size would
     // falsely trip the quota (and the cleanup pass, which sees only
     // allocated bytes, would rightly refuse to free anything).
+    // Project growth as one filesystem block, not BLOCK_BYTES: a
+    // 200-byte write into an unallocated region allocates a whole
+    // block, and projecting less would let the total overshoot the
+    // quota by the difference.
     off_t own_alloc = 0;
+    off_t write_growth = off_t(BLOCK_BYTES);
     {
         struct stat fst;
         if (fstat(fileno(fp), &fst) == 0) {
             own_alloc = off_t(fst.st_blocks) * 512;
+            if (off_t(fst.st_blksize) > write_growth) {
+                write_growth = off_t(fst.st_blksize);
+            }
         }
     }
-    const off_t projected = other_sessions_bytes_ + own_alloc
-                            + off_t(BLOCK_BYTES);
+    const off_t projected = other_sessions_bytes_ + own_alloc + write_growth;
     if (projected > quota) {
         // Try to free space now rather than dropping every block until
         // the hourly cleanup pass: age out the oldest sessions for this
@@ -276,19 +283,19 @@ void BinlogWriter::handle_block(uint32_t port2, unsigned session_n,
         if (cnow - last_quota_cleanup_s_ >= QUOTA_CLEANUP_MIN_INTERVAL_S) {
             last_quota_cleanup_s_ = cnow;
             // the pass counts our own on-disk allocation itself; the
-            // extra headroom we need beyond that is this block
+            // extra headroom we need beyond that is this write
             log_cleanup_port2_quota(port2_, base_dir_.c_str(),
-                                    off_t(BLOCK_BYTES));
+                                    write_growth);
             refresh_other_sessions_bytes();
         }
     }
-    if (other_sessions_bytes_ + own_alloc + off_t(BLOCK_BYTES) > quota) {
+    if (other_sessions_bytes_ + own_alloc + write_growth > quota) {
         ::printf("binlog: dropping seqno=%u (port2=%u total would be "
                  "%lld > %lld byte quota; cleanup pass will age out "
                  "old sessions)\n",
                  unsigned(blk.seqno), unsigned(port2_),
                  (long long)(other_sessions_bytes_ + own_alloc
-                             + off_t(BLOCK_BYTES)),
+                             + write_growth),
                  (long long)quota);
         return;
     }
