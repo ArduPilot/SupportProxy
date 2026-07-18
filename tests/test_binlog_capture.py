@@ -926,6 +926,41 @@ class TestBinlogCapture:
         finally:
             _terminate(proc)
 
+    def test_sparse_forward_jump_not_charged_as_logical_size(
+            self, proxy_workdir):
+        """A legitimate forward jump makes the active .bin sparse: its
+        logical size can far exceed its allocated size. The quota gate
+        must charge the allocated size (like everything else), or the
+        jump falsely trips the quota — and the cleanup pass, seeing
+        only allocated bytes under the cap, rightly frees nothing, so
+        the stall would be permanent."""
+        _setup_db(proxy_workdir, PORT_USER, PORT_ENG, 'bintest', 'bp',
+                  'binlog')
+
+        proc = _start_proxy(proxy_workdir, PORT_ENG, quota_bytes=300000)
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.bind(('127.0.0.1', 0))
+            dest = ('127.0.0.1', PORT_USER)
+
+            # seqno 0 opens the file; seqno 1600 makes the logical
+            # size 320,200 bytes (> 300 KB quota) while allocating
+            # only ~2 pages.
+            _send_data_block(sock, dest, 0, b'\xaa' * 50)
+            _send_data_block(sock, dest, 1600, b'\xbb' * 50)
+
+            bin_path = _bin_path(proxy_workdir, PORT_ENG)
+            assert _wait_for(
+                lambda: bin_path.exists()
+                        and bin_path.stat().st_size == 1600 * 200 + 200,
+                timeout=5.0), \
+                'sparse jump falsely tripped the quota; proxy log:\n%s' \
+                % ''.join(proc._lines[-10:])
+
+            sock.close()
+        finally:
+            _terminate(proc)
+
     def test_quota_pass_never_deletes_active_files(self, proxy_workdir):
         """A live session's files (fresh mtime) must never be unlinked
         by the quota pass, even when they alone exceed the quota: the
