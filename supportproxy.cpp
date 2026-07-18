@@ -282,6 +282,17 @@ static void main_loop(struct listen_port *p)
     // which writer activates first or whether one of them never does.
     const unsigned session_n = next_session_n(uint32_t(p->port2), "logs");
 
+    // bidi: initialise the user-side validator once. Re-initialising
+    // per unsigned datagram (as the pre-latch path originally did)
+    // opens keys.tdb and forks a timestamp-save child every packet;
+    // under a stream of unsigned traffic the tdb lock collisions stall
+    // the main loop long enough to blow the engineer pre-auth window
+    // and WebSocket handshake timeouts. Parser and signing state carry
+    // across datagrams safely — validation still gates the latch.
+    if (bidi && p->sock1_udp != -1) {
+	mav1.init(p->sock1_udp, CHAN_COMM1, true, false, false, conn1_key_id);
+    }
+
     // tlog: opened lazily on first received frame so an idle child that
     // never sees traffic doesn't leave behind an empty session file.
     TlogWriter tlog;
@@ -538,8 +549,8 @@ static void main_loop(struct listen_port *p)
                     // bidi pre-auth: validate the signature *before*
                     // committing the listener to this tuple. Unsigned
                     // or wrong-key senders cannot latch conn1 and
-                    // deny the legitimate signed user.
-                    mav1.init(p->sock1_udp, CHAN_COMM1, true, false, false, conn1_key_id);
+                    // deny the legitimate signed user. mav1 was
+                    // initialised once at child start.
                     uint8_t *vbuf = buf;
                     ssize_t vn = n;
                     mavlink_message_t vmsg{};
