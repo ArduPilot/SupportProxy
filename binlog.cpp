@@ -5,6 +5,7 @@
 #include "session.h"
 #include "mavlink.h"
 #include "util.h"
+#include "cleanup.h"
 
 #include "libraries/mavlink2/generated/all/mavlink.h"
 
@@ -223,13 +224,14 @@ void BinlogWriter::handle_block(uint32_t port2, unsigned session_n,
                  (long long)MAX_FORWARD_JUMP_BYTES);
         return;
     }
-    if (other_sessions_bytes_ + prospective_size > MAX_PER_PORT2_BYTES) {
+    const off_t quota = port2_quota_bytes();
+    if (other_sessions_bytes_ + prospective_size > quota) {
         ::printf("binlog: dropping seqno=%u (port2=%u total would be "
                  "%lld > %lld byte quota; cleanup pass will age out "
                  "old sessions)\n",
                  unsigned(blk.seqno), unsigned(port2_),
                  (long long)(other_sessions_bytes_ + prospective_size),
-                 (long long)MAX_PER_PORT2_BYTES);
+                 (long long)quota);
         return;
     }
 

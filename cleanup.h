@@ -3,6 +3,16 @@
  */
 #pragma once
 
+#include <sys/types.h>
+
+/*
+  Per-port-pair on-disk quota (bytes) for logs/<port2>/. Default 1 GiB;
+  override with SUPPORTPROXY_PORT2_QUOTA_BYTES (integer bytes). Shared
+  by the cleanup quota pass and binlog's write-time gate so the two
+  always agree.
+ */
+off_t port2_quota_bytes(void);
+
 /*
   Run forever: every SUPPORTPROXY_CLEANUP_INTERVAL seconds (default 3600,
   env var override accepts a float for tests), traverse keys.tdb and

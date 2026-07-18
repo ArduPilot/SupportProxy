@@ -19,13 +19,25 @@
 #include <string>
 #include <tdb.h>
 
-namespace {
+off_t port2_quota_bytes(void)
+{
+    static off_t cached = -1;
+    if (cached >= 0) {
+        return cached;
+    }
+    cached = off_t(1024) * 1024 * 1024;  // 1 GiB default
+    const char *env = getenv("SUPPORTPROXY_PORT2_QUOTA_BYTES");
+    if (env != nullptr && *env != '\0') {
+        char *endp = nullptr;
+        long long v = strtoll(env, &endp, 10);
+        if (endp != env && v > 0) {
+            cached = off_t(v);
+        }
+    }
+    return cached;
+}
 
-// Per-port-pair on-disk quota: matches BinlogWriter::MAX_PER_PORT2_BYTES
-// in binlog.h. Kept in sync there. Total .tlog + .bin under logs/<port2>/
-// across all date dirs may not exceed this; oldest files are deleted
-// first.
-constexpr off_t MAX_PER_PORT2_BYTES = off_t(1024) * 1024 * 1024;  // 1 GiB
+namespace {
 
 struct PassCtx {
     const char *base_dir;
@@ -104,7 +116,8 @@ static void enforce_port2_quota(uint32_t port2, const char *base_dir)
     }
     closedir(d);
 
-    if (total <= MAX_PER_PORT2_BYTES) {
+    const off_t quota = port2_quota_bytes();
+    if (total <= quota) {
         return;
     }
 
@@ -112,14 +125,14 @@ static void enforce_port2_quota(uint32_t port2, const char *base_dir)
     std::sort(items.begin(), items.end(),
               [](const Item &a, const Item &b) { return a.mtime < b.mtime; });
     for (const auto &it : items) {
-        if (total <= MAX_PER_PORT2_BYTES) {
+        if (total <= quota) {
             break;
         }
         if (unlink(it.path.c_str()) == 0) {
             ::printf("log cleanup: removed %s for quota "
                      "(port2=%u total %lld > %lld)\n",
                      it.path.c_str(), unsigned(port2),
-                     (long long)total, (long long)MAX_PER_PORT2_BYTES);
+                     (long long)total, (long long)quota);
             total -= it.size;
             // Try rmdir on the date dir in case this was its last file;
             // harmless if it isn't.

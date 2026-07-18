@@ -170,10 +170,11 @@ private:
     //    in a single seqno step. Covers ~30 minutes of streaming at
     //    400 blocks/s; anything bigger is unambiguously bogus.
     static constexpr off_t MAX_FORWARD_JUMP_BYTES = off_t(100) * 1024 * 1024;
-    // 2. Per-port-pair on-disk quota: total size of all .tlog + .bin
-    //    files under logs/<port2>/ may not exceed 1 GiB. The hourly
-    //    cleanup loop also enforces this by deleting oldest files.
-    static constexpr off_t MAX_PER_PORT2_BYTES   = off_t(1024) * 1024 * 1024;
+    // 2. Per-port-pair on-disk quota: total allocated size of all
+    //    .tlog + .bin files under logs/<port2>/ may not exceed
+    //    port2_quota_bytes() (cleanup.h; default 1 GiB, env-
+    //    overridable). The hourly cleanup loop enforces the same
+    //    quota by deleting oldest files.
 
     FILE *fp = nullptr;
 
