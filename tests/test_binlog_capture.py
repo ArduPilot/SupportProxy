@@ -875,6 +875,40 @@ class TestBinlogCapture:
         finally:
             _terminate(proc)
 
+    def test_sparse_apparent_size_does_not_consume_quota(self, proxy_workdir):
+        """The quota counts allocated bytes (st_blocks), not apparent
+        size: a sparse file with a huge apparent size but no allocated
+        blocks must not starve the binlog of its quota."""
+        _setup_db(proxy_workdir, PORT_USER, PORT_ENG, 'bintest', 'bp',
+                  'binlog')
+
+        proc = _start_proxy(proxy_workdir, PORT_ENG, quota_bytes=300000)
+        try:
+            # 10 MB apparent, ~0 allocated — far over the 300 KB quota
+            # by apparent size, well under it by allocated size.
+            self._seed_prefill_after_startup(proxy_workdir, proc,
+                                             10 * 1024 * 1024,
+                                             sparse=True)
+
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.bind(('127.0.0.1', 0))
+            dest = ('127.0.0.1', PORT_USER)
+
+            for seq in range(3):
+                _send_data_block(sock, dest, seq, b'\xaa' * 50)
+
+            assert _wait_for(
+                lambda: _bin_path(proxy_workdir, PORT_ENG).exists()
+                        and _bin_path(proxy_workdir, PORT_ENG).stat()
+                            .st_size >= 600,
+                timeout=5.0), \
+                'writes blocked by sparse apparent size; proxy log:\n%s' \
+                % ''.join(proc._lines[-10:])
+
+            sock.close()
+        finally:
+            _terminate(proc)
+
     def test_late_old_block_after_rotation_dropped(self, proxy_workdir):
         """After SYSTEM_TIME-detected reboot, rotate_for_reboot()
         closes the file and arms pending_session_n_ but does NOT
