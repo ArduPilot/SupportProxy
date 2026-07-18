@@ -936,6 +936,54 @@ class TestBinlogCapture:
         finally:
             _terminate(proc)
 
+    def test_instream_seqno0_restart_rotates(self, proxy_workdir):
+        """A block-0 arriving mid-stream (highest_seen far along) is a
+        vehicle log restart — the vehicle rebooted and restarted from
+        seqno 0 before the proxy saw a SYSTEM_TIME backward jump. The
+        proxy must rotate to a new session file instead of overwriting
+        the old log's head and then stalling on a seqno=0 that never
+        comes again."""
+        _setup_db(proxy_workdir, PORT_USER, PORT_ENG, 'bintest', 'bp',
+                  'binlog')
+        proc = _start_proxy(proxy_workdir, PORT_ENG)
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.bind(('127.0.0.1', 0))
+            dest = ('127.0.0.1', PORT_USER)
+
+            # Establish session1: blocks 0..2, then a jump to 250 so
+            # highest_seen clears the restart threshold (200).
+            for seq in range(3):
+                _send_data_block(sock, dest, seq, b'\x11' * 50)
+            _send_data_block(sock, dest, 250, b'\x22' * 50)
+            assert _wait_for(
+                lambda: _bin_path(proxy_workdir, PORT_ENG).exists()
+                        and _bin_path(proxy_workdir, PORT_ENG).stat()
+                            .st_size >= 250 * 200,
+                timeout=5.0), 'session1 never established'
+
+            # "Reboot": the vehicle restarts its log from seqno 0.
+            _send_data_block(sock, dest, 0, b'\x33' * 50)
+            _send_data_block(sock, dest, 1, b'\x33' * 50)
+
+            session2 = _bin_path(proxy_workdir, PORT_ENG, n=2)
+            assert _wait_for(
+                lambda: session2.exists() and session2.stat().st_size >= 400,
+                timeout=5.0), \
+                'no rotation on in-stream seqno=0; proxy log:\n%s' \
+                % ''.join(proc._lines[-10:])
+
+            # session1's head must be intact (not overwritten by the
+            # new boot's block 0).
+            with open(_bin_path(proxy_workdir, PORT_ENG), 'rb') as f:
+                head = f.read(200)
+            assert head[:50] == b'\x11' * 50, \
+                'old session head overwritten by post-restart block'
+
+            sock.close()
+        finally:
+            _terminate(proc)
+
     def test_late_old_block_after_rotation_dropped(self, proxy_workdir):
         """After SYSTEM_TIME-detected reboot, rotate_for_reboot()
         closes the file and arms pending_session_n_ but does NOT
