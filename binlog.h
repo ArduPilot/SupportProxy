@@ -158,6 +158,11 @@ private:
     // wobble and well below the multi-second pause a real reboot
     // creates.
     static constexpr uint32_t REBOOT_TIME_BACKWARD_MS = 10000;
+    // A block-0 arriving while the file is open with highest_seen at
+    // least this far along is a vehicle-side log restart, not a
+    // retransmission: AP_Logger_MAVLink's resend window is ~32 blocks,
+    // so a legitimate block-0 retry can never arrive this late.
+    static constexpr uint32_t SEQNO0_RESTART_MIN_HIGHEST = 200;
     // Caps to limit the damage from an attacker (or a buggy vehicle)
     // sending a giant seqno on the unsigned-by-default user-side port.
     // A bare seqno=0 followed by seqno=2^32-1 would otherwise sparse-

@@ -187,6 +187,19 @@ void BinlogWriter::handle_block(uint32_t port2, unsigned session_n,
     mavlink_remote_log_data_block_t blk {};
     mavlink_msg_remote_log_data_block_decode(&msg, &blk);
 
+    // Vehicle-side log restart detected from the data itself: the
+    // vehicle rebooted (or its client-timeout fired) and began a new
+    // log from block 0 before we saw the SYSTEM_TIME backward jump.
+    // Without this, block 0 overwrites the head of the old session
+    // file, and when SYSTEM_TIME finally shows the jump the rotation
+    // waits for a fresh seqno=0 that never comes.
+    if (fp != nullptr && blk.seqno == 0
+        && highest_seen >= SEQNO0_RESTART_MIN_HIGHEST) {
+        ::printf("binlog: seqno=0 with highest_seen=%u — vehicle log "
+                 "restart, rotating\n", unsigned(highest_seen));
+        rotate_for_reboot();
+    }
+
     // Strict-start gate. Without this we sparse-extend the file out
     // to whatever the vehicle's current seqno is — a vehicle that
     // was already streaming when SupportProxy activated will have
