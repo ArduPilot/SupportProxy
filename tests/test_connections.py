@@ -323,7 +323,18 @@ class BaseConnectionTest:
             for i in range(test_duration):
                 time.sleep(1.0)
                 while True:
-                    m = engineer_conn.recv_match(blocking=False)
+                    # A bidi negative test's unsigned/wrong-key user is
+                    # dropped by the proxy's pre-auth deadline, which
+                    # tears the child down and resets the engineer
+                    # socket. That's expected: nothing was forwarded, so
+                    # treat a transport error as end-of-stream rather
+                    # than an error. A positive test never trips the
+                    # deadline, so a reset there still surfaces as an
+                    # under-count assertion failure.
+                    try:
+                        m = engineer_conn.recv_match(blocking=False)
+                    except (ConnectionError, OSError):
+                        m = None
                     if m is None:
                         break
                     t = m.get_type()
@@ -340,10 +351,12 @@ class BaseConnectionTest:
             stop_sending.set()
             for t in sender_threads:
                 t.join()
-            if user_conn:
-                user_conn.close()
-            if engineer_conn:
-                engineer_conn.close()
+            for conn in (user_conn, engineer_conn):
+                if conn:
+                    try:
+                        conn.close()
+                    except (ConnectionError, OSError):
+                        pass
             # Wait for SupportProxy to close connections before next test
             self.wait_for_connection_close(test_server)
 
