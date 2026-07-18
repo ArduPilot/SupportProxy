@@ -325,6 +325,16 @@ bool WebSocket::send_handshake(const std::string &key)
  */
 ssize_t WebSocket::send(const void *buf, size_t n)
 {
+    if (!done_headers) {
+	// The HTTP upgrade response hasn't been sent yet. Writing a
+	// MAVLink frame onto the socket now would land *before* the
+	// "HTTP/1.1 101" line and corrupt the handshake (the peer's WS
+	// parser sees binary garbage as the status line). Drop the
+	// frame but report it as sent so the caller doesn't treat it as
+	// a dead link and tear the session down; the handshake
+	// completes on the next read and forwarding resumes.
+	return n;
+    }
     uint8_t header[10];
     size_t header_len = 0;
     header[0] = 0x82; // FIN + binary opcode

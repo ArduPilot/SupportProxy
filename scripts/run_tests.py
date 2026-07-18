@@ -33,7 +33,8 @@ PHASES = [
     ('Authentication Tests', ['tests/test_authentication.py']),
     ('Robustness Tests',     ['tests/test_parent_housekeeping.py',
                               'tests/test_conn2_slot_orphan.py',
-                              'tests/test_drop_lost_request.py']),
+                              'tests/test_drop_lost_request.py',
+                              'tests/test_websocket_decode.py']),
     ('Webadmin Tests',       ['tests/webadmin/']),
 ]
 
