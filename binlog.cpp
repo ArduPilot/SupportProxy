@@ -228,6 +228,18 @@ void BinlogWriter::handle_block(uint32_t port2, unsigned session_n,
     }
     const off_t quota = port2_quota_bytes();
     if (other_sessions_bytes_ + prospective_size > quota) {
+        // Try to free space now rather than dropping every block until
+        // the hourly cleanup pass: age out the oldest sessions for this
+        // port2 and re-baseline. Rate-limited so a dir that genuinely
+        // can't get under quota isn't rescanned per block.
+        double cnow = time_seconds();
+        if (cnow - last_quota_cleanup_s_ >= QUOTA_CLEANUP_MIN_INTERVAL_S) {
+            last_quota_cleanup_s_ = cnow;
+            log_cleanup_port2_quota(port2_, base_dir_.c_str());
+            refresh_other_sessions_bytes();
+        }
+    }
+    if (other_sessions_bytes_ + prospective_size > quota) {
         ::printf("binlog: dropping seqno=%u (port2=%u total would be "
                  "%lld > %lld byte quota; cleanup pass will age out "
                  "old sessions)\n",

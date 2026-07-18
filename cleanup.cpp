@@ -277,6 +277,11 @@ static void sleep_seconds(double s)
 
 }  // namespace
 
+void log_cleanup_port2_quota(unsigned port2, const char *base_dir)
+{
+    enforce_port2_quota(port2, base_dir);
+}
+
 void log_cleanup_once(const char *base_dir)
 {
     auto *db = db_open();
