@@ -73,14 +73,14 @@ mavlink.o: mavlink.cpp mavlink.h $(MAVLINK_DIR)/protocol.h
 
 # Dependencies. mavlink.h includes keydb.h, so any object that pulls in
 # mavlink.h transitively depends on keydb.h too.
-supportproxy.o: supportproxy.cpp mavlink.h util.h keydb.h conntdb.h tlog.h session.h cleanup.h websocket.h
+supportproxy.o: supportproxy.cpp mavlink.h util.h keydb.h conntdb.h tlog.h binlog.h session.h cleanup.h websocket.h
 mavlink.o: mavlink.cpp mavlink.h keydb.h $(MAVLINK_DIR)/protocol.h
 util.o: util.cpp util.h
 keydb.o: keydb.cpp keydb.h
 conntdb.o: conntdb.cpp conntdb.h
 tlog.o: tlog.cpp tlog.h session.h
 session.o: session.cpp session.h
-binlog.o: binlog.cpp binlog.h session.h mavlink.h util.h $(MAVLINK_DIR)/protocol.h
+binlog.o: binlog.cpp binlog.h session.h mavlink.h util.h cleanup.h $(MAVLINK_DIR)/protocol.h
 cleanup.o: cleanup.cpp cleanup.h keydb.h
 websocket.o: websocket.cpp websocket.h util.h
 
