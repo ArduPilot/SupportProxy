@@ -149,38 +149,72 @@ class BaseConnectionTest:
 
     def create_connection(self, connection_type, port, source_system=1,
                           source_component=1):
-        """Create a connection of the given type (udp / tcp / ws / wss)."""
+        """Create a connection of the given type (udp / tcp / ws / wss).
+
+        TCP/WS/WSS construction connects (and, for WS, handshakes)
+        synchronously. Under the CI runner's heavy -j oversubscription
+        the proxy child can be slow enough to answer that pymavlink's
+        own connect retries are exhausted — leaving self.sock == None,
+        which older pymavlink then dereferences (self.sock.fileno())
+        and crashes. Retry construction a few times so a transient
+        connect starvation doesn't fail the test."""
+        def _connect():
+            if connection_type == 'udp':
+                return mavutil.mavlink_connection(
+                    f'udpout:localhost:{port}',
+                    source_system=source_system,
+                    source_component=source_component,
+                    use_native=False
+                )
+            elif connection_type == 'tcp':
+                return mavutil.mavlink_connection(
+                    f'tcp:localhost:{port}',
+                    source_system=source_system,
+                    source_component=source_component,
+                    autoreconnect=True,
+                    use_native=False
+                )
+            elif connection_type == 'ws':
+                return mavutil.mavlink_connection(
+                    f'ws:localhost:{port}',
+                    source_system=source_system,
+                    source_component=source_component,
+                    use_native=False,
+                )
+            elif connection_type == 'wss':
+                return mavutil.mavlink_connection(
+                    f'wss:localhost:{port}',
+                    source_system=source_system,
+                    source_component=source_component,
+                    use_native=False,
+                )
+            else:
+                raise ValueError(f"Unknown connection type: {connection_type}")
+
+        # UDP is connectionless and never fails to "connect"; only the
+        # stream transports need the retry.
         if connection_type == 'udp':
-            return mavutil.mavlink_connection(
-                f'udpout:localhost:{port}',
-                source_system=source_system,
-                source_component=source_component,
-                use_native=False
-            )
-        elif connection_type == 'tcp':
-            return mavutil.mavlink_connection(
-                f'tcp:localhost:{port}',
-                source_system=source_system,
-                source_component=source_component,
-                autoreconnect=True,
-                use_native=False
-            )
-        elif connection_type == 'ws':
-            return mavutil.mavlink_connection(
-                f'ws:localhost:{port}',
-                source_system=source_system,
-                source_component=source_component,
-                use_native=False,
-            )
-        elif connection_type == 'wss':
-            return mavutil.mavlink_connection(
-                f'wss:localhost:{port}',
-                source_system=source_system,
-                source_component=source_component,
-                use_native=False,
-            )
-        else:
-            raise ValueError(f"Unknown connection type: {connection_type}")
+            return _connect()
+        last_err = None
+        for attempt in range(8):
+            try:
+                conn = _connect()
+                # older pymavlink returns an object with fd=None on a
+                # failed WS connect instead of raising; treat that as a
+                # retryable failure too.
+                if getattr(conn, 'fd', 0) is None:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+                    raise ConnectionError('connect left socket unset')
+                return conn
+            except (AttributeError, ConnectionError, OSError) as e:
+                last_err = e
+                time.sleep(0.5)
+        raise RuntimeError(
+            "could not establish %s connection to port %d after retries: %r"
+            % (connection_type, port, last_err))
 
     def setup_signing(self, connection, signing_key=None, enable_signing=True):
         """Setup signing for a connection."""
