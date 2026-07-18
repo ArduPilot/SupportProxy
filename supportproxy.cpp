@@ -683,7 +683,13 @@ static void main_loop(struct listen_port *p)
 
 	    if (idx != -1) {
 		mavlink_message_t msg {};
-		if (have_conn1) {
+		// count1>0 means we've processed at least one user-side
+		// event, so conn1's transport is decided (raw vs
+		// WebSocket). Forwarding before that can write plain
+		// MAVLink onto a freshly-accepted TCP socket that then
+		// turns out to be WebSocket — landing ahead of the HTTP
+		// 101 and corrupting the handshake.
+		if (have_conn1 && count1 > 0) {
 		    uint8_t *buf0 = buf;
 		    bool failed = false;
 		    auto &c2 = conn2[idx];
@@ -883,7 +889,9 @@ static void main_loop(struct listen_port *p)
 		count2++;
 		c2.tcp_active = true;
 		mavlink_message_t msg {};
-		if (have_conn1) {
+		// see the note at the UDP-engineer forward: don't forward
+		// to conn1 until its transport is decided (count1>0)
+		if (have_conn1 && count1 > 0) {
 		    uint8_t *buf0 = buf;
 		    bool failed = false;
 		    while (n > 0 && c2.mav.receive_message(buf0, n, msg)) {
