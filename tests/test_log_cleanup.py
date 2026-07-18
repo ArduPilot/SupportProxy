@@ -62,9 +62,11 @@ def _seed(workdir, port2, date, session_name, age_seconds):
     return f
 
 
-def _start_proxy(workdir, interval='0.3'):
+def _start_proxy(workdir, interval='0.3', quota_bytes=None):
     env = os.environ.copy()
     env['SUPPORTPROXY_CLEANUP_INTERVAL'] = interval
+    if quota_bytes is not None:
+        env['SUPPORTPROXY_PORT2_QUOTA_BYTES'] = str(quota_bytes)
     proc = subprocess.Popen([SUPPORTPROXY_BIN], cwd=str(workdir), env=env,
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     return proc
@@ -149,37 +151,36 @@ class TestTlogCleanup:
             _terminate(proc)
 
     def test_quota_deletes_oldest_even_with_retention_zero(self, proxy_workdir):
-        """The per-port-pair 1 GiB quota is enforced INDEPENDENTLY of
-        the per-entry retention. With retention=0 (keep forever) the
+        """The per-port-pair quota is enforced INDEPENDENTLY of the
+        per-entry retention. With retention=0 (keep forever) the
         retention pass is a no-op, but the quota pass must still
-        delete oldest files until total <= 1 GiB.
+        delete oldest files until under quota.
 
-        Uses sparse files (truncate) to fake large apparent sizes
-        without consuming real disk."""
+        Uses SUPPORTPROXY_PORT2_QUOTA_BYTES to shrink the quota so the
+        test can use small files with real allocated blocks (the quota
+        counts allocated size, so sparse files don't work here)."""
         workdir, _, db = proxy_workdir
         _add_entry(db, 26401, 26402, retention=0.0)  # forever
 
-        # Three sparse session files, totalling 1.2 GiB. Sort order
-        # oldest -> newest: a (600 MB), b (400 MB), c (200 MB).
-        # Quota cap = 1 GiB → 1.2 GiB > cap → drop oldest until under.
-        # After deleting a (600 MB), total = 600 MB <= 1 GiB. Stops.
+        # Three real session files, totalling ~1.2 MB against a 1 MB
+        # quota. Sort order oldest -> newest: a (600 KB), b (400 KB),
+        # c (200 KB). Deleting a gets under quota; b and c survive.
         a = _seed(workdir, 26402, '2026-05-08', 'session1.bin',
                   age_seconds=300)
         b = _seed(workdir, 26402, '2026-05-09', 'session1.bin',
                   age_seconds=200)
         c = _seed(workdir, 26402, '2026-05-10', 'session1.bin',
                   age_seconds=100)
-        # Resize each to a large apparent size (sparse).
-        os.truncate(a, 600 * 1024 * 1024)
-        os.truncate(b, 400 * 1024 * 1024)
-        os.truncate(c, 200 * 1024 * 1024)
-        # Re-set mtimes after the truncate (which updates them).
+        a.write_bytes(b'\xaa' * (600 * 1024))
+        b.write_bytes(b'\xbb' * (400 * 1024))
+        c.write_bytes(b'\xcc' * (200 * 1024))
+        # Re-set mtimes after the writes (which update them).
         now = time.time()
         os.utime(a, (now - 300, now - 300))
         os.utime(b, (now - 200, now - 200))
         os.utime(c, (now - 100, now - 100))
 
-        proc = _start_proxy(workdir)
+        proc = _start_proxy(workdir, quota_bytes=1024 * 1024)
         try:
             # Quota pass runs once at startup + on each cleanup tick.
             assert _wait_for_state(lambda: not a.exists(), timeout=5.0), \

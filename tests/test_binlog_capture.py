@@ -74,9 +74,12 @@ def _setup_db(workdir, port_user, port_eng, name, passphrase, *flags):
     db.close()
 
 
-def _start_proxy(workdir, port_eng):
+def _start_proxy(workdir, port_eng, quota_bytes=None):
+    env = os.environ.copy()
+    if quota_bytes is not None:
+        env['SUPPORTPROXY_PORT2_QUOTA_BYTES'] = str(quota_bytes)
     proc = subprocess.Popen(
-        [SUPPORTPROXY_BIN], cwd=str(workdir),
+        [SUPPORTPROXY_BIN], cwd=str(workdir), env=env,
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         bufsize=1, text=True,
     )
@@ -809,39 +812,44 @@ class TestBinlogCapture:
         finally:
             _terminate(proc)
 
+    def _seed_prefill_after_startup(self, proxy_workdir, proc, nbytes,
+                                    sparse=False, age_seconds=7200):
+        """Create logs/<port2>/<today>/prefill.bin AFTER the proxy's
+        startup cleanup pass (which would delete an over-quota file
+        seeded before it). Waits for the cleanup child's start line;
+        its startup pass over the still-empty logs tree is
+        instantaneous. mtime is backdated so quota passes treat it as
+        the oldest file."""
+        deadline = time.time() + 5
+        while time.time() < deadline and not any(
+                'log cleanup child' in l for l in proc._lines):
+            time.sleep(0.05)
+        time.sleep(0.3)
+        date_dir = (proxy_workdir / 'logs' / str(PORT_ENG)
+                    / _today_str())
+        date_dir.mkdir(parents=True, exist_ok=True)
+        prefilled = date_dir / 'prefill.bin'
+        with open(prefilled, 'wb') as f:
+            if sparse:
+                f.truncate(nbytes)
+            else:
+                f.write(b'\xee' * nbytes)
+        now = time.time()
+        os.utime(prefilled, (now - age_seconds, now - age_seconds))
+        return prefilled
+
     def test_disk_quota_blocks_writes_when_over_cap(self, proxy_workdir):
-        """Seed the per-port2 logs/<port2>/ tree with sparse files
-        totalling > 1 GiB. Subsequent legitimate blocks must be
-        dropped at write time because the per-port-pair quota
-        (MAX_PER_PORT2_BYTES = 1 GiB in binlog.h) is already
-        breached."""
+        """With the per-port2 quota already consumed by real (allocated)
+        bytes, legitimate blocks must be dropped at write time. Uses
+        SUPPORTPROXY_PORT2_QUOTA_BYTES to shrink the quota so the test
+        seeds small real files."""
         _setup_db(proxy_workdir, PORT_USER, PORT_ENG, 'bintest', 'bp',
                   'binlog')
 
-        proc = _start_proxy(proxy_workdir, PORT_ENG)
+        proc = _start_proxy(proxy_workdir, PORT_ENG, quota_bytes=300000)
         try:
-            # Seed AFTER startup: log_cleanup_once() runs an immediate
-            # quota pass when the proxy starts and would delete an
-            # over-quota file seeded before it. Seeding now leaves the
-            # write-time gate (refreshed when the binlog file opens on
-            # the first block) as the only line of defence, which is
-            # exactly what this test exercises. The next cleanup pass
-            # is an hour away. The cleanup child forks after the
-            # 'Added port' marker, so wait for its start line (its
-            # startup pass over the still-empty logs tree is
-            # instantaneous) before seeding.
-            deadline = time.time() + 5
-            while time.time() < deadline and not any(
-                    'log cleanup child' in l for l in proc._lines):
-                time.sleep(0.05)
-            time.sleep(0.3)
-            date_dir = (proxy_workdir / 'logs' / str(PORT_ENG)
-                        / _today_str())
-            date_dir.mkdir(parents=True, exist_ok=True)
-            prefilled = date_dir / 'prefill.bin'
-            # Sparse: 1.2 GiB apparent size, ~0 bytes actually allocated.
-            with open(prefilled, 'wb') as f:
-                f.truncate(int(1.2 * 1024 * 1024 * 1024))
+            self._seed_prefill_after_startup(proxy_workdir, proc,
+                                             400 * 1024)
 
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             sock.bind(('127.0.0.1', 0))
