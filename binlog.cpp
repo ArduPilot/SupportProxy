@@ -212,6 +212,10 @@ void BinlogWriter::handle_block(uint32_t port2, unsigned session_n,
     // vehicle's new boot sends seqno=0 to start the new file.
     if (fp == nullptr) {
         if (blk.seqno != 0) {
+            // vehicle is streaming mid-log at a closed file: only a
+            // restart from seqno 0 can unblock it. tick() sends STOP
+            // to trigger that promptly.
+            gated_midstream_ = true;
             return;
         }
         unsigned n = (pending_session_n_ != 0) ? pending_session_n_ : session_n;
@@ -219,6 +223,7 @@ void BinlogWriter::handle_block(uint32_t port2, unsigned session_n,
             return;
         }
         pending_session_n_ = 0;
+        gated_midstream_ = false;
     }
 
     // Caps to limit damage from a malicious or buggy peer sending a
@@ -392,6 +397,21 @@ void BinlogWriter::tick(MAVLink &user_link)
 {
     double now_s = time_seconds();
 
+    // A vehicle streaming mid-log with no file open (fresh child
+    // attached mid-flight, or post-rotation) can't make progress until
+    // it restarts from seqno 0; left alone, only its 10 s no-ACK
+    // client timeout gets it there. Send STOP so it stops now — the
+    // START logic below then restarts it from 0 within a second or so
+    // (ArduPilot ignores STARTs while streaming, but honours STOP).
+    if (fp == nullptr && gated_midstream_
+        && now_s - last_stop_sent_s >= STOP_REPEAT_S) {
+        if (send_stop_packet(user_link)) {
+            last_stop_sent_s = now_s;
+            // make the follow-up START prompt in both START loops
+            last_start_sent_s = 0.0;
+        }
+    }
+
     if (!any_block_seen) {
         // Vehicle hasn't begun streaming yet. Send the magic
         // REMOTE_LOG_BLOCK_STATUS(status=ACK,
@@ -465,7 +485,7 @@ void BinlogWriter::tick(MAVLink &user_link)
     }
 }
 
-bool BinlogWriter::send_start_packet(MAVLink &user_link)
+bool BinlogWriter::send_magic_packet(MAVLink &user_link, uint32_t magic_seqno)
 {
     // See the long comment in send_status() about why we can't use
     // user_link.send_message() — the pack_chan call finalises the
@@ -477,7 +497,7 @@ bool BinlogWriter::send_start_packet(MAVLink &user_link)
         PROXY_SYSID, PROXY_COMPID, CHAN_COMM1, &msg,
         /*target_system*/ target_system,
         /*target_component*/ target_component,
-        /*seqno*/ MAV_REMOTE_LOG_DATA_BLOCK_START,
+        /*seqno*/ magic_seqno,
         /*status*/ MAV_REMOTE_LOG_DATA_BLOCK_ACK);
     uint8_t buf[MAVLINK_MAX_PACKET_LEN];
     uint16_t len = mavlink_msg_to_send_buffer(buf, &msg);
@@ -485,6 +505,16 @@ bool BinlogWriter::send_start_packet(MAVLink &user_link)
         return false;
     }
     return user_link.send_buf(buf, len) == ssize_t(len);
+}
+
+bool BinlogWriter::send_start_packet(MAVLink &user_link)
+{
+    return send_magic_packet(user_link, MAV_REMOTE_LOG_DATA_BLOCK_START);
+}
+
+bool BinlogWriter::send_stop_packet(MAVLink &user_link)
+{
+    return send_magic_packet(user_link, MAV_REMOTE_LOG_DATA_BLOCK_STOP);
 }
 
 void BinlogWriter::observe(const mavlink_message_t &msg)
