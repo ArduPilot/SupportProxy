@@ -114,6 +114,22 @@ def _terminate(proc):
         proc.wait(timeout=2)
     if hasattr(proc, '_thread'):
         proc._thread.join(timeout=2)
+    # A per-pair child outlives the parent by up to its 10s conn1 idle
+    # timeout and keeps the fixed test ports bound; if the next test
+    # starts inside that window its proxy can't bind and every packet
+    # goes to the stale child. Probe the TCP listen port until it's
+    # free.
+    deadline = time.time() + 15
+    while time.time() < deadline:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            s.bind(('127.0.0.1', PORT_ENG))
+            s.close()
+            return
+        except OSError:
+            s.close()
+            time.sleep(0.3)
 
 
 def _bin_path(workdir, port_eng, n=1):
@@ -979,6 +995,52 @@ class TestBinlogCapture:
                 head = f.read(200)
             assert head[:50] == b'\x11' * 50, \
                 'old session head overwritten by post-restart block'
+
+            sock.close()
+        finally:
+            _terminate(proc)
+
+    def test_midstream_vehicle_gets_stop_nudge(self, proxy_workdir):
+        """A vehicle streaming mid-log at a proxy with no file open
+        (proxy restarted mid-flight, or post-rotation) can only recover
+        by restarting from seqno 0. ArduPilot ignores redundant STARTs
+        while streaming but honours STOP, so the proxy must send the
+        STOP magic instead of waiting ~10 s for the vehicle's no-ACK
+        client timeout."""
+        from pymavlink.dialects.v20 import all as mav
+        _setup_db(proxy_workdir, PORT_USER, PORT_ENG, 'bintest', 'bp',
+                  'binlog')
+        proc = _start_proxy(proxy_workdir, PORT_ENG)
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.bind(('127.0.0.1', 0))
+            dest = ('127.0.0.1', PORT_USER)
+
+            # Mid-log blocks: rejected by the strict-start gate.
+            _send_data_block(sock, dest, 300, b'\x44' * 50)
+            _send_data_block(sock, dest, 301, b'\x44' * 50)
+
+            # The proxy must nudge us with the STOP magic.
+            stop_seen = False
+            deadline = time.time() + 6
+            while time.time() < deadline and not stop_seen:
+                for seqno, _status in _recv_block_statuses(sock,
+                                                           timeout=1.0):
+                    if seqno == mav.MAV_REMOTE_LOG_DATA_BLOCK_STOP:
+                        stop_seen = True
+                        break
+            assert stop_seen, \
+                'no STOP nudge for mid-log stream; proxy log:\n%s' \
+                % ''.join(proc._lines[-10:])
+
+            # "Vehicle" reacts like AP_Logger_MAVLink: stops, then the
+            # START restarts it from seqno 0 — data must now land.
+            _send_data_block(sock, dest, 0, b'\x55' * 50)
+            _send_data_block(sock, dest, 1, b'\x55' * 50)
+            bin_path = _bin_path(proxy_workdir, PORT_ENG)
+            assert _wait_for(
+                lambda: bin_path.exists() and bin_path.stat().st_size >= 400,
+                timeout=5.0), 'restart from seqno 0 did not open the file'
 
             sock.close()
         finally:
