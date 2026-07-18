@@ -124,11 +124,15 @@ static void enforce_port2_quota(uint32_t port2, const char *base_dir)
         return;
     }
 
-    // Sort oldest-first and delete until under quota.
+    // Sort oldest-first and delete down to 80% of quota, not just
+    // under it: freeing to the brim meant an active session's growth
+    // re-breached the cap within minutes and blocked binlog writes
+    // until the next hourly pass.
+    const off_t target = quota - quota / 5;
     std::sort(items.begin(), items.end(),
               [](const Item &a, const Item &b) { return a.mtime < b.mtime; });
     for (const auto &it : items) {
-        if (total <= quota) {
+        if (total <= target) {
             break;
         }
         if (unlink(it.path.c_str()) == 0) {
