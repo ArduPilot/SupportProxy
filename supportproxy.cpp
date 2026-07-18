@@ -746,14 +746,29 @@ static void main_loop(struct listen_port *p)
 	    FD_ISSET(p->sock1_tcp, &fds)) {
 	    close_fd(p->sock1_udp);
 
-	    if (count1 == 0 && WebSocket::detect(p->sock1_tcp)) {
-		p->ws = new WebSocket(p->sock1_tcp);
-		if (p->ws == nullptr) {
-		    break;
+	    if (count1 == 0 && !p->ws) {
+		ws_detect_t d = WebSocket::detect(p->sock1_tcp);
+		if (d == WS_MORE) {
+		    // fragmented handshake prefix: wait for more bytes
+		    // rather than committing to raw. Committing early
+		    // would leave mav1 in raw mode and forward raw
+		    // MAVLink onto a socket that is actually WebSocket,
+		    // corrupting the handshake. Brief sleep bounds CPU
+		    // while the rest of the request arrives; the conn1
+		    // idle timeout still applies.
+		    struct timespec ts { 0, 2 * 1000 * 1000 };
+		    nanosleep(&ts, nullptr);
+		    continue;
 		}
-		mav1.set_ws(p->ws);
-		printf("[%d] %s WebSocket%s conn1\n", unsigned(p->port2), time_string(),
-		       p->ws->is_SSL()?" SSL":"");
+		if (d == WS_YES) {
+		    p->ws = new WebSocket(p->sock1_tcp);
+		    if (p->ws == nullptr) {
+			break;
+		    }
+		    mav1.set_ws(p->ws);
+		    printf("[%d] %s WebSocket%s conn1\n", unsigned(p->port2), time_string(),
+			   p->ws->is_SSL()?" SSL":"");
+		}
 	    }
 	    ssize_t n;
 	    if (p->ws) {
@@ -854,13 +869,23 @@ static void main_loop(struct listen_port *p)
 		continue;
 	    }
 	    if (FD_ISSET(c2.sock, &fds)) {
-		if (!c2.tcp_active && WebSocket::detect(c2.sock)) {
-		    c2.ws = new WebSocket(c2.sock);
-		    if (c2.ws == nullptr) {
-			break;
+		if (!c2.tcp_active && !c2.ws) {
+		    ws_detect_t d = WebSocket::detect(c2.sock);
+		    if (d == WS_MORE) {
+			// fragmented handshake prefix; wait for the rest
+			// rather than misclassifying it as raw MAVLink
+			struct timespec ts { 0, 2 * 1000 * 1000 };
+			nanosleep(&ts, nullptr);
+			continue;
 		    }
-		    c2.mav.set_ws(c2.ws);
-		    printf("[%d] %s WebSocket%s conn2\n", unsigned(p->port2), time_string(), c2.ws->is_SSL()?" SSL":"");
+		    if (d == WS_YES) {
+			c2.ws = new WebSocket(c2.sock);
+			if (c2.ws == nullptr) {
+			    break;
+			}
+			c2.mav.set_ws(c2.ws);
+			printf("[%d] %s WebSocket%s conn2\n", unsigned(p->port2), time_string(), c2.ws->is_SSL()?" SSL":"");
+		    }
 		}
 		ssize_t n;
 		if (c2.ws) {

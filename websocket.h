@@ -9,12 +9,21 @@
 #include <string>
 #include <openssl/ssl.h>
 
+// Result of peeking at a new TCP stream's first bytes.
+//   WS_NO   - definitely not a WebSocket/TLS handshake (raw MAVLink)
+//   WS_YES  - a WebSocket (HTTP upgrade) or TLS ClientHello
+//   WS_MORE - the bytes so far are a prefix of a handshake but there
+//             aren't enough yet to decide; the caller must wait for
+//             more rather than committing to raw (committing early
+//             misclassifies a fragmented handshake as raw MAVLink)
+enum ws_detect_t { WS_NO, WS_YES, WS_MORE };
+
 class WebSocket {
 public:
     WebSocket(int fd);
     ~WebSocket();
 
-    static bool detect(int fd);
+    static ws_detect_t detect(int fd);
     ssize_t send(const void *buf, size_t n);
     ssize_t recv(void *buf, size_t n);
     bool is_SSL(void) const {

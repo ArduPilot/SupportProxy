@@ -94,19 +94,35 @@ def _terminate(proc):
         proc.wait(timeout=2)
 
 
-def _drive(prelude, hold_s):
-    """Connect a raw user (sending optional ``prelude`` bytes), let a
-    signed engineer stream for ``hold_s`` while the handshake is
-    deferred, then complete the handshake and return the server's first
-    response bytes."""
+def _drive(split_at, hold_s=1.0):
+    """Connect a raw user and send the WebSocket upgrade request in two
+    parts split at byte ``split_at``: the first part, then (while a
+    signed engineer streams forwardable data) the rest. Returns the
+    server's first response bytes.
+
+      split_at == 0  -> send nothing first: proxy still in raw-TCP mode
+                        when it tries to forward (transport undecided).
+      0 < split_at < 14 -> first read is a partial handshake prefix
+                        (< the 14-byte "GET / HTTP/1.1" needed to
+                        classify): must not be mistaken for raw MAVLink.
+      split_at past the request line, before the key -> WebSocket
+                        detected but handshake not yet complete.
+    """
     from pymavlink import mavutil
+    import base64
     secret = hashlib.sha256(b'wshspw').digest()
+
+    key = base64.b64encode(b"z" * 16).decode()
+    req = ("GET / HTTP/1.1\r\nHost: localhost\r\n"
+           "Upgrade: websocket\r\nConnection: Upgrade\r\n"
+           "Sec-WebSocket-Key: %s\r\nSec-WebSocket-Version: 13\r\n\r\n"
+           % key).encode()
 
     u = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     u.settimeout(5.0)
     u.connect(("127.0.0.1", PORT_USER))
-    if prelude:
-        u.sendall(prelude)
+    if split_at:
+        u.sendall(req[:split_at])
     time.sleep(0.3)
 
     eng = mavutil.mavlink_connection(
@@ -118,16 +134,7 @@ def _drive(prelude, hold_s):
         eng.mav.heartbeat_send(0, 0, 0, 0, 0)
         time.sleep(0.1)
 
-    import base64
-    key = base64.b64encode(b"z" * 16).decode()
-    if prelude and prelude.startswith(b"GET "):
-        u.sendall(("Sec-WebSocket-Key: %s\r\n\r\n" % key).encode())
-    else:
-        u.sendall(
-            ("GET / HTTP/1.1\r\nHost: localhost\r\n"
-             "Upgrade: websocket\r\nConnection: Upgrade\r\n"
-             "Sec-WebSocket-Key: %s\r\nSec-WebSocket-Version: 13\r\n\r\n"
-             % key).encode())
+    u.sendall(req[split_at:])
 
     buf = b""
     rd = time.time() + 5
@@ -148,30 +155,41 @@ def _drive(prelude, hold_s):
 @pytest.mark.skipif(not os.path.exists(SUPPORTPROXY_BIN),
                     reason='supportproxy binary not built')
 class TestWSHandshakeOrdering:
+    def _check(self, proc, split_at, why):
+        buf = _drive(split_at=split_at)
+        assert buf.startswith(b"HTTP/1.1 101"), \
+            ("%s; first bytes: %r\nproxy log:\n%s"
+             % (why, buf[:64], ''.join(proc._lines[-12:])))
+
     def test_no_raw_forward_before_ws_detect(self, proxy_workdir):
-        # Window 1: send nothing before the engineer streams, so the
-        # proxy is still in raw-TCP mode when it tries to forward.
+        # Transport undecided: send nothing before the engineer streams,
+        # so the proxy is still in raw-TCP mode when it tries to forward.
         proc = _start_proxy(proxy_workdir)
         try:
-            buf = _drive(prelude=b"", hold_s=1.0)
-            assert buf.startswith(b"HTTP/1.1 101"), \
-                ("handshake corrupted by a raw pre-detect forward; "
-                 "first bytes: %r\nproxy log:\n%s"
-                 % (buf[:64], ''.join(proc._lines[-10:])))
+            self._check(proc, 0,
+                        "handshake corrupted by a raw pre-detect forward")
+        finally:
+            _terminate(proc)
+
+    def test_fragmented_prefix_not_misclassified(self, proxy_workdir):
+        # First read is a 9-byte prefix of "GET / HTTP/1.1" (< the 14
+        # needed to classify). It must be held as "maybe WebSocket", not
+        # committed to raw — otherwise the engineer's forwarded frame
+        # goes out as raw MAVLink ahead of the eventual 101.
+        proc = _start_proxy(proxy_workdir)
+        try:
+            self._check(proc, 9,
+                        "fragmented GET prefix misclassified as raw")
         finally:
             _terminate(proc)
 
     def test_no_ws_forward_before_handshake(self, proxy_workdir):
-        # Window 2: send the request line (WebSocket detected) but hold
-        # back Sec-WebSocket-Key so done_headers stays false while the
-        # engineer streams.
+        # WebSocket detected (full request line sent) but Sec-WebSocket-
+        # Key withheld, so done_headers stays false while the engineer
+        # streams.
         proc = _start_proxy(proxy_workdir)
         try:
-            buf = _drive(prelude=b"GET / HTTP/1.1\r\nHost: localhost\r\n",
-                         hold_s=1.0)
-            assert buf.startswith(b"HTTP/1.1 101"), \
-                ("handshake corrupted by a pre-handshake WS forward; "
-                 "first bytes: %r\nproxy log:\n%s"
-                 % (buf[:64], ''.join(proc._lines[-10:])))
+            self._check(proc, len(b"GET / HTTP/1.1\r\nHost: localhost\r\n"),
+                        "handshake corrupted by a pre-handshake WS forward")
         finally:
             _terminate(proc)
