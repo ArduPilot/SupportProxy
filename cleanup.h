@@ -33,6 +33,10 @@ void log_cleanup_once(const char *base_dir = "logs");
 /*
   Run just the quota pass for a single port pair, synchronously.
   Used by the binlog writer when a write-time quota breach needs
-  relief now rather than at the next hourly pass.
+  relief now rather than at the next hourly pass. `needed` is extra
+  headroom (bytes) the caller wants on top of what's on disk: the
+  pass frees when total+needed exceeds the quota, so a prospective
+  breach at total == quota still gets relief.
  */
-void log_cleanup_port2_quota(unsigned port2, const char *base_dir = "logs");
+void log_cleanup_port2_quota(unsigned port2, const char *base_dir = "logs",
+                             off_t needed = 0);
