@@ -176,6 +176,29 @@ def _send_system_time(sock, dest, time_boot_ms, sysid=1,
     sock.sendto(buf, dest)
 
 
+def _recv_block_status_msgs(sock, timeout=2.0):
+    """Drain incoming UDP packets, return the decoded
+    REMOTE_LOG_BLOCK_STATUS message objects seen within `timeout`."""
+    from pymavlink.dialects.v20 import all as mav
+    mav_obj = mav.MAVLink(file=None)
+    sock.settimeout(0.1)
+    out = []
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            data, _ = sock.recvfrom(2048)
+        except socket.timeout:
+            continue
+        try:
+            msgs = mav_obj.parse_buffer(data) or []
+        except mav.MAVError:
+            continue
+        for m in msgs:
+            if m.get_type() == 'REMOTE_LOG_BLOCK_STATUS':
+                out.append(m)
+    return out
+
+
 def _recv_block_statuses(sock, timeout=2.0):
     """Drain incoming UDP packets, decode REMOTE_LOG_BLOCK_STATUS,
     return list of (seqno, status) seen within `timeout`."""
@@ -1112,22 +1135,27 @@ class TestBinlogCapture:
             sock.bind(('127.0.0.1', 0))
             dest = ('127.0.0.1', PORT_USER)
 
-            # Mid-log blocks: rejected by the strict-start gate.
-            _send_data_block(sock, dest, 300, b'\x44' * 50)
-            _send_data_block(sock, dest, 301, b'\x44' * 50)
+            # Mid-log blocks (from sysid 1): rejected by the
+            # strict-start gate. Three of them, to clear the lone-
+            # straggler threshold.
+            for seq in (300, 301, 302):
+                _send_data_block(sock, dest, seq, b'\x44' * 50)
 
-            # The proxy must nudge us with the STOP magic.
-            stop_seen = False
+            # The proxy must nudge us with the STOP magic — addressed
+            # to the vehicle it heard, not broadcast.
+            stop_msg = None
             deadline = time.time() + 6
-            while time.time() < deadline and not stop_seen:
-                for seqno, _status in _recv_block_statuses(sock,
-                                                           timeout=1.0):
-                    if seqno == mav.MAV_REMOTE_LOG_DATA_BLOCK_STOP:
-                        stop_seen = True
+            while time.time() < deadline and stop_msg is None:
+                for m in _recv_block_status_msgs(sock, timeout=1.0):
+                    if m.seqno == mav.MAV_REMOTE_LOG_DATA_BLOCK_STOP:
+                        stop_msg = m
                         break
-            assert stop_seen, \
+            assert stop_msg is not None, \
                 'no STOP nudge for mid-log stream; proxy log:\n%s' \
                 % ''.join(proc._lines[-10:])
+            assert stop_msg.target_system == 1, \
+                'STOP not targeted at the sending vehicle: target=%d' \
+                % stop_msg.target_system
 
             # "Vehicle" reacts like AP_Logger_MAVLink: stops, then the
             # START restarts it from seqno 0 — data must now land.
@@ -1137,6 +1165,44 @@ class TestBinlogCapture:
             assert _wait_for(
                 lambda: bin_path.exists() and bin_path.stat().st_size >= 400,
                 timeout=5.0), 'restart from seqno 0 did not open the file'
+
+            sock.close()
+        finally:
+            _terminate(proc)
+
+    def test_single_stale_block_no_stop_nudge(self, proxy_workdir):
+        """One stale mid-log block (e.g. a delayed pre-reboot packet
+        right after rotation) must NOT trigger the STOP nudge — that
+        would stop a healthy stream whose seqno 0 is already on the
+        way. Three or more gated blocks must."""
+        from pymavlink.dialects.v20 import all as mav
+        _setup_db(proxy_workdir, PORT_USER, PORT_ENG, 'bintest', 'bp',
+                  'binlog')
+        proc = _start_proxy(proxy_workdir, PORT_ENG)
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.bind(('127.0.0.1', 0))
+            dest = ('127.0.0.1', PORT_USER)
+
+            def _saw_stop(timeout):
+                deadline = time.time() + timeout
+                while time.time() < deadline:
+                    for m in _recv_block_status_msgs(sock, timeout=0.5):
+                        if m.seqno == mav.MAV_REMOTE_LOG_DATA_BLOCK_STOP:
+                            return True
+                return False
+
+            # A lone straggler: no STOP.
+            _send_data_block(sock, dest, 500, b'\x66' * 50)
+            assert not _saw_stop(3.0), \
+                'STOP fired on a single stale block'
+
+            # Two more gated blocks cross the threshold: STOP fires.
+            _send_data_block(sock, dest, 501, b'\x66' * 50)
+            _send_data_block(sock, dest, 502, b'\x66' * 50)
+            assert _saw_stop(4.0), \
+                'no STOP after threshold; proxy log:\n%s' \
+                % ''.join(proc._lines[-10:])
 
             sock.close()
         finally:

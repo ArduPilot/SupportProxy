@@ -214,8 +214,15 @@ void BinlogWriter::handle_block(uint32_t port2, unsigned session_n,
         if (blk.seqno != 0) {
             // vehicle is streaming mid-log at a closed file: only a
             // restart from seqno 0 can unblock it. tick() sends STOP
-            // to trigger that promptly.
-            gated_midstream_ = true;
+            // to trigger that promptly. Latch the sender's identity
+            // so the STOP is targeted, not broadcast.
+            if (target_system == 0) {
+                target_system = msg.sysid;
+                target_component = msg.compid;
+            }
+            if (gated_block_count_ < STOP_MIN_GATED_BLOCKS) {
+                gated_block_count_++;
+            }
             return;
         }
         unsigned n = (pending_session_n_ != 0) ? pending_session_n_ : session_n;
@@ -223,7 +230,7 @@ void BinlogWriter::handle_block(uint32_t port2, unsigned session_n,
             return;
         }
         pending_session_n_ = 0;
-        gated_midstream_ = false;
+        gated_block_count_ = 0;
     }
 
     // Caps to limit damage from a malicious or buggy peer sending a
@@ -422,7 +429,9 @@ void BinlogWriter::tick(MAVLink &user_link)
     // client timeout gets it there. Send STOP so it stops now — the
     // START logic below then restarts it from 0 within a second or so
     // (ArduPilot ignores STARTs while streaming, but honours STOP).
-    if (fp == nullptr && gated_midstream_
+    // The threshold keeps a lone stale block from stopping a healthy
+    // stream that is about to deliver its seqno 0.
+    if (fp == nullptr && gated_block_count_ >= STOP_MIN_GATED_BLOCKS
         && now_s - last_stop_sent_s >= STOP_REPEAT_S) {
         if (send_stop_packet(user_link)) {
             last_stop_sent_s = now_s;
@@ -576,6 +585,10 @@ bool BinlogWriter::rotate_for_reboot()
     // (whose _sending_to_client is now false post-reboot) resumes
     // streaming without waiting out the keep-alive interval.
     last_start_sent_s = 0.0;
+    // Stale pre-rotation blocks must re-accumulate before a STOP nudge
+    // fires: the restarted stream's seqno 0 is usually already on the
+    // way and must not be interrupted by a lone straggler.
+    gated_block_count_ = 0;
     // Re-arm the first-message-seen guard so the new boot's first
     // SYSTEM_TIME becomes the new watermark, not a spurious second
     // trigger of the backward-jump check.
