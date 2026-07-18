@@ -5,6 +5,7 @@
 #include "keydb.h"
 
 #include <algorithm>
+#include <errno.h>
 #include <dirent.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -28,10 +29,18 @@ off_t port2_quota_bytes(void)
     cached = off_t(1024) * 1024 * 1024;  // 1 GiB default
     const char *env = getenv("SUPPORTPROXY_PORT2_QUOTA_BYTES");
     if (env != nullptr && *env != '\0') {
+        // strict: plain positive bytes only. A prefix parse would turn
+        // a well-meant "1GB" into a 1-byte quota and let the cleanup
+        // pass delete nearly the whole log tree.
         char *endp = nullptr;
+        errno = 0;
         long long v = strtoll(env, &endp, 10);
-        if (endp != env && v > 0) {
+        if (errno == 0 && endp != env && *endp == '\0' && v > 0) {
             cached = off_t(v);
+        } else {
+            ::printf("ignoring invalid SUPPORTPROXY_PORT2_QUOTA_BYTES "
+                     "'%s' (want plain bytes); using %lld\n",
+                     env, (long long)cached);
         }
     }
     return cached;

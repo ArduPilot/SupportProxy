@@ -1170,6 +1170,29 @@ class TestBinlogCapture:
         finally:
             _terminate(proc)
 
+    def test_malformed_quota_env_ignored(self, proxy_workdir):
+        """SUPPORTPROXY_PORT2_QUOTA_BYTES='1GB' must be rejected, not
+        prefix-parsed to a 1-byte quota (which would block all writes
+        and let the cleanup delete nearly the whole log tree)."""
+        _setup_db(proxy_workdir, PORT_USER, PORT_ENG, 'bintest', 'bp',
+                  'binlog')
+        proc = _start_proxy(proxy_workdir, PORT_ENG, quota_bytes='1GB')
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.bind(('127.0.0.1', 0))
+            dest = ('127.0.0.1', PORT_USER)
+            _send_data_block(sock, dest, 0, b'\xaa' * 50)
+
+            bin_path = _bin_path(proxy_workdir, PORT_ENG)
+            assert _wait_for(
+                lambda: bin_path.exists() and bin_path.stat().st_size >= 200,
+                timeout=5.0), \
+                "writes blocked - '1GB' was prefix-parsed; proxy log:\n%s" \
+                % ''.join(proc._lines[-10:])
+            sock.close()
+        finally:
+            _terminate(proc)
+
     def test_single_stale_block_no_stop_nudge(self, proxy_workdir):
         """One stale mid-log block (e.g. a delayed pre-reboot packet
         right after rotation) must NOT trigger the STOP nudge — that
