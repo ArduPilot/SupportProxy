@@ -253,7 +253,10 @@ void BinlogWriter::handle_block(uint32_t port2, unsigned session_n,
         double cnow = time_seconds();
         if (cnow - last_quota_cleanup_s_ >= QUOTA_CLEANUP_MIN_INTERVAL_S) {
             last_quota_cleanup_s_ = cnow;
-            log_cleanup_port2_quota(port2_, base_dir_.c_str());
+            // the pass counts our own on-disk allocation itself; the
+            // extra headroom we need beyond that is this block
+            log_cleanup_port2_quota(port2_, base_dir_.c_str(),
+                                    off_t(BLOCK_BYTES));
             refresh_other_sessions_bytes();
         }
     }

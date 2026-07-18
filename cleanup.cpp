@@ -65,7 +65,8 @@ static bool is_session_file(const char *name)
   about to overflow. Walks every date dir under logs/<port2>/, sorts
   files by mtime ascending, deletes from the head.
  */
-static void enforce_port2_quota(uint32_t port2, const char *base_dir)
+static void enforce_port2_quota(uint32_t port2, const char *base_dir,
+                                off_t needed = 0)
 {
     char port_dir[768];
     snprintf(port_dir, sizeof(port_dir), "%s/%u", base_dir, port2);
@@ -119,8 +120,12 @@ static void enforce_port2_quota(uint32_t port2, const char *base_dir)
     }
     closedir(d);
 
+    // `needed` is the caller's prospective growth: a write-time breach
+    // can happen with total still at or just under the quota, and
+    // without accounting for it here the pass would free nothing and
+    // the caller's write would be dropped forever.
     const off_t quota = port2_quota_bytes();
-    if (total <= quota) {
+    if (total + needed <= quota) {
         return;
     }
 
@@ -132,7 +137,7 @@ static void enforce_port2_quota(uint32_t port2, const char *base_dir)
     std::sort(items.begin(), items.end(),
               [](const Item &a, const Item &b) { return a.mtime < b.mtime; });
     for (const auto &it : items) {
-        if (total <= target) {
+        if (total + needed <= target) {
             break;
         }
         if (unlink(it.path.c_str()) == 0) {
@@ -277,9 +282,10 @@ static void sleep_seconds(double s)
 
 }  // namespace
 
-void log_cleanup_port2_quota(unsigned port2, const char *base_dir)
+void log_cleanup_port2_quota(unsigned port2, const char *base_dir,
+                             off_t needed)
 {
-    enforce_port2_quota(port2, base_dir);
+    enforce_port2_quota(port2, base_dir, needed);
 }
 
 void log_cleanup_once(const char *base_dir)

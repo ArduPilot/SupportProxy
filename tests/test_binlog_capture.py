@@ -890,6 +890,40 @@ class TestBinlogCapture:
         finally:
             _terminate(proc)
 
+    def test_quota_boundary_prospective_breach_frees(self, proxy_workdir):
+        """Old sessions sitting exactly at (or just under) the quota:
+        current usage doesn't exceed the cap, but the first block's
+        prospective growth does. The cleanup must account for the
+        caller's needed headroom and free anyway — otherwise no write
+        ever succeeds and the stall is permanent."""
+        _setup_db(proxy_workdir, PORT_USER, PORT_ENG, 'bintest', 'bp',
+                  'binlog')
+
+        # prefill = 73 pages = 299008 allocated bytes; quota 299100.
+        # total (299008) <= quota, but total + 200 > quota.
+        proc = _start_proxy(proxy_workdir, PORT_ENG, quota_bytes=299100)
+        try:
+            prefilled = self._seed_prefill_after_startup(
+                proxy_workdir, proc, 299008)
+
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.bind(('127.0.0.1', 0))
+            dest = ('127.0.0.1', PORT_USER)
+            _send_data_block(sock, dest, 0, b'\xaa' * 50)
+
+            bin_path = _bin_path(proxy_workdir, PORT_ENG)
+            assert _wait_for(
+                lambda: bin_path.exists() and bin_path.stat().st_size >= 200,
+                timeout=5.0), \
+                'boundary breach never freed; proxy log:\n%s' \
+                % ''.join(proc._lines[-10:])
+            assert not prefilled.exists(), \
+                'old session should have been aged out'
+
+            sock.close()
+        finally:
+            _terminate(proc)
+
     def test_quota_still_blocks_when_nothing_to_free(self, proxy_workdir):
         """When the quota genuinely can't be met (nothing deletable),
         blocks must still be dropped rather than written over quota."""
