@@ -6,7 +6,9 @@
   start. A child fork that records both kinds computes one <name> and
   passes it to both writers, so the .tlog and .bin sit next to each
   other with matching names. The date subdir and the filename are both
-  formed in the entry's log-naming timezone (a GMT offset in hours).
+  formed in the entry's log-naming timezone: an explicit GMT offset in
+  hours, or — when the offset is 0/unset (the default) — the server's
+  own local timezone.
  */
 #pragma once
 
@@ -24,12 +26,14 @@ int mkpath_0700(const char *path);
 
 /*
   Format the date subdir ("YYYY-MM-DD") and the log basename
-  ("YYYY_MM_DD_HH:MM:SS") for the UTC time `utc` shifted by
-  tz_offset_hours (fractional hours allowed). The shifted time is
-  formatted with gmtime so the machine's own timezone never affects
-  naming — an offset of 0 yields GMT/UTC.
+  ("YYYY_MM_DD_HH:MM:SS") for the UTC time `utc`. When `use_offset` is
+  true the finite tz_offset_hours (fractional allowed) is applied and
+  formatted with gmtime, so the host timezone never affects naming (a
+  fixed offset, no DST). When false, the time is formatted in the
+  server's own local timezone — the default when KEY_FLAG_USE_TZ is
+  clear.
  */
-void session_time_strings(time_t utc, double tz_offset_hours,
+void session_time_strings(time_t utc, bool use_offset, double tz_offset_hours,
                           char *datedir, size_t datedir_len,
                           char *name, size_t name_len);
 

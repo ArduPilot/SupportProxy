@@ -290,9 +290,10 @@ static void main_loop(struct listen_port *p)
     // regardless of which writer activates first or whether one never
     // does. Made unique up front so a same-second session start doesn't
     // clobber an existing file.
+    const bool use_tz = (p->flags & KEY_FLAG_USE_TZ) != 0;
     char log_datedir[16];
     char log_name[64];
-    session_time_strings(time(nullptr), p->tz_offset_hours,
+    session_time_strings(time(nullptr), use_tz, p->tz_offset_hours,
                          log_datedir, sizeof(log_datedir),
                          log_name, sizeof(log_name));
     session_unique_basename("logs", uint32_t(p->port2), log_datedir,
@@ -336,7 +337,7 @@ static void main_loop(struct listen_port *p)
         binlog.set_fc_sysid_filter(p->fc_sysid);
         // Timezone (for the reboot-rotated file's timestamp name) and
         // the shared session paths for the initial lazy open.
-        binlog.set_tz(p->tz_offset_hours);
+        binlog.set_tz(use_tz, p->tz_offset_hours);
         binlog.set_session_paths(log_datedir, log_name);
     }
     // Tap helper: returns true if the message was consumed by binlog

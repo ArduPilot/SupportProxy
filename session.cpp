@@ -11,6 +11,7 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <time.h>
+#include <unistd.h>
 
 int mkpath_0700(const char *path)
 {
@@ -30,15 +31,30 @@ int mkpath_0700(const char *path)
     return 0;
 }
 
-void session_time_strings(time_t utc, double tz_offset_hours,
+void session_time_strings(time_t utc, bool use_offset, double tz_offset_hours,
                           char *datedir, size_t datedir_len,
                           char *name, size_t name_len)
 {
-    // Apply the offset then format with gmtime, so the machine's local
-    // timezone plays no part — offset 0 is GMT.
-    time_t shifted = utc + (time_t)llround(tz_offset_hours * 3600.0);
-    struct tm tm;
-    gmtime_r(&shifted, &tm);
+    struct tm tm {};
+    struct tm *r;
+    if (use_offset && isfinite(tz_offset_hours)) {
+        // Explicit fixed GMT offset: apply it then format with gmtime so
+        // the machine's own timezone plays no part. No DST — a fixed
+        // offset by design.
+        time_t shifted = utc + (time_t)llround(tz_offset_hours * 3600.0);
+        r = gmtime_r(&shifted, &tm);
+    } else {
+        // Default (KEY_FLAG_USE_TZ clear, or a non-finite offset): name
+        // in the server's local timezone, as configured on the host —
+        // the least-surprising default and what the pre-timestamp
+        // naming did.
+        r = localtime_r(&utc, &tm);
+    }
+    if (r == nullptr) {
+        // gmtime_r/localtime_r only fail on absurd inputs; format a
+        // zeroed tm rather than uninitialised stack.
+        memset(&tm, 0, sizeof(tm));
+    }
 
     snprintf(datedir, datedir_len, "%04d-%02d-%02d",
              tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday);
@@ -73,7 +89,12 @@ void session_unique_basename(const char *base_dir, uint32_t port2,
             return;
         }
     }
-    // 1000 collisions in one second/dir is not going to happen; keep the
-    // plain base rather than loop forever.
-    snprintf(name, name_len, "%s", base);
+    // 1000 collisions in one second/dir cannot happen in practice, but
+    // never return an occupied basename (that would truncate/append into
+    // another session's log). A pid+nanosecond suffix can't match any of
+    // the "-N" candidates above, so it stays unique.
+    struct timespec ts {};
+    clock_gettime(CLOCK_REALTIME, &ts);
+    snprintf(name, name_len, "%s-%d-%09ld",
+             base, int(getpid()), long(ts.tv_nsec));
 }
