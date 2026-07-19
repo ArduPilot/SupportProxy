@@ -59,10 +59,14 @@ public:
     }
 
     /*
-      Log-naming timezone (GMT offset in hours) for the reboot-rotated
-      file's name. Sourced from KeyEntry.tz_offset_hours at fork.
+      Log-naming timezone for the reboot-rotated file's name: whether to
+      apply the fixed GMT offset (KEY_FLAG_USE_TZ) and the offset itself.
+      Sourced from the KeyEntry at fork.
      */
-    void set_tz(double offset_hours) { tz_offset_hours_ = offset_hours; }
+    void set_tz(bool use_offset, double offset_hours) {
+        tz_use_offset_ = use_offset;
+        tz_offset_hours_ = offset_hours;
+    }
 
     /*
       Decode a REMOTE_LOG_DATA_BLOCK message and process it.
@@ -273,7 +277,9 @@ private:
     // rotate_for_reboot() for the post-reboot file.
     std::string datedir_;
     std::string name_;
-    // Log-naming timezone (GMT offset in hours) for rotate's new name.
+    // Log-naming timezone for rotate's new name: whether the fixed GMT
+    // offset is in use (KEY_FLAG_USE_TZ) and its value.
+    bool        tz_use_offset_ = false;
     double      tz_offset_hours_ = 0.0;
 
     // Current size of fp (= the largest seqno+1 we've written * 200).

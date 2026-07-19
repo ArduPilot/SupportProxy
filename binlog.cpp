@@ -601,7 +601,7 @@ bool BinlogWriter::rotate_for_reboot()
     // blocks can't sparse-write into the new file. The open() happens
     // lazily in handle_block using the new datedir_/name_.
     char datedir[16], name[64];
-    session_time_strings(time(nullptr), tz_offset_hours_,
+    session_time_strings(time(nullptr), tz_use_offset_, tz_offset_hours_,
                          datedir, sizeof(datedir), name, sizeof(name));
     session_unique_basename(base_dir_.c_str(), port2_, datedir,
                             name, sizeof(name));
