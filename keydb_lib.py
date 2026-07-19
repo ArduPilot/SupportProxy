@@ -32,7 +32,9 @@ KEY_MAGIC = 0x6b73e867a72cdd1f
 # so the on-disk byte layout stays compatible — the zero-init paths in
 # db_load_key (C++) and unpack() (Python) handle older records transparently.
 # tz_offset_hours took a slot that was previously a zeroed reserved word, so
-# older records read back as 0.0 (GMT) with no conversion.
+# older records read back as 0.0 with the KEY_FLAG_USE_TZ bit clear — i.e.
+# server-local naming (the flag, not the value, decides whether the offset
+# is used), needing no conversion.
 KEYENTRY_MIN_SIZE = 96
 PACK_FORMAT = "<QQ32siIII32sIfIf14I"
 KEYENTRY_CURRENT_SIZE = struct.calcsize(PACK_FORMAT)  # 168

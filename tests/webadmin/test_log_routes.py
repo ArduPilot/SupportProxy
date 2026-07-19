@@ -376,6 +376,19 @@ class TestTimestampNames:
         r = client.get('/me/logs/2026-07-19/' + self.TS + '-2.tlog')
         assert r.status_code == 200
 
+    def test_pid_ns_fallback_name_browsable(self, client, keydb_path,
+                                            logs_dir):
+        # The exhaustion fallback is a single big numeric "-N" suffix
+        # (pid+nanoseconds concatenated); it must list and download like
+        # any other session file.
+        fb = self.TS + '-149785439335901.bin'
+        seed_session(logs_dir, ALICE_PORT2, '2026-07-19', fb, content=b'F')
+        login_as(client, ALICE_PORT1, ALICE_PASS)
+        r = client.get('/me/logs/2026-07-19/')
+        assert fb.encode() in r.data
+        r = client.get('/me/logs/2026-07-19/' + fb)
+        assert r.status_code == 200
+
     def test_collision_suffix_chronological_order(self, client, keydb_path,
                                                   logs_dir):
         # The unsuffixed original is the first session that second and
