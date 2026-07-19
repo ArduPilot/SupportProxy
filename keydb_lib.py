@@ -12,6 +12,7 @@ the caller to hold an open TDB transaction.
 import errno
 import hashlib
 import hmac
+import math
 import os
 import struct
 import time
@@ -41,12 +42,14 @@ FLAG_ADMIN     = 1 << 0
 FLAG_BIDI_SIGN = 1 << 1   # require signed MAVLink on the user side too
 FLAG_TLOG      = 1 << 2   # record per-connection MAVProxy-format tlogs
 FLAG_BINLOG    = 1 << 3   # record ArduPilot bin logs over MAVLink
+FLAG_USE_TZ    = 1 << 4   # name logs with tz_offset_hours; else server local
 
 FLAG_NAMES = {
     "admin":     FLAG_ADMIN,
     "bidi_sign": FLAG_BIDI_SIGN,
     "tlog":      FLAG_TLOG,
     "binlog":    FLAG_BINLOG,
+    "use_tz":    FLAG_USE_TZ,
 }
 
 DEFAULT_LOG_RETENTION_DAYS = 7.0
@@ -54,17 +57,24 @@ RESERVED_WORDS = 14
 
 
 # Timezone offset is a plain GMT offset in hours (fractional allowed, e.g.
-# 5.5 for IST, -3.5 for Newfoundland). We deliberately store an offset
-# rather than a named zone: a fixed offset is unambiguous and DST-free,
-# which is what a log-naming convention wants (a name would need the full
-# tz database plus DST handling that shifts mid-session). The offset drives
+# 5.5 for IST, -3.75 for Chatham). We deliberately store an offset rather
+# than a named zone: a fixed offset is unambiguous and DST-free, which is
+# what a log-naming convention wants (a name would need the full tz
+# database plus DST handling that shifts mid-session). The offset drives
 # both the YYYY-MM-DD date subdir and the YYYY_MM_DD_HH:MM:SS filename.
+#
+# The offset is only used when the KEY_FLAG_USE_TZ flag is set; otherwise
+# logs are named in the server's own local timezone (the default, and
+# what legacy records — flag clear — get, matching the pre-timestamp
+# behaviour). 0 with the flag set is a genuine GMT offset.
 TZ_MIN_OFFSET = -12.0
 TZ_MAX_OFFSET = 14.0
 
 
 def format_tz_offset(hours):
     """Render a GMT offset as e.g. 'GMT+05:30', 'GMT-03:45', 'GMT'."""
+    if not math.isfinite(hours):
+        return 'invalid'
     if not hours:
         return 'GMT'
     sign = '+' if hours >= 0 else '-'
@@ -180,8 +190,12 @@ class KeyEntry:
         if self.fc_sysid:
             sysstr = ' fc_sysid=%u' % self.fc_sysid
         tzstr = ''
-        if self.tz_offset_hours:
+        if self.flags & FLAG_USE_TZ:
             tzstr = ' tz=%s' % format_tz_offset(self.tz_offset_hours)
+        elif self.tz_offset_hours:
+            # offset stored but not active — show it parenthesised so it
+            # is clear the server-local default is in effect
+            tzstr = ' tz=local(%s off)' % format_tz_offset(self.tz_offset_hours)
         return ("%u/%u '%s' counts=%u/%u connections=%u ts=%u%s%s%s%s"
                 % (self.port1, self.port2, self.name,
                    self.count1, self.count2, self.connections,
@@ -376,15 +390,21 @@ def set_log_retention(db, port2, days):
 
 
 def set_timezone(db, port2, hours):
-    """Set the per-entry log-naming timezone as a GMT offset in hours
-    (fractional allowed). Affects the date subdir and the log filename."""
+    """Set the per-entry log-naming GMT offset (hours, fractional) and
+    enable its use (KEY_FLAG_USE_TZ). Setting a timezone means you want
+    it applied; clear the 'use_tz' flag to revert to server-local naming
+    without discarding the stored offset."""
     ke = KeyEntry(port2)
     if not ke.fetch(db):
         raise CLIError("No entry for port2 %d" % port2)
+    if not math.isfinite(hours):
+        raise CLIError("timezone offset must be a finite number (got %r)"
+                       % hours)
     if hours < TZ_MIN_OFFSET or hours > TZ_MAX_OFFSET:
         raise CLIError("timezone offset must be in %g..%g hours (got %r)"
                        % (TZ_MIN_OFFSET, TZ_MAX_OFFSET, hours))
     ke.tz_offset_hours = float(hours)
+    ke.flags |= FLAG_USE_TZ
     ke.store(db)
     return ke
 

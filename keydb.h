@@ -33,6 +33,7 @@
 #define KEY_FLAG_BIDI_SIGN (1u << 1)  // require signed MAVLink on the user side too
 #define KEY_FLAG_TLOG      (1u << 2)  // record per-connection MAVProxy-format tlogs
 #define KEY_FLAG_BINLOG    (1u << 3)  // record ArduPilot bin logs over MAVLink
+#define KEY_FLAG_USE_TZ    (1u << 4)  // name logs with tz_offset_hours; else server local
 
 struct KeyEntry {
     uint64_t magic;
@@ -46,7 +47,7 @@ struct KeyEntry {
     uint32_t flags;
     float    log_retention_days;    // tlog + bin; 0.0 = forever; fractional values allowed for tests
     uint32_t fc_sysid;              // 0 = match any; otherwise only monitor packets from this MAVLink sysid (binlog reboot detection)
-    float    tz_offset_hours;       // log naming: offset from GMT in hours (fractional allowed); 0 = GMT
+    float    tz_offset_hours;       // log naming: GMT offset in hours (fractional allowed), used only when KEY_FLAG_USE_TZ is set
     uint32_t reserved[14];
 };
 
