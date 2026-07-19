@@ -83,6 +83,10 @@ def me():
                 ke.fc_sysid = int(form.fc_sysid.data)
             if form.tz_offset_hours.data is not None:
                 ke.tz_offset_hours = float(form.tz_offset_hours.data)
+            if form.use_tz.data:
+                ke.flags |= keydb_lib.FLAG_USE_TZ
+            else:
+                ke.flags &= ~keydb_lib.FLAG_USE_TZ
             if form.reset_timestamp.data:
                 ke.timestamp = 0
             ke.store(db)
@@ -104,6 +108,7 @@ def me():
         form.log_retention_days.data = ke.log_retention_days
         form.fc_sysid.data = ke.fc_sysid
         form.tz_offset_hours.data = ke.tz_offset_hours
+        form.use_tz.data = bool(ke.flags & keydb_lib.FLAG_USE_TZ)
     active = conn_db.list_for_port2(port2)
     return render_template('owner.html', form=form, entry=ke, active=active,
                            kill_form=KillForm())
