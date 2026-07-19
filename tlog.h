@@ -20,12 +20,13 @@ public:
     TlogWriter &operator=(const TlogWriter &) = delete;
 
     /*
-      open logs/<port2>/<YYYY-MM-DD>/sessionN.tlog. The caller supplies
-      session_n via the shared next_session_n() helper so the paired
-      .tlog / .bin files for one child fork share their N. Creates parent
-      dirs as needed. Returns true on success.
+      open logs/<port2>/<datedir>/<name>.tlog. The caller supplies the
+      timestamp datedir + basename (from session_time_strings /
+      session_unique_basename) so the paired .tlog / .bin files for one
+      child fork share their name. Creates parent dirs as needed.
+      Returns true on success.
      */
-    bool open(uint32_t port2, unsigned session_n,
+    bool open(uint32_t port2, const char *datedir, const char *name,
               const char *base_dir = "logs");
 
     /*

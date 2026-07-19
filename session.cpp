@@ -1,10 +1,11 @@
 /*
-  Shared sessionN + mkdir-p helpers for TlogWriter / BinlogWriter.
+  Shared timestamp-naming + mkdir-p helpers for TlogWriter / BinlogWriter.
  */
 #include "session.h"
 
 #include <dirent.h>
 #include <errno.h>
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -29,37 +30,50 @@ int mkpath_0700(const char *path)
     return 0;
 }
 
-unsigned next_session_n(uint32_t port2, const char *base_dir)
+void session_time_strings(time_t utc, double tz_offset_hours,
+                          char *datedir, size_t datedir_len,
+                          char *name, size_t name_len)
 {
-    time_t now = time(nullptr);
-    struct tm tm_now;
-    localtime_r(&now, &tm_now);
+    // Apply the offset then format with gmtime, so the machine's local
+    // timezone plays no part — offset 0 is GMT.
+    time_t shifted = utc + (time_t)llround(tz_offset_hours * 3600.0);
+    struct tm tm;
+    gmtime_r(&shifted, &tm);
 
-    char dir[768];
-    snprintf(dir, sizeof(dir), "%s/%u/%04d-%02d-%02d",
-             base_dir, port2,
-             tm_now.tm_year + 1900,
-             tm_now.tm_mon + 1,
-             tm_now.tm_mday);
+    snprintf(datedir, datedir_len, "%04d-%02d-%02d",
+             tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday);
+    snprintf(name, name_len, "%04d_%02d_%02d_%02d:%02d:%02d",
+             tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
+             tm.tm_hour, tm.tm_min, tm.tm_sec);
+}
 
-    DIR *d = opendir(dir);
-    if (d == nullptr) {
-        // No dir yet -> first session of the day.
-        return 1;
-    }
-    unsigned highest = 0;
-    struct dirent *ent;
-    while ((ent = readdir(d)) != nullptr) {
-        unsigned n = 0;
-        // Match either sessionN.tlog or sessionN.bin so paired N stays
-        // paired across both extensions.
-        if (sscanf(ent->d_name, "session%u.tlog", &n) == 1
-            || sscanf(ent->d_name, "session%u.bin", &n) == 1) {
-            if (n > highest) {
-                highest = n;
-            }
+void session_unique_basename(const char *base_dir, uint32_t port2,
+                             const char *datedir,
+                             char *name, size_t name_len)
+{
+    char base[64];
+    snprintf(base, sizeof(base), "%s", name);
+
+    char dir[1024];
+    snprintf(dir, sizeof(dir), "%s/%u/%s", base_dir, unsigned(port2), datedir);
+
+    for (int suffix = 1; suffix < 1000; suffix++) {
+        char candidate[80];
+        if (suffix == 1) {
+            snprintf(candidate, sizeof(candidate), "%s", base);
+        } else {
+            snprintf(candidate, sizeof(candidate), "%s-%d", base, suffix);
+        }
+        char p_tlog[2048], p_bin[2048];
+        snprintf(p_tlog, sizeof(p_tlog), "%s/%s.tlog", dir, candidate);
+        snprintf(p_bin, sizeof(p_bin), "%s/%s.bin", dir, candidate);
+        struct stat st;
+        if (stat(p_tlog, &st) != 0 && stat(p_bin, &st) != 0) {
+            snprintf(name, name_len, "%s", candidate);
+            return;
         }
     }
-    closedir(d);
-    return highest + 1;
+    // 1000 collisions in one second/dir is not going to happen; keep the
+    // plain base rather than loop forever.
+    snprintf(name, name_len, "%s", base);
 }

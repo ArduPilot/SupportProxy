@@ -82,6 +82,7 @@ struct listen_port {
     uint32_t flags;
     uint8_t  fc_sysid;     // 0 = match any; otherwise the FC's MAVLink
                            // sysid for binlog reboot detection
+    float    tz_offset_hours;  // log-naming timezone (GMT offset in hours)
     bool seen;     // set true by handle_record() during reload_ports()
                    // for any entry that's still in the DB; entries left
                    // unseen after a reload have been removed.
@@ -134,7 +135,8 @@ static void close_sockets(struct listen_port *p);
   Used both at startup and on each reload; reload_ports() handles the
   flip side (entries that were in keys.tdb last time and aren't now).
  */
-static void upsert_port(int port1, int port2, uint32_t flags, uint8_t fc_sysid)
+static void upsert_port(int port1, int port2, uint32_t flags, uint8_t fc_sysid,
+                        float tz_offset_hours)
 {
     for (auto *p = ports; p; p=p->next) {
         if (p->port2 == port2) {
@@ -146,6 +148,7 @@ static void upsert_port(int port1, int port2, uint32_t flags, uint8_t fc_sysid)
                 p->port1 = port1;
                 p->flags = flags;
                 p->fc_sysid = fc_sysid;
+                p->tz_offset_hours = tz_offset_hours;
                 if (p->pid == 0) {
                     open_sockets(p);
                 }
@@ -161,12 +164,14 @@ static void upsert_port(int port1, int port2, uint32_t flags, uint8_t fc_sysid)
                 p->port1 = port1;
                 p->flags = flags;
                 p->fc_sysid = fc_sysid;
+                p->tz_offset_hours = tz_offset_hours;
                 if (p->pid == 0) {
                     open_sockets(p);
                 }
             } else {
                 p->flags = flags;
                 p->fc_sysid = fc_sysid;
+                p->tz_offset_hours = tz_offset_hours;
             }
             return;
         }
@@ -182,6 +187,7 @@ static void upsert_port(int port1, int port2, uint32_t flags, uint8_t fc_sysid)
     p->pid = 0;
     p->flags = flags;
     p->fc_sysid = fc_sysid;
+    p->tz_offset_hours = tz_offset_hours;
     p->seen = true;
     p->removed = false;
     ports = p;
@@ -204,7 +210,8 @@ static int handle_record(struct tdb_context *db, TDB_DATA key, TDB_DATA data, vo
     // KeyEntry.fc_sysid is uint32 for forward compat; the wire value is
     // a MAVLink sysid (0..255), so truncate to uint8 once it crosses the
     // C++/binlog boundary. The CLI / web UI already cap at 255.
-    upsert_port(k.port1, port2, k.flags, uint8_t(k.fc_sysid));
+    upsert_port(k.port1, port2, k.flags, uint8_t(k.fc_sysid),
+                k.tz_offset_hours);
     return 0;
 }
 
@@ -276,11 +283,20 @@ static void main_loop(struct listen_port *p)
         sigaction(SIGUSR1, &sa, nullptr);
     }
 
-    // session_n is computed once at fork start and shared between the
-    // tlog and (further down) the binlog writer so the paired files
-    // — sessionN.tlog + sessionN.bin — share their N regardless of
-    // which writer activates first or whether one of them never does.
-    const unsigned session_n = next_session_n(uint32_t(p->port2), "logs");
+    // Log naming: one timestamp basename computed once at fork start
+    // (in the entry's log-naming timezone) and shared between the tlog
+    // and (further down) the binlog writer, so the paired files —
+    // <name>.tlog + <name>.bin — share their name and date subdir
+    // regardless of which writer activates first or whether one never
+    // does. Made unique up front so a same-second session start doesn't
+    // clobber an existing file.
+    char log_datedir[16];
+    char log_name[64];
+    session_time_strings(time(nullptr), p->tz_offset_hours,
+                         log_datedir, sizeof(log_datedir),
+                         log_name, sizeof(log_name));
+    session_unique_basename("logs", uint32_t(p->port2), log_datedir,
+                            log_name, sizeof(log_name));
 
     // bidi: initialise the user-side validator once. Re-initialising
     // per unsigned datagram (as the pre-latch path originally did)
@@ -299,7 +315,7 @@ static void main_loop(struct listen_port *p)
     const bool tlog_enabled = (p->flags & KEY_FLAG_TLOG) != 0;
     auto ensure_tlog_open = [&]() {
         if (tlog_enabled && !tlog.is_open()) {
-            tlog.open(uint32_t(p->port2), session_n);
+            tlog.open(uint32_t(p->port2), log_datedir, log_name);
         }
     };
     auto tlog_ptr = [&]() -> TlogWriter * {
@@ -318,6 +334,10 @@ static void main_loop(struct listen_port *p)
         // Per-entry sysid filter for SYSTEM_TIME-based reboot
         // detection. 0 (default) accepts any sysid.
         binlog.set_fc_sysid_filter(p->fc_sysid);
+        // Timezone (for the reboot-rotated file's timestamp name) and
+        // the shared session paths for the initial lazy open.
+        binlog.set_tz(p->tz_offset_hours);
+        binlog.set_session_paths(log_datedir, log_name);
     }
     // Tap helper: returns true if the message was consumed by binlog
     // and the caller should NOT forward it to the engineer side.
@@ -335,7 +355,7 @@ static void main_loop(struct listen_port *p)
             return false;
         }
         if (m.msgid == MAVLINK_MSG_ID_REMOTE_LOG_DATA_BLOCK) {
-            binlog.handle_block(uint32_t(p->port2), session_n, m);
+            binlog.handle_block(uint32_t(p->port2), m);
         }
         return true;  // strip from user→engineer
     };

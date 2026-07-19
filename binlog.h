@@ -39,13 +39,30 @@ public:
     BinlogWriter &operator=(const BinlogWriter &) = delete;
 
     /*
-      open logs/<port2>/<YYYY-MM-DD>/sessionN.bin. Caller supplies
-      session_n via the shared next_session_n() helper so the .bin
-      and .tlog for one child fork share their N.
+      open logs/<port2>/<datedir>/<name>.bin. The timestamp datedir +
+      basename come from set_session_paths() (set once at fork so the
+      .bin and .tlog for one child share their name), or are recomputed
+      by rotate_for_reboot() for the post-reboot file.
      */
-    bool open(uint32_t port2, unsigned session_n,
-              const char *base_dir = "logs");
+    bool open(uint32_t port2, const char *base_dir = "logs");
     bool is_open() const { return fp != nullptr; }
+
+    /*
+      Set the timestamp date subdir + basename for the (lazy) initial
+      open. Called once by the parent at fork with the shared session
+      name so .bin and .tlog pair up. rotate_for_reboot() overwrites
+      these with the reboot-time name for the next file.
+     */
+    void set_session_paths(const char *datedir, const char *name) {
+        datedir_ = datedir;
+        name_ = name;
+    }
+
+    /*
+      Log-naming timezone (GMT offset in hours) for the reboot-rotated
+      file's name. Sourced from KeyEntry.tz_offset_hours at fork.
+     */
+    void set_tz(double offset_hours) { tz_offset_hours_ = offset_hours; }
 
     /*
       Decode a REMOTE_LOG_DATA_BLOCK message and process it.
@@ -66,12 +83,10 @@ public:
       jump (seqno > highest_seen + 1) the gap is recorded for NACK
       in tick().
 
-      port2 + session_n are used only on the (lazy) open. They're
-      passed every call rather than stored so BinlogWriter doesn't
-      need to copy strings.
+      port2 is used only on the (lazy) open; the datedir/name come from
+      set_session_paths().
      */
-    void handle_block(uint32_t port2, unsigned session_n,
-                      const mavlink_message_t &msg);
+    void handle_block(uint32_t port2, const mavlink_message_t &msg);
 
     /*
       Observe an arbitrary user-side MAVLink message for FC-reboot
@@ -247,11 +262,19 @@ private:
     double last_stop_sent_s = 0.0;
 
     // Captured on the first successful open() so rotate_for_reboot()
-    // can re-scan the per-day dir for a fresh session N without
-    // dragging port2/base_dir through every observe() / handle_block()
-    // signature.
+    // can rebuild paths without dragging port2/base_dir through every
+    // observe() / handle_block() signature.
     uint32_t    port2_   = 0;
     std::string base_dir_;
+
+    // Timestamp date subdir ("YYYY-MM-DD") and basename
+    // ("YYYY_MM_DD_HH:MM:SS") for the file. Set once at fork via
+    // set_session_paths() so .bin and .tlog pair up; rebuilt by
+    // rotate_for_reboot() for the post-reboot file.
+    std::string datedir_;
+    std::string name_;
+    // Log-naming timezone (GMT offset in hours) for rotate's new name.
+    double      tz_offset_hours_ = 0.0;
 
     // Current size of fp (= the largest seqno+1 we've written * 200).
     // Tracked locally rather than fstat'ing on every write.
@@ -280,17 +303,12 @@ private:
     // SYSTEM_TIME can't trigger a spurious reboot).
     uint32_t last_system_time_boot_ms_ = 0;
 
-    // Close + reset per-log state + arm pending_session_n_ for the
-    // NEXT open. Used when observe() decides the FC has rebooted.
-    // Does NOT re-open here — the new file is only opened when a
-    // fresh seqno=0 arrives, so the existing strict-start gate keeps
-    // protecting the rotated file from delayed pre-reboot blocks.
-    // Does NOT reset per-vehicle state (target_system/component,
+    // Close + reset per-log state + rebuild datedir_/name_ for the NEXT
+    // open (a fresh reboot-time timestamp). Used when observe() decides
+    // the FC has rebooted. Does NOT re-open here — the new file is only
+    // opened when a fresh seqno=0 arrives, so the existing strict-start
+    // gate keeps protecting the rotated file from delayed pre-reboot
+    // blocks. Does NOT reset per-vehicle state (target_system/component,
     // fc_sysid_filter_).
     bool rotate_for_reboot();
-
-    // Session N to use on the NEXT open(), set by rotate_for_reboot()
-    // and consumed on the gate-triggered open in handle_block.
-    // 0 = no pending rotation; use the caller's session_n argument.
-    unsigned pending_session_n_ = 0;
 };
