@@ -26,12 +26,12 @@ int mkpath_0700(const char *path);
 
 /*
   Format the date subdir ("YYYY-MM-DD") and the log basename
-  ("YYYY_MM_DD_HH:MM:SS") for the UTC time `utc`. When `use_offset` is
-  true the finite tz_offset_hours (fractional allowed) is applied and
-  formatted with gmtime, so the host timezone never affects naming (a
-  fixed offset, no DST). When false, the time is formatted in the
-  server's own local timezone — the default when KEY_FLAG_USE_TZ is
-  clear.
+  ("YYYY_MM_DD_HH:MM:SS") for the UTC time `utc`. `use_offset` mirrors
+  KEY_FLAG_USE_TZ: when true, the finite tz_offset_hours (fractional
+  allowed, clamped to [-12,+14]) is applied and formatted with gmtime —
+  a fixed GMT offset, no DST, so 0 is genuine GMT. When false (the
+  default, and every legacy entry), the time is formatted in the
+  server's own local timezone; tz_offset_hours is ignored.
  */
 void session_time_strings(time_t utc, bool use_offset, double tz_offset_hours,
                           char *datedir, size_t datedir_len,

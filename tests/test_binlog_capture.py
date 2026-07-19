@@ -323,6 +323,59 @@ class TestBinlogCapture:
         finally:
             _terminate(proc)
 
+    def test_out_of_range_offset_is_clamped(self, proxy_workdir):
+        """A hand-edited record with use_tz set and an absurd offset (past
+        the [-12,+14] range) must be clamped by the proxy, not overflow
+        time_t. The name should land at UTC+14, not UTC+1000."""
+        db_path = str(proxy_workdir / 'keys.tdb')
+        db = keydb_lib.init_db(db_path)
+        db.transaction_start()
+        keydb_lib.add_entry(db, PORT_USER, PORT_ENG, 'tzclamp', 'bp')
+        keydb_lib.set_flag(db, PORT_ENG, 'binlog')
+        # Bypass set_timezone's validation to plant a garbage offset with
+        # the use_tz flag on, as a corrupted/hand-edited record would.
+        ke = keydb_lib.KeyEntry(PORT_ENG)
+        ke.fetch(db)
+        ke.tz_offset_hours = 1000.0
+        ke.flags |= keydb_lib.FLAG_USE_TZ
+        ke.store(db)
+        db.transaction_prepare_commit()
+        db.transaction_commit()
+        db.close()
+
+        proc = _start_proxy(proxy_workdir, PORT_ENG)
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.bind(('127.0.0.1', 0))
+            dest = ('127.0.0.1', PORT_USER)
+            utc_before = time.time()
+            for seq in range(3):
+                _send_data_block(sock, dest, seq, b'\x77' * 50)
+                time.sleep(0.05)
+            root = proxy_workdir / 'logs' / str(PORT_ENG)
+            deadline = time.time() + 5
+            found = []
+            while time.time() < deadline and not found:
+                found = list(root.glob('*/*.bin'))
+                time.sleep(0.05)
+            assert proc.poll() is None, 'proxy crashed on absurd offset'
+            assert found, 'no .bin written; proxy log:\n%s' % ''.join(
+                proc._lines[-10:])
+            import calendar
+            m = re.match(
+                r'^(\d{4})_(\d{2})_(\d{2})_(\d{2}):(\d{2}):(\d{2})(-\d+)?$',
+                found[0].name[:-4])
+            assert m, 'bad basename: %r' % found[0].name
+            named = calendar.timegm((int(m[1]), int(m[2]), int(m[3]),
+                                     int(m[4]), int(m[5]), int(m[6]), 0, 0, 0))
+            # clamped to +14h, not +1000h
+            assert abs(named - (utc_before + 14 * 3600)) < 5, \
+                'offset not clamped to +14h: named epoch %d vs utc %d' % (
+                    named, utc_before)
+            sock.close()
+        finally:
+            _terminate(proc)
+
     def test_data_blocks_land_in_bin_file(self, proxy_workdir):
         _setup_db(proxy_workdir, PORT_USER, PORT_ENG, 'bintest', 'bp',
                   'binlog')
