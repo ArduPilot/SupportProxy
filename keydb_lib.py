@@ -24,14 +24,16 @@ KEY_MAGIC = 0x6b73e867a72cdd1f
 # is acceptable (extra trailing bytes belong to a newer schema we ignore).
 #
 # The current C++ struct ends with `uint32_t flags`, `float log_retention_days`,
-# `uint32_t fc_sysid`, and `uint32_t reserved[15]`. All are 4-byte aligned and
-# slot in cleanly after the existing fields, so the struct is 168 bytes with
-# no trailing pad. When a future field is added, claim another `reserved[]`
-# slot (renumber: shrink reserved by 1, add a named field) so the on-disk byte
-# layout stays compatible — the zero-init paths in db_load_key (C++) and
-# unpack() (Python) handle older records transparently.
+# `uint32_t fc_sysid`, `float tz_offset_hours`, and `uint32_t reserved[14]`. All
+# are 4-byte aligned and slot in cleanly after the existing fields, so the
+# struct is 168 bytes with no trailing pad. When a future field is added, claim
+# another `reserved[]` slot (renumber: shrink reserved by 1, add a named field)
+# so the on-disk byte layout stays compatible — the zero-init paths in
+# db_load_key (C++) and unpack() (Python) handle older records transparently.
+# tz_offset_hours took a slot that was previously a zeroed reserved word, so
+# older records read back as 0.0 (GMT) with no conversion.
 KEYENTRY_MIN_SIZE = 96
-PACK_FORMAT = "<QQ32siIII32sIfI15I"
+PACK_FORMAT = "<QQ32siIII32sIfIf14I"
 KEYENTRY_CURRENT_SIZE = struct.calcsize(PACK_FORMAT)  # 168
 
 # Flag bits — keep in sync with KEY_FLAG_* in keydb.h.
@@ -48,7 +50,26 @@ FLAG_NAMES = {
 }
 
 DEFAULT_LOG_RETENTION_DAYS = 7.0
-RESERVED_WORDS = 15
+RESERVED_WORDS = 14
+
+
+# Timezone offset is a plain GMT offset in hours (fractional allowed, e.g.
+# 5.5 for IST, -3.5 for Newfoundland). We deliberately store an offset
+# rather than a named zone: a fixed offset is unambiguous and DST-free,
+# which is what a log-naming convention wants (a name would need the full
+# tz database plus DST handling that shifts mid-session). The offset drives
+# both the YYYY-MM-DD date subdir and the YYYY_MM_DD_HH:MM:SS filename.
+TZ_MIN_OFFSET = -12.0
+TZ_MAX_OFFSET = 14.0
+
+
+def format_tz_offset(hours):
+    """Render a GMT offset as e.g. 'GMT+05:30', 'GMT-03:45', 'GMT'."""
+    if not hours:
+        return 'GMT'
+    sign = '+' if hours >= 0 else '-'
+    total_min = int(round(abs(hours) * 60.0))
+    return 'GMT%s%02d:%02d' % (sign, total_min // 60, total_min % 60)
 
 
 class CLIError(Exception):
@@ -68,6 +89,7 @@ class KeyEntry:
         self.flags = 0
         self.log_retention_days = 0.0
         self.fc_sysid = 0
+        self.tz_offset_hours = 0.0
         self.reserved = [0] * RESERVED_WORDS
         self.port2 = port2
         # opaque trailing bytes from a record written by a future schema
@@ -82,6 +104,7 @@ class KeyEntry:
                            self.count2, name, self.flags,
                            self.log_retention_days,
                            self.fc_sysid,
+                           self.tz_offset_hours,
                            *reserved[:RESERVED_WORDS])
         return body + self._tail
 
@@ -99,8 +122,8 @@ class KeyEntry:
         (self.magic, self.timestamp, secret_key, self.port1,
          self.connections, self.count1, self.count2, name,
          self.flags, self.log_retention_days,
-         self.fc_sysid) = unpacked[:11]
-        self.reserved = list(unpacked[11:11 + RESERVED_WORDS])
+         self.fc_sysid, self.tz_offset_hours) = unpacked[:12]
+        self.reserved = list(unpacked[12:12 + RESERVED_WORDS])
         self.secret_key = bytearray(secret_key)
         self.name = name.decode('utf-8', errors='ignore').rstrip('\0')
 
@@ -156,10 +179,13 @@ class KeyEntry:
         sysstr = ''
         if self.fc_sysid:
             sysstr = ' fc_sysid=%u' % self.fc_sysid
-        return ("%u/%u '%s' counts=%u/%u connections=%u ts=%u%s%s%s"
+        tzstr = ''
+        if self.tz_offset_hours:
+            tzstr = ' tz=%s' % format_tz_offset(self.tz_offset_hours)
+        return ("%u/%u '%s' counts=%u/%u connections=%u ts=%u%s%s%s%s"
                 % (self.port1, self.port2, self.name,
                    self.count1, self.count2, self.connections,
-                   self.timestamp, flagstr, retstr, sysstr))
+                   self.timestamp, flagstr, retstr, sysstr, tzstr))
 
 
 def open_db(path='keys.tdb'):
@@ -345,6 +371,20 @@ def set_log_retention(db, port2, days):
     if days < 0.0:
         raise CLIError("retention days must be >= 0 (got %r)" % days)
     ke.log_retention_days = float(days)
+    ke.store(db)
+    return ke
+
+
+def set_timezone(db, port2, hours):
+    """Set the per-entry log-naming timezone as a GMT offset in hours
+    (fractional allowed). Affects the date subdir and the log filename."""
+    ke = KeyEntry(port2)
+    if not ke.fetch(db):
+        raise CLIError("No entry for port2 %d" % port2)
+    if hours < TZ_MIN_OFFSET or hours > TZ_MAX_OFFSET:
+        raise CLIError("timezone offset must be in %g..%g hours (got %r)"
+                       % (TZ_MIN_OFFSET, TZ_MAX_OFFSET, hours))
+    ke.tz_offset_hours = float(hours)
     ke.store(db)
     return ke
 
