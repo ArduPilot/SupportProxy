@@ -139,7 +139,8 @@ def main():
         elif args.action == "settz":
             _expect(args.args, 2,
                     "keydb.py settz PORT2 HOURS  "
-                    "(GMT offset in hours, fractional ok; 0 = GMT)")
+                    "(GMT offset in hours, fractional ok; enables use_tz. "
+                    "Clear the use_tz flag to revert to server-local naming.)")
             try:
                 hours = float(args.args[1])
             except ValueError:
