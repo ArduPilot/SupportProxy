@@ -2,8 +2,12 @@
 
 Covers both file types written under logs/<port2>/<YYYY-MM-DD>/:
 
-  * sessionN.tlog — raw MAVLink frame captures (KEY_FLAG_TLOG)
-  * sessionN.bin  — ArduPilot dataflash logs over MAVLink (KEY_FLAG_BINLOG)
+  * <ts>.tlog — raw MAVLink frame captures (KEY_FLAG_TLOG)
+  * <ts>.bin  — ArduPilot dataflash logs over MAVLink (KEY_FLAG_BINLOG)
+
+where <ts> is a YYYY_MM_DD_HH:MM:SS session-start timestamp (with an
+optional "-N" collision suffix). Legacy sessionN.* names are still
+accepted so older logs remain browsable.
 
 Two parallel views, sharing the listing/download helpers below:
 
@@ -29,8 +33,10 @@ DATE_RE = re.compile(r'^\d{4}-\d{2}-\d{2}$')
 # Cover both .tlog (raw MAVLink frames) and .bin (ArduPilot dataflash
 # logs over MAVLink). Listing + download flow through this regex, so
 # broadening it surfaces .bin files alongside .tlog without further
-# changes.
-SESSION_RE = re.compile(r'^session\d+\.(tlog|bin)$')
+# changes. Accept the current YYYY_MM_DD_HH:MM:SS[-N] timestamp names
+# and the legacy sessionN names so old logs stay browsable.
+SESSION_RE = re.compile(
+    r'^(session\d+|\d{4}_\d{2}_\d{2}_\d{2}:\d{2}:\d{2}(-\d+)?)\.(tlog|bin)$')
 
 # Natural-sort key: treat embedded digit runs as numbers so that
 # session10.tlog sorts AFTER session2.tlog (not between session1 and

@@ -59,6 +59,10 @@ class OwnerEditForm(FlaskForm):
         'Flight-controller MAVLink sysid (0 = any) — restricts binlog '
         'reboot detection to packets from this sysid',
         validators=[Optional(), NumberRange(min=0, max=255)])
+    tz_offset_hours = FloatField(
+        'Log timezone (GMT offset in hours, fractional ok; 0 = GMT) — '
+        'sets the date folder and filename of .tlog/.bin logs',
+        validators=[Optional(), NumberRange(min=-12.0, max=14.0)])
     reset_timestamp = BooleanField('Reset signing timestamp (recover from clock skew)')
     submit = SubmitField('Save')
 
@@ -94,6 +98,10 @@ class AdminEditForm(FlaskForm):
         'Flight-controller MAVLink sysid (0 = any) — restricts binlog '
         'reboot detection to packets from this sysid',
         validators=[Optional(), NumberRange(min=0, max=255)])
+    tz_offset_hours = FloatField(
+        'Log timezone (GMT offset in hours, fractional ok; 0 = GMT) — '
+        'sets the date folder and filename of .tlog/.bin logs',
+        validators=[Optional(), NumberRange(min=-12.0, max=14.0)])
     reset_timestamp = BooleanField('Reset signing timestamp (recover from clock skew)')
     submit = SubmitField('Save')
 
