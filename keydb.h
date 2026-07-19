@@ -46,7 +46,8 @@ struct KeyEntry {
     uint32_t flags;
     float    log_retention_days;    // tlog + bin; 0.0 = forever; fractional values allowed for tests
     uint32_t fc_sysid;              // 0 = match any; otherwise only monitor packets from this MAVLink sysid (binlog reboot detection)
-    uint32_t reserved[15];
+    float    tz_offset_hours;       // log naming: offset from GMT in hours (fractional allowed); 0 = GMT
+    uint32_t reserved[14];
 };
 
 /*

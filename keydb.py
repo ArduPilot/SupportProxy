@@ -27,6 +27,7 @@ def main():
                                  'setflag', 'clearflag', 'flags',
                                  'setretention',
                                  'setsysid',
+                                 'settz',
                                  'stats'],
                         help="action to perform")
     parser.add_argument("args", default=[], nargs=argparse.REMAINDER)
@@ -134,6 +135,19 @@ def main():
                 print("Cleared fc_sysid (match any) for %s" % ke)
             else:
                 print("Set fc_sysid=%u for %s" % (sysid, ke))
+
+        elif args.action == "settz":
+            _expect(args.args, 2,
+                    "keydb.py settz PORT2 HOURS  "
+                    "(GMT offset in hours, fractional ok; 0 = GMT)")
+            try:
+                hours = float(args.args[1])
+            except ValueError:
+                raise CLIError("HOURS must be a number, got %r"
+                               % args.args[1])
+            ke = keydb_lib.set_timezone(db, int(args.args[0]), hours)
+            print("Set log timezone=%s for %s"
+                  % (keydb_lib.format_tz_offset(hours), ke))
 
         elif args.action == "stats":
             # Live-connection stats from connections.tdb (sibling of
