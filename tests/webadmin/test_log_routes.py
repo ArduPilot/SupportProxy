@@ -192,20 +192,38 @@ class TestAdminTlogForm:
         ke = fetch_entry(keydb_path, ALICE_PORT2)
         assert ke.log_retention_days == 0.5
 
-    def test_owner_can_set_timezone(self, client, keydb_path):
+    def test_owner_can_enable_fixed_timezone(self, client, keydb_path):
+        import keydb_lib
         login_as(client, ALICE_PORT1, ALICE_PASS)
         client.post('/me/', data={
             'name': 'alice',
+            'use_tz': 'y',
             'tz_offset_hours': '5.5',
             'submit': 'Save',
         })
         ke = fetch_entry(keydb_path, ALICE_PORT2)
+        assert abs(ke.tz_offset_hours - 5.5) < 1e-6
+        assert ke.flags & keydb_lib.FLAG_USE_TZ
+
+    def test_owner_unticking_use_tz_reverts_to_local(self, client, keydb_path):
+        import keydb_lib
+        login_as(client, ALICE_PORT1, ALICE_PASS)
+        # enable, then submit again without the box -> flag cleared,
+        # offset retained.
+        client.post('/me/', data={
+            'name': 'alice', 'use_tz': 'y', 'tz_offset_hours': '5.5',
+            'submit': 'Save'})
+        client.post('/me/', data={
+            'name': 'alice', 'tz_offset_hours': '5.5', 'submit': 'Save'})
+        ke = fetch_entry(keydb_path, ALICE_PORT2)
+        assert not (ke.flags & keydb_lib.FLAG_USE_TZ)
         assert abs(ke.tz_offset_hours - 5.5) < 1e-6
 
     def test_owner_timezone_out_of_range_rejected(self, client, keydb_path):
         login_as(client, ALICE_PORT1, ALICE_PASS)
         r = client.post('/me/', data={
             'name': 'alice',
+            'use_tz': 'y',
             'tz_offset_hours': '20',
             'submit': 'Save',
         })
@@ -357,6 +375,23 @@ class TestTimestampNames:
         assert (self.TS + '-2.tlog').encode() in r.data
         r = client.get('/me/logs/2026-07-19/' + self.TS + '-2.tlog')
         assert r.status_code == 200
+
+    def test_collision_suffix_chronological_order(self, client, keydb_path,
+                                                  logs_dir):
+        # The unsuffixed original is the first session that second and
+        # must list BEFORE its -2 / -10 collision siblings, even though
+        # lexically '-' < '.'.
+        for suffix in ('-10', '', '-2'):
+            seed_session(logs_dir, ALICE_PORT2, '2026-07-19',
+                         self.TS + suffix + '.bin', content=b'X')
+        login_as(client, ALICE_PORT1, ALICE_PASS)
+        body = client.get('/me/logs/2026-07-19/').data.decode()
+        i_base = body.index(self.TS + '.bin')
+        i_2 = body.index(self.TS + '-2.bin')
+        i_10 = body.index(self.TS + '-10.bin')
+        assert i_base < i_2 < i_10, \
+            'collision suffixes out of order: base=%d -2=%d -10=%d' % (
+                i_base, i_2, i_10)
 
 
 class TestTlogDownloadCacheHeaders:

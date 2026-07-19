@@ -326,6 +326,7 @@ def test_format_tz_offset():
     assert keydb_lib.format_tz_offset(5.5) == 'GMT+05:30'
     assert keydb_lib.format_tz_offset(-3.75) == 'GMT-03:45'
     assert keydb_lib.format_tz_offset(14) == 'GMT+14:00'
+    assert keydb_lib.format_tz_offset(float('nan')) == 'invalid'
 
 
 def test_cli_settz_and_list(tmp_path):
@@ -336,10 +337,17 @@ def test_cli_settz_and_list(tmp_path):
     assert r.returncode == 0, r.stderr
     assert 'GMT+05:30' in r.stdout
     r = _run_cli(p, 'list')
+    # settz enables the use_tz flag and the fixed offset shows
     assert 'tz=GMT+05:30' in r.stdout
-    # back to GMT (0) drops the display
-    assert _run_cli(p, 'settz', '22002', '0').returncode == 0
-    assert 'tz=' not in _run_cli(p, 'list').stdout
+    assert 'use_tz' in r.stdout
+    # settz 0 with the flag on is a genuine GMT offset
+    r = _run_cli(p, 'settz', '22002', '0')
+    assert r.returncode == 0
+    assert 'tz=GMT' in _run_cli(p, 'list').stdout
+    # clearing the flag reverts to server-local naming (no fixed tz shown)
+    assert _run_cli(p, 'clearflag', '22002', 'use_tz').returncode == 0
+    out = _run_cli(p, 'list').stdout
+    assert 'tz=GMT' not in out and 'use_tz' not in out
 
 
 def test_cli_settz_rejects_out_of_range(tmp_path):
@@ -349,3 +357,22 @@ def test_cli_settz_rejects_out_of_range(tmp_path):
     r = _run_cli(p, 'settz', '23002', '20')
     assert r.returncode == 1
     assert 'must be in' in r.stdout
+
+
+def test_set_timezone_rejects_nan(tmp_path):
+    import math
+    p = str(tmp_path / 'keys.tdb')
+    db = keydb_lib.init_db(p)
+    db.transaction_start()
+    keydb_lib.add_entry(db, 24001, 24002, 'nan', 'pw')
+    try:
+        keydb_lib.set_timezone(db, 24002, float('nan'))
+        assert False, 'NaN offset should be rejected'
+    except keydb_lib.CLIError:
+        pass
+    # stored value stays finite (unchanged default 0.0)
+    ke = keydb_lib.KeyEntry(24002)
+    ke.fetch(db)
+    assert math.isfinite(ke.tz_offset_hours) and ke.tz_offset_hours == 0.0
+    db.transaction_cancel()
+    db.close()
