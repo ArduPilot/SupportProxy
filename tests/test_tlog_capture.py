@@ -44,9 +44,9 @@ os.environ.setdefault('MAVLINK20', '1')
 
 def _today_str():
     """Match the proxy's date-dir naming. With no per-entry timezone set
-    the proxy names in GMT, so use UTC here (a local date would land in
-    the wrong dir near midnight on a non-UTC host)."""
-    return time.strftime('%Y-%m-%d', time.gmtime())
+    the proxy names in the server's local timezone (the default), so use
+    localtime here."""
+    return time.strftime('%Y-%m-%d', time.localtime())
 
 
 def _tlogs(workdir, port_eng):

@@ -54,9 +54,9 @@ os.environ.setdefault('MAVLINK20', '1')
 
 def _today_str():
     # The proxy names date dirs in the entry's log timezone; with none
-    # set that's GMT, so use UTC here (a local date could land in the
-    # wrong dir near midnight on a non-UTC host).
-    return time.strftime('%Y-%m-%d', time.gmtime())
+    # set that's the server's local timezone (the default), so use
+    # localtime here.
+    return time.strftime('%Y-%m-%d', time.localtime())
 
 
 @pytest.fixture
