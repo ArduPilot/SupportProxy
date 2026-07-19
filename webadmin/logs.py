@@ -45,8 +45,19 @@ SESSION_RE = re.compile(
 # digit chunks.
 _NATKEY_RE = re.compile(r'(\d+)')
 
+# A timestamp session name, with an optional "-N" collision suffix. An
+# unsuffixed file is the original for that second and must sort BEFORE
+# its "-N" siblings — but lexically "-" < ".", so "<ts>-2.bin" would
+# otherwise beat "<ts>.bin". Normalise the unsuffixed name to "-1" for
+# the sort key so the numeric suffix orders it correctly.
+_TS_NAME_RE = re.compile(
+    r'^(\d{4}_\d{2}_\d{2}_\d{2}:\d{2}:\d{2})(-\d+)?(\.\w+)$')
+
 
 def _natural_key(name):
+    m = _TS_NAME_RE.match(name)
+    if m and not m.group(2):
+        name = m.group(1) + '-1' + m.group(3)
     return [int(tok) if tok.isdigit() else tok.lower()
             for tok in _NATKEY_RE.split(name)]
 
