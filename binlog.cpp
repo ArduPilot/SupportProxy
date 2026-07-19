@@ -37,22 +37,14 @@ BinlogWriter::~BinlogWriter()
     close();
 }
 
-bool BinlogWriter::open(uint32_t port2, unsigned session_n, const char *base_dir)
+bool BinlogWriter::open(uint32_t port2, const char *base_dir)
 {
     if (fp != nullptr) {
         return true;
     }
 
-    time_t now = time(nullptr);
-    struct tm tm_now;
-    localtime_r(&now, &tm_now);
-
     char dir[768];
-    snprintf(dir, sizeof(dir), "%s/%u/%04d-%02d-%02d",
-             base_dir, port2,
-             tm_now.tm_year + 1900,
-             tm_now.tm_mon + 1,
-             tm_now.tm_mday);
+    snprintf(dir, sizeof(dir), "%s/%u/%s", base_dir, port2, datedir_.c_str());
 
     if (mkpath_0700(dir) < 0) {
         ::printf("binlog: mkdir %s failed: %s\n", dir, strerror(errno));
@@ -60,14 +52,12 @@ bool BinlogWriter::open(uint32_t port2, unsigned session_n, const char *base_dir
     }
 
     char path[1024];
-    snprintf(path, sizeof(path), "%s/session%u.bin", dir, session_n);
+    snprintf(path, sizeof(path), "%s/%s.bin", dir, name_.c_str());
 
-    // O_RDWR via "rb+"-then-"wb+" dance: blocks arrive out of order so
-    // we need to seek + write to arbitrary offsets. fopen "ab" forces
-    // every write to the end. Use "wb+" to truncate and create, or
-    // "rb+" to keep an existing file (rare — child crashed mid-session
-    // and a new fork is reusing the same N? next_session_n() rules
-    // that out, but defensively allow it).
+    // O_RDWR via "wb+": blocks arrive out of order so we seek + write to
+    // arbitrary offsets ("ab" would force every write to the end). The
+    // basename is made unique before the session starts, so this creates
+    // a fresh file rather than truncating a live one.
     fp = fopen(path, "wb+");
     if (fp == nullptr) {
         ::printf("binlog: fopen %s failed: %s\n", path, strerror(errno));
@@ -181,7 +171,7 @@ void BinlogWriter::mark_seqno_seen(uint32_t seqno)
     seen_bitmap[byte] |= uint8_t(1u << (seqno & 7));
 }
 
-void BinlogWriter::handle_block(uint32_t port2, unsigned session_n,
+void BinlogWriter::handle_block(uint32_t port2,
                                  const mavlink_message_t &msg)
 {
     mavlink_remote_log_data_block_t blk {};
@@ -225,11 +215,9 @@ void BinlogWriter::handle_block(uint32_t port2, unsigned session_n,
             }
             return;
         }
-        unsigned n = (pending_session_n_ != 0) ? pending_session_n_ : session_n;
-        if (!open(port2, n)) {
+        if (!open(port2)) {
             return;
         }
-        pending_session_n_ = 0;
         gated_block_count_ = 0;
     }
 
@@ -606,14 +594,20 @@ bool BinlogWriter::rotate_for_reboot()
     //   pre-stream loop; the 5 s keep-alive (re-armed above) covers
     //   reboot recovery.
 
-    // Pre-compute the next session N but do NOT open the file yet.
-    // The handle_block() strict-start gate (fp == nullptr + seqno!=0
-    // is dropped) keeps the file unopened until a fresh seqno=0 from
-    // the rebooted vehicle, so any delayed pre-reboot blocks still
-    // in flight can't sparse-write into sessionN+1.bin. The open()
-    // happens lazily in handle_block using pending_session_n_.
-    pending_session_n_ = next_session_n(port2_, base_dir_.c_str());
-    ::printf("binlog: rotation armed; next open will be session%u.bin "
-             "(awaiting fresh seqno=0)\n", pending_session_n_);
+    // Rebuild datedir_/name_ with a fresh reboot-time timestamp but do
+    // NOT open the file yet. The handle_block() strict-start gate
+    // (fp == nullptr + seqno!=0 dropped) keeps the file unopened until a
+    // fresh seqno=0 from the rebooted vehicle, so delayed pre-reboot
+    // blocks can't sparse-write into the new file. The open() happens
+    // lazily in handle_block using the new datedir_/name_.
+    char datedir[16], name[64];
+    session_time_strings(time(nullptr), tz_offset_hours_,
+                         datedir, sizeof(datedir), name, sizeof(name));
+    session_unique_basename(base_dir_.c_str(), port2_, datedir,
+                            name, sizeof(name));
+    datedir_ = datedir;
+    name_ = name;
+    ::printf("binlog: rotation armed; next open will be %s/%s.bin "
+             "(awaiting fresh seqno=0)\n", datedir_.c_str(), name_.c_str());
     return true;
 }

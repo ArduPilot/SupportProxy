@@ -19,22 +19,15 @@ TlogWriter::~TlogWriter()
     close();
 }
 
-bool TlogWriter::open(uint32_t port2, unsigned session_n, const char *base_dir)
+bool TlogWriter::open(uint32_t port2, const char *datedir, const char *name,
+                      const char *base_dir)
 {
     if (fp != nullptr) {
         return true;
     }
 
-    time_t now = time(nullptr);
-    struct tm tm_now;
-    localtime_r(&now, &tm_now);
-
     char dir[768];
-    snprintf(dir, sizeof(dir), "%s/%u/%04d-%02d-%02d",
-             base_dir, port2,
-             tm_now.tm_year + 1900,
-             tm_now.tm_mon + 1,
-             tm_now.tm_mday);
+    snprintf(dir, sizeof(dir), "%s/%u/%s", base_dir, port2, datedir);
 
     if (mkpath_0700(dir) < 0) {
         ::printf("tlog: mkdir %s failed: %s\n", dir, strerror(errno));
@@ -42,7 +35,7 @@ bool TlogWriter::open(uint32_t port2, unsigned session_n, const char *base_dir)
     }
 
     char path[1024];
-    snprintf(path, sizeof(path), "%s/session%u.tlog", dir, session_n);
+    snprintf(path, sizeof(path), "%s/%s.tlog", dir, name);
 
     fp = fopen(path, "ab");
     if (fp == nullptr) {
