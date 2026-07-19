@@ -192,6 +192,27 @@ class TestAdminTlogForm:
         ke = fetch_entry(keydb_path, ALICE_PORT2)
         assert ke.log_retention_days == 0.5
 
+    def test_owner_can_set_timezone(self, client, keydb_path):
+        login_as(client, ALICE_PORT1, ALICE_PASS)
+        client.post('/me/', data={
+            'name': 'alice',
+            'tz_offset_hours': '5.5',
+            'submit': 'Save',
+        })
+        ke = fetch_entry(keydb_path, ALICE_PORT2)
+        assert abs(ke.tz_offset_hours - 5.5) < 1e-6
+
+    def test_owner_timezone_out_of_range_rejected(self, client, keydb_path):
+        login_as(client, ALICE_PORT1, ALICE_PASS)
+        r = client.post('/me/', data={
+            'name': 'alice',
+            'tz_offset_hours': '20',
+            'submit': 'Save',
+        })
+        # form validation fails -> re-render, value not stored
+        ke = fetch_entry(keydb_path, ALICE_PORT2)
+        assert ke.tz_offset_hours == 0.0
+
 
 # ---------------------------------------------------------------------------
 # listing & download
@@ -300,6 +321,42 @@ class TestBinFileListing:
         r = client.get('/admin/logs/' + str(ALICE_PORT2)
                        + '/2026-05-10/session1.pem')
         assert r.status_code == 404
+
+
+class TestTimestampNames:
+    """Session files are named by YYYY_MM_DD_HH:MM:SS timestamp now.
+    The listing regex must accept them (with the ':' in the name) and
+    downloads must work despite the colons in the URL path."""
+
+    TS = '2026_07_19_09:37:10'
+
+    def test_timestamp_names_listed(self, client, keydb_path, logs_dir):
+        seed_session(logs_dir, ALICE_PORT2, '2026-07-19',
+                     self.TS + '.tlog', content=b'TLOG')
+        seed_session(logs_dir, ALICE_PORT2, '2026-07-19',
+                     self.TS + '.bin', content=b'BIN')
+        login_as(client, ALICE_PORT1, ALICE_PASS)
+        r = client.get('/me/logs/2026-07-19/')
+        assert r.status_code == 200
+        assert (self.TS + '.tlog').encode() in r.data
+        assert (self.TS + '.bin').encode() in r.data
+
+    def test_timestamp_name_downloads(self, client, keydb_path, logs_dir):
+        seed_session(logs_dir, ALICE_PORT2, '2026-07-19',
+                     self.TS + '.bin', content=b'\x00ARDUPILOT')
+        login_as(client, ALICE_PORT1, ALICE_PASS)
+        r = client.get('/me/logs/2026-07-19/' + self.TS + '.bin')
+        assert r.status_code == 200
+        assert r.data.endswith(b'ARDUPILOT')
+
+    def test_collision_suffix_name_ok(self, client, keydb_path, logs_dir):
+        seed_session(logs_dir, ALICE_PORT2, '2026-07-19',
+                     self.TS + '-2.tlog', content=b'X')
+        login_as(client, ALICE_PORT1, ALICE_PASS)
+        r = client.get('/me/logs/2026-07-19/')
+        assert (self.TS + '-2.tlog').encode() in r.data
+        r = client.get('/me/logs/2026-07-19/' + self.TS + '-2.tlog')
+        assert r.status_code == 200
 
 
 class TestTlogDownloadCacheHeaders:

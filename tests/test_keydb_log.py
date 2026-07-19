@@ -44,7 +44,8 @@ def test_pack_unpack_roundtrip():
     assert e2.flags == keydb_lib.FLAG_TLOG | keydb_lib.FLAG_ADMIN
     # float32 quantisation: tolerate ~1e-7 relative error
     assert abs(e2.log_retention_days - 0.0001) < 1e-7
-    assert e2.reserved == [0] * 15
+    assert e2.tz_offset_hours == 0.0
+    assert e2.reserved == [0] * 14
 
 
 def test_legacy_104byte_record_zero_extends():
@@ -69,7 +70,8 @@ def test_legacy_104byte_record_zero_extends():
     assert decoded.flags == keydb_lib.FLAG_ADMIN
     assert decoded.log_retention_days == 0.0
     assert decoded.fc_sysid == 0
-    assert decoded.reserved == [0] * 15
+    assert decoded.tz_offset_hours == 0.0
+    assert decoded.reserved == [0] * 14
 
     # Re-pack: should emit the full 168-byte modern layout.
     re = decoded.pack()
@@ -307,3 +309,43 @@ def test_legacy_104byte_record_decodes_fc_sysid_zero(tmp_path):
     decoded = keydb_lib.KeyEntry(0)
     decoded.unpack(legacy)
     assert decoded.fc_sysid == 0
+
+
+def test_tz_offset_round_trip():
+    e = keydb_lib.KeyEntry(21002)
+    e.port1 = 21001
+    e.tz_offset_hours = 5.5
+    e2 = keydb_lib.KeyEntry(0)
+    e2.unpack(e.pack())
+    assert abs(e2.tz_offset_hours - 5.5) < 1e-6
+    assert e2.reserved == [0] * 14
+
+
+def test_format_tz_offset():
+    assert keydb_lib.format_tz_offset(0) == 'GMT'
+    assert keydb_lib.format_tz_offset(5.5) == 'GMT+05:30'
+    assert keydb_lib.format_tz_offset(-3.75) == 'GMT-03:45'
+    assert keydb_lib.format_tz_offset(14) == 'GMT+14:00'
+
+
+def test_cli_settz_and_list(tmp_path):
+    p = str(tmp_path / 'keys.tdb')
+    assert _run_cli(p, 'initialise').returncode == 0
+    assert _run_cli(p, 'add', '22001', '22002', 'CliTz', 'pw').returncode == 0
+    r = _run_cli(p, 'settz', '22002', '5.5')
+    assert r.returncode == 0, r.stderr
+    assert 'GMT+05:30' in r.stdout
+    r = _run_cli(p, 'list')
+    assert 'tz=GMT+05:30' in r.stdout
+    # back to GMT (0) drops the display
+    assert _run_cli(p, 'settz', '22002', '0').returncode == 0
+    assert 'tz=' not in _run_cli(p, 'list').stdout
+
+
+def test_cli_settz_rejects_out_of_range(tmp_path):
+    p = str(tmp_path / 'keys.tdb')
+    _run_cli(p, 'initialise')
+    _run_cli(p, 'add', '23001', '23002', 'CliTzBad', 'pw')
+    r = _run_cli(p, 'settz', '23002', '20')
+    assert r.returncode == 1
+    assert 'must be in' in r.stdout
