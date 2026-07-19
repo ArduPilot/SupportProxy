@@ -4,10 +4,10 @@ Sets up an isolated workdir with keys.tdb (KEY_FLAG_TLOG enabled),
 starts supportproxy there, drives a few HEARTBEATs in each direction,
 kills the proxy, and asserts:
 
-  * logs/<port2>/<today>/session1.tlog exists, is non-empty, and parses
+  * logs/<port2>/<today>/<ts>.tlog exists, is non-empty, and parses
     with pymavlink.mavutil.mavlink_connection
-  * a second connection (after the first child idles out) produces
-    session2.tlog
+  * a second connection (after the first child idles out) produces a
+    second .tlog
   * timestamps in the tlog are monotonic
   * messages from BOTH directions appear (at minimum, both sides'
     HEARTBEATs are seen)
@@ -43,8 +43,29 @@ os.environ.setdefault('MAVLINK20', '1')
 
 
 def _today_str():
-    """Match the proxy's localtime-based directory naming."""
-    return datetime.datetime.now().strftime('%Y-%m-%d')
+    """Match the proxy's date-dir naming. With no per-entry timezone set
+    the proxy names in GMT, so use UTC here (a local date would land in
+    the wrong dir near midnight on a non-UTC host)."""
+    return time.strftime('%Y-%m-%d', time.gmtime())
+
+
+def _tlogs(workdir, port_eng):
+    """All .tlog files under today's dir for port_eng, oldest-first."""
+    d = workdir / 'logs' / str(port_eng) / _today_str()
+    if not d.is_dir():
+        return []
+    fs = [p for p in d.iterdir() if p.suffix == '.tlog']
+    fs.sort(key=lambda p: (p.stat().st_mtime, p.name))
+    return fs
+
+
+def _only_tlog(workdir, port_eng):
+    """The single .tlog for this session, or a placeholder path that
+    doesn't exist yet."""
+    fs = _tlogs(workdir, port_eng)
+    if fs:
+        return fs[0]
+    return workdir / 'logs' / str(port_eng) / _today_str() / '__pending.tlog'
 
 
 @pytest.fixture
@@ -224,10 +245,9 @@ class TestTlogCapture:
         finally:
             _terminate(proc)
 
-        tlog = (proxy_workdir / 'logs' / str(PORT_ENG)
-                / _today_str() / 'session1.tlog')
-        assert tlog.exists(), 'expected %s to exist; proxy stdout: %s' % (
-            tlog, ''.join(getattr(proc, '_lines', [])))
+        tlog = _only_tlog(proxy_workdir, PORT_ENG)
+        assert tlog.exists(), 'expected a .tlog to exist; proxy stdout: %s' % (
+            ''.join(getattr(proc, '_lines', [])))
         assert tlog.stat().st_size > 0
 
         # Validate every record has a sane framed packet behind its 8-byte ts.
@@ -263,8 +283,7 @@ class TestTlogCapture:
         finally:
             _terminate(proc)
 
-        tlog = (proxy_workdir / 'logs' / str(PORT_ENG)
-                / _today_str() / 'session1.tlog')
+        tlog = _only_tlog(proxy_workdir, PORT_ENG)
         assert tlog.exists()
         msgs = _parse_tlog_with_pymavlink(str(tlog))
         # We sent at minimum a few HEARTBEATs each way; pymavlink should
@@ -302,11 +321,10 @@ class TestTlogCapture:
         finally:
             _terminate(proc)
 
-        tlog = (proxy_workdir / 'logs' / str(PORT_ENG)
-                / _today_str() / 'session1.tlog')
+        tlog = _only_tlog(proxy_workdir, PORT_ENG)
         proxy_log = ''.join(getattr(proc, '_lines', []))
         assert tlog.exists(), \
-            ('session1.tlog missing — user-only traffic was discarded.\n'
+            ('.tlog missing — user-only traffic was discarded.\n'
              'sent %d heartbeats. proxy log:\n%s' % (n_sent, proxy_log))
         assert tlog.stat().st_size > 0, \
             'tlog is empty; parse loop did not write the user frames'
@@ -342,8 +360,8 @@ class TestTlogCapture:
 
         date_dir = proxy_workdir / 'logs' / str(PORT_ENG) / _today_str()
         proxy_log = ''.join(getattr(proc, '_lines', []))
-        assert (date_dir / 'session1.tlog').exists(), proxy_log
-        assert (date_dir / 'session2.tlog').exists(), (
-            'expected session2.tlog after second connection; have %r\n'
+        tlogs = _tlogs(proxy_workdir, PORT_ENG)
+        assert len(tlogs) == 2, (
+            'expected two .tlog files after a second connection; have %r\n'
             'proxy log:\n%s' % (
                 sorted(p.name for p in date_dir.iterdir()), proxy_log))

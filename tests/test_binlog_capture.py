@@ -21,6 +21,7 @@ and assert:
 import datetime
 import hashlib
 import os
+import re
 import signal
 import socket
 import struct
@@ -52,7 +53,10 @@ os.environ.setdefault('MAVLINK20', '1')
 
 
 def _today_str():
-    return datetime.datetime.now().strftime('%Y-%m-%d')
+    # The proxy names date dirs in the entry's log timezone; with none
+    # set that's GMT, so use UTC here (a local date could land in the
+    # wrong dir near midnight on a non-UTC host).
+    return time.strftime('%Y-%m-%d', time.gmtime())
 
 
 @pytest.fixture
@@ -134,9 +138,49 @@ def _terminate(proc):
             time.sleep(0.3)
 
 
+# Proxy-written session .bin names: YYYY_MM_DD_HH:MM:SS[-N].bin. Used to
+# distinguish real session files from test-seeded fixtures like
+# prefill.bin that share the .bin suffix.
+_SESSION_BIN_RE = re.compile(
+    r'^\d{4}_\d{2}_\d{2}_\d{2}:\d{2}:\d{2}(-\d+)?\.bin$')
+
+
+def _bins(workdir, port_eng):
+    """Proxy-written session .bin files under today's dir, oldest-first.
+
+    Filters to the timestamp naming so test-seeded fixtures (prefill.bin)
+    are excluded, and sorts by mtime — the '-N' collision suffix makes
+    lexical order unreliable ('-' < '.')."""
+    d = workdir / 'logs' / str(port_eng) / _today_str()
+    if not d.is_dir():
+        return []
+    fs = [p for p in d.iterdir() if _SESSION_BIN_RE.match(p.name)]
+    fs.sort(key=lambda p: (p.stat().st_mtime, p.name))
+    return fs
+
+
 def _bin_path(workdir, port_eng, n=1):
+    """The n-th (1-indexed, oldest-first) .bin file, or a placeholder
+    path that does not exist when fewer than n files are present (so
+    callers' .exists() polling works unchanged)."""
+    fs = _bins(workdir, port_eng)
+    if len(fs) >= n:
+        return fs[n - 1]
     return (workdir / 'logs' / str(port_eng) / _today_str()
-            / ('session%d.bin' % n))
+            / ('__pending_%d.bin' % n))
+
+
+def _wait_bin(workdir, port_eng, n=1, min_size=1, timeout=5.0):
+    """Poll until the n-th session .bin exists with at least min_size
+    bytes; return its Path, or None on timeout. Re-resolves the glob each
+    poll because the timestamp name isn't known ahead of time."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        p = _bin_path(workdir, port_eng, n)
+        if p.exists() and p.stat().st_size >= min_size:
+            return p
+        time.sleep(0.05)
+    return None
 
 
 def _wait_for(predicate, timeout=5.0):
@@ -225,6 +269,59 @@ def _recv_block_statuses(sock, timeout=2.0):
 @pytest.mark.skipif(not os.path.exists(SUPPORTPROXY_BIN),
                     reason='supportproxy binary not built')
 class TestBinlogCapture:
+
+    def test_bin_named_by_timestamp_in_entry_timezone(self, proxy_workdir):
+        """The .bin file (and its date subdir) are named by the session
+        timestamp formed in the entry's log timezone. With a +10h offset
+        the name must be ~10h ahead of the UTC wall clock."""
+        db_path = str(proxy_workdir / 'keys.tdb')
+        db = keydb_lib.init_db(db_path)
+        db.transaction_start()
+        keydb_lib.add_entry(db, PORT_USER, PORT_ENG, 'tzbin', 'bp')
+        keydb_lib.set_flag(db, PORT_ENG, 'binlog')
+        keydb_lib.set_timezone(db, PORT_ENG, 10.0)  # GMT+10
+        db.transaction_prepare_commit()
+        db.transaction_commit()
+        db.close()
+
+        proc = _start_proxy(proxy_workdir, PORT_ENG)
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.bind(('127.0.0.1', 0))
+            dest = ('127.0.0.1', PORT_USER)
+            utc_before = time.time()
+            for seq in range(3):
+                _send_data_block(sock, dest, seq, b'\x77' * 50)
+                time.sleep(0.05)
+
+            # The date dir + file are in GMT+10, so glob the whole tree.
+            root = proxy_workdir / 'logs' / str(PORT_ENG)
+            deadline = time.time() + 5
+            found = []
+            while time.time() < deadline and not found:
+                found = list(root.glob('*/*.bin'))
+                time.sleep(0.05)
+            assert found, 'no .bin written; proxy log:\n%s' % ''.join(
+                proc._lines[-10:])
+            base = found[0].name[:-4]  # strip .bin
+            m = re.match(
+                r'^(\d{4})_(\d{2})_(\d{2})_(\d{2}):(\d{2}):(\d{2})(-\d+)?$',
+                base)
+            assert m, 'bad timestamp basename: %r' % base
+            # Reconstruct the named epoch (interpreted as GMT+10) and check
+            # it matches now+10h within a small window.
+            import calendar
+            named = calendar.timegm((int(m[1]), int(m[2]), int(m[3]),
+                                     int(m[4]), int(m[5]), int(m[6]), 0, 0, 0))
+            expected = utc_before + 10 * 3600
+            assert abs(named - expected) < 5, \
+                'named %s (%d) not ~10h ahead of UTC %d' % (
+                    base, named, utc_before)
+            # date subdir agrees with the filename's date
+            assert found[0].parent.name == '%s-%s-%s' % (m[1], m[2], m[3])
+            sock.close()
+        finally:
+            _terminate(proc)
 
     def test_data_blocks_land_in_bin_file(self, proxy_workdir):
         _setup_db(proxy_workdir, PORT_USER, PORT_ENG, 'bintest', 'bp',
@@ -550,10 +647,10 @@ class TestBinlogCapture:
             _terminate(proc)
 
     def test_paired_session_n_with_tlog(self, proxy_workdir):
-        """tlog + binlog flags both set on one entry should produce
-        sessionN.tlog and sessionN.bin sharing the same N. We drive
-        traffic from a single raw socket (sending DATA_BLOCKs) so the
-        proxy's connect() on first peer doesn't lock us out of
+        """tlog + binlog flags both set on one entry should produce a
+        <ts>.tlog and a <ts>.bin sharing the same timestamp basename. We
+        drive traffic from a single raw socket (sending DATA_BLOCKs) so
+        the proxy's connect() on first peer doesn't lock us out of
         subsequent sends.
 
         DATA_BLOCK frames are valid MAVLink, so they trip the tlog tap
@@ -590,11 +687,14 @@ class TestBinlogCapture:
             date_dir = (proxy_workdir / 'logs' / str(PORT_ENG_PAIR)
                         / _today_str())
             files = sorted(p.name for p in date_dir.iterdir())
-            assert (date_dir / 'session1.tlog').exists(), \
-                'no session1.tlog; have %r' % files
-            assert (date_dir / 'session1.bin').exists(), \
-                'no session1.bin; have %r\nproxy log:\n%s' % (
+            tlogs = [p.name[:-5] for p in date_dir.glob('*.tlog')]
+            bins = [p.name[:-4] for p in date_dir.glob('*.bin')]
+            assert len(tlogs) == 1 and len(bins) == 1, \
+                'expected one .tlog and one .bin; have %r\nproxy log:\n%s' % (
                     files, ''.join(getattr(proc, '_lines', [])))
+            # paired: the .tlog and .bin share the timestamp basename
+            assert tlogs[0] == bins[0], \
+                'paired basenames differ: %r vs %r' % (tlogs[0], bins[0])
         finally:
             _terminate(proc)
 
@@ -902,10 +1002,8 @@ class TestBinlogCapture:
             # the write lands.
             _send_data_block(sock, dest, 0, b'\xaa' * 50)
 
-            bin_path = _bin_path(proxy_workdir, PORT_ENG)
-            assert _wait_for(
-                lambda: bin_path.exists() and bin_path.stat().st_size >= 200,
-                timeout=5.0), \
+            assert _wait_bin(proxy_workdir, PORT_ENG, min_size=200) \
+                is not None, \
                 'write did not proceed after quota breach; proxy log:\n%s' \
                 % ''.join(proc._lines[-10:])
             assert not prefilled.exists(), \
@@ -936,10 +1034,8 @@ class TestBinlogCapture:
             dest = ('127.0.0.1', PORT_USER)
             _send_data_block(sock, dest, 0, b'\xaa' * 50)
 
-            bin_path = _bin_path(proxy_workdir, PORT_ENG)
-            assert _wait_for(
-                lambda: bin_path.exists() and bin_path.stat().st_size >= 200,
-                timeout=5.0), \
+            assert _wait_bin(proxy_workdir, PORT_ENG, min_size=200) \
+                is not None, \
                 'boundary breach never freed; proxy log:\n%s' \
                 % ''.join(proc._lines[-10:])
             assert not prefilled.exists(), \
@@ -972,11 +1068,8 @@ class TestBinlogCapture:
             _send_data_block(sock, dest, 0, b'\xaa' * 50)
             _send_data_block(sock, dest, 1600, b'\xbb' * 50)
 
-            bin_path = _bin_path(proxy_workdir, PORT_ENG)
-            assert _wait_for(
-                lambda: bin_path.exists()
-                        and bin_path.stat().st_size == 1600 * 200 + 200,
-                timeout=5.0), \
+            assert _wait_bin(proxy_workdir, PORT_ENG,
+                             min_size=1600 * 200 + 200) is not None, \
                 'sparse jump falsely tripped the quota; proxy log:\n%s' \
                 % ''.join(proc._lines[-10:])
 
@@ -1101,10 +1194,8 @@ class TestBinlogCapture:
             _send_data_block(sock, dest, 0, b'\x33' * 50)
             _send_data_block(sock, dest, 1, b'\x33' * 50)
 
-            session2 = _bin_path(proxy_workdir, PORT_ENG, n=2)
-            assert _wait_for(
-                lambda: session2.exists() and session2.stat().st_size >= 400,
-                timeout=5.0), \
+            assert _wait_bin(proxy_workdir, PORT_ENG, n=2, min_size=400) \
+                is not None, \
                 'no rotation on in-stream seqno=0; proxy log:\n%s' \
                 % ''.join(proc._lines[-10:])
 
@@ -1161,10 +1252,8 @@ class TestBinlogCapture:
             # START restarts it from seqno 0 — data must now land.
             _send_data_block(sock, dest, 0, b'\x55' * 50)
             _send_data_block(sock, dest, 1, b'\x55' * 50)
-            bin_path = _bin_path(proxy_workdir, PORT_ENG)
-            assert _wait_for(
-                lambda: bin_path.exists() and bin_path.stat().st_size >= 400,
-                timeout=5.0), 'restart from seqno 0 did not open the file'
+            assert _wait_bin(proxy_workdir, PORT_ENG, min_size=400) \
+                is not None, 'restart from seqno 0 did not open the file'
 
             sock.close()
         finally:
@@ -1183,10 +1272,8 @@ class TestBinlogCapture:
             dest = ('127.0.0.1', PORT_USER)
             _send_data_block(sock, dest, 0, b'\xaa' * 50)
 
-            bin_path = _bin_path(proxy_workdir, PORT_ENG)
-            assert _wait_for(
-                lambda: bin_path.exists() and bin_path.stat().st_size >= 200,
-                timeout=5.0), \
+            assert _wait_bin(proxy_workdir, PORT_ENG, min_size=200) \
+                is not None, \
                 "writes blocked - '1GB' was prefix-parsed; proxy log:\n%s" \
                 % ''.join(proc._lines[-10:])
             sock.close()
