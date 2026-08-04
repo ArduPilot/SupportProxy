@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_macros.html" import row, check, tip %}
 {% block title %}Log in — {{ config.WEBUI_TITLE }}{% endblock %}
 {% block content %}
 <h2>Log in</h2>
@@ -6,8 +7,8 @@
    for your entry, plus the passphrase you set with <code>keydb.py</code>.</p>
 <form method="post" action="{{ url_for('auth.login') }}">
   {{ form.csrf_token }}
-  <div class="field">{{ form.port.label }}: {{ form.port(autofocus=True) }}</div>
-  <div class="field">{{ form.passphrase.label }}: {{ form.passphrase() }}</div>
+  {{ row(form.port, autofocus=True) }}
+  {{ row(form.passphrase) }}
   <div>{{ form.submit() }}</div>
   {% for field, errors in form.errors.items() %}
     {% for e in errors %}<div class="flash flash-error">{{ field }}: {{ e }}</div>{% endfor %}

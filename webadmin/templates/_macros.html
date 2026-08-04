@@ -1,0 +1,61 @@
+{#
+  Field-rendering helpers.
+
+  Every option's explanation lives in its WTForms `description`, and
+  these macros turn it into a tooltip on the field row. Keeping the
+  rendering here rather than in each template means a field picks up its
+  tooltip from having a description, with nothing to remember at the
+  call site.
+
+  The whole row is the hover target, not a small "?" marker: aiming at a
+  one-em circle to read a sentence is more work than the sentence is
+  worth. The row also covers the keyboard case for free -- focusing the
+  input is :focus-within on the row.
+#}
+
+{# The tooltip body. Must be a DIRECT child of .field: the CSS shows
+   `.field:hover > .tip`, so that a row containing several individually
+   documented controls (the per-slot video options) does not throw all
+   of their tooltips up at once. #}
+{% macro tip(field) -%}
+  {%- if field.description -%}
+    <span class="tip" id="{{ field.id }}-tip" role="note">{{ field.description }}</span>
+  {%- endif -%}
+{%- endmacro %}
+
+{# Label-then-input, for text/number/password/select fields. #}
+{% macro row(field) -%}
+  <div class="field{{ ' has-tip' if field.description }}">
+    {{ field.label }}: {{ field(aria_describedby=field.id ~ '-tip', **kwargs) }}{{ tip(field) }}
+  </div>
+{%- endmacro %}
+
+{# Checkbox-then-label, for BooleanFields. #}
+{% macro check(field) -%}
+  <div class="field{{ ' has-tip' if field.description }}">
+    {{ field(aria_describedby=field.id ~ '-tip', **kwargs) }} {{ field.label }}{{ tip(field) }}
+  </div>
+{%- endmacro %}
+
+{#
+  Action icons for the log listings.
+
+  Inline SVG rather than an icon font or emoji: it needs no external
+  request (the pages are served under a strict policy and must be
+  self-contained), it inherits colour from the surrounding text via
+  currentColor, and it renders identically everywhere -- emoji glyphs
+  for these do not, and a bin in particular is missing on plenty of
+  systems.
+
+  Every call site pairs one with a title and aria-label. An icon alone
+  is a guess for a sighted user and nothing at all for a screen reader.
+#}
+{% macro icon(name) -%}
+{%- if name == 'play' -%}
+<svg class="icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M4.5 2.6v10.8L13 8z"/></svg>
+{%- elif name == 'download' -%}
+<svg class="icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M8 1.8v7.6"/><path d="M4.8 6.4 8 9.6l3.2-3.2"/><path d="M2.6 11.4v2.2h10.8v-2.2"/></svg>
+{%- elif name == 'trash' -%}
+<svg class="icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M2.6 4.1h10.8"/><path d="M6.4 2.5h3.2"/><path d="M4.6 4.1l.6 9.4h5.6l.6-9.4"/><path d="M6.8 6.4v4.9M9.2 6.4v4.9"/></svg>
+{%- endif -%}
+{%- endmacro %}

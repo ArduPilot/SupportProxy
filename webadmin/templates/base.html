@@ -20,8 +20,10 @@
       {% if session.get('is_admin') %}
         <a href="{{ url_for('admin.list_entries') }}">all entries</a>
         <a href="{{ url_for('admin.connections') }}">connections</a>
+        <a href="{{ url_for('system.index') }}">server</a>
       {% endif %}
       <a href="{{ url_for('owner.me') }}">my entry</a>
+      <a href="{{ url_for('video.index') }}">video</a>
       <form method="post" action="{{ url_for('auth.logout') }}" class="inline">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <button type="submit">log out</button>
@@ -56,5 +58,6 @@
 <script src="{{ url_for('static', filename='admin-add.js') }}" defer></script>
 <script src="{{ url_for('static', filename='localtime.js') }}" defer></script>
 <script src="{{ url_for('static', filename='auto-refresh.js') }}" defer></script>
+<script src="{{ url_for('static', filename='video-toggle.js') }}" defer></script>
 </body>
 </html>

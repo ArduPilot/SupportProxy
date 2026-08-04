@@ -1,0 +1,90 @@
+{% extends "base.html" %}
+{% block title %}Server — {{ config.WEBUI_TITLE }}{% endblock %}
+{% block content %}
+<h2>Server</h2>
+
+<p class="hint">
+  {% if daemon_pid %}
+    Proxy daemon running as pid {{ daemon_pid }}.
+  {% else %}
+    No running proxy daemon found.
+  {% endif %}
+</p>
+
+<form method="post" action="{{ url_for('system.restart') }}" class="inline"
+      onsubmit="return confirm('Restart the proxy?\n\nEvery live MAVLink session and video stream is dropped. The supervisor restarts it within a few seconds.');">
+  {{ restart_form.csrf_token }}
+  <button type="submit" class="danger">Restart proxy</button>
+</form>
+<span class="help-inline">Drops all live sessions. Publishers and
+  viewers reconnect on their own; a support engineer mid-session will
+  not.</span>
+
+<h3>Activity log</h3>
+<p class="hint">{{ log_path }} — newest at the bottom, updating live.
+  Viewer tokens are redacted.</p>
+
+<div class="log-controls">
+  <label><input type="checkbox" id="logfollow" checked> follow</label>
+  <span id="logstatus" class="hint"></span>
+</div>
+<pre id="logview" class="logview">loading…</pre>
+
+<script>
+(function () {
+  var view = document.getElementById('logview');
+  var follow = document.getElementById('logfollow');
+  var status = document.getElementById('logstatus');
+  var offset = -1;            // -1 asks for the tail
+  var ident = '';             // file identity, to spot a swap
+  var first = true;
+  // Bound what the page holds: a busy log left open for hours would
+  // otherwise grow the DOM without limit.
+  var MAX_CHARS = 400000;
+
+  function atBottom() {
+    return view.scrollHeight - view.scrollTop - view.clientHeight < 40;
+  }
+
+  function poll() {
+    var wasBottom = atBottom();
+    fetch('{{ url_for("system.log_data") }}?offset=' + offset +
+          '&ident=' + encodeURIComponent(ident),
+          {credentials: 'same-origin'})
+      .then(function (r) {
+        if (!r.ok) { throw new Error('HTTP ' + r.status); }
+        return r.json();
+      })
+      .then(function (d) {
+        if (d.restarted && !first) {
+          // Rotated, truncated, or we fell too far behind: what follows
+          // is not contiguous with what is on screen, so say so rather
+          // than splicing it on and implying it is.
+          view.textContent += '\n--- log rotated or skipped ahead ---\n';
+        }
+        if (d.text) {
+          view.textContent = (first ? '' : view.textContent) + d.text;
+          if (view.textContent.length > MAX_CHARS) {
+            view.textContent =
+              view.textContent.slice(view.textContent.length - MAX_CHARS);
+          }
+        } else if (first) {
+          view.textContent = '(log is empty)';
+        }
+        offset = d.offset;
+        ident = d.ident || '';
+        first = false;
+        status.textContent = '';
+        if (follow.checked && (wasBottom || first)) {
+          view.scrollTop = view.scrollHeight;
+        }
+      })
+      .catch(function (e) {
+        status.textContent = 'update failed: ' + e.message;
+      })
+      .then(function () { setTimeout(poll, 2000); });
+  }
+  poll();
+})();
+</script>
+{% endblock %}

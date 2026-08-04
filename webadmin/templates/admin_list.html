@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_macros.html" import row, check, tip %}
 {% block title %}All entries — {{ config.WEBUI_TITLE }}{% endblock %}
 {% block content %}
 <h2>All entries ({{ entries | length }})</h2>
@@ -20,8 +21,14 @@
       <td>{{ ke.flag_names() | join(', ') or '—' }}</td>
       <td>
         <a href="{{ url_for('admin.edit', port2=ke.port2) }}">edit</a>
-        {% if 'tlog' in ke.flag_names() or 'binlog' in ke.flag_names() %}
+        {% if 'tlog' in ke.flag_names() or 'binlog' in ke.flag_names()
+              or ke.video_enabled() %}
         · <a href="{{ url_for('admin_logs.admin_dates', port2=ke.port2) }}">logs</a>
+        {% endif %}
+        {# An admin can watch any entry's stream, so link straight to it
+           rather than making them hand-edit a ?port2= query. #}
+        {% if ke.video_enabled() and ke.active_video_ports() %}
+        · <a href="{{ url_for('video.index', port2=ke.port2) }}">video</a>
         {% endif %}
       </td>
     </tr>
@@ -40,11 +47,11 @@
 </p>
 <form method="post" action="{{ url_for('admin.add_entry') }}" class="admin-add-form">
   {{ add_form.csrf_token }}
-  <div class="field">{{ add_form.port1.label }}: {{ add_form.port1() }}</div>
-  <div class="field">{{ add_form.count.label }}: {{ add_form.count(min=1, max=50) }}</div>
-  <div class="field">{{ add_form.port2.label }}: {{ add_form.port2() }}</div>
-  <div class="field">{{ add_form.name.label }}: {{ add_form.name() }}</div>
-  <div class="field">{{ add_form.passphrase.label }}: {{ add_form.passphrase() }}</div>
+  {{ row(add_form.port1) }}
+  {{ row(add_form.count, min=1, max=50) }}
+  {{ row(add_form.port2) }}
+  {{ row(add_form.name) }}
+  {{ row(add_form.passphrase) }}
   <div>{{ add_form.submit() }}</div>
 </form>
 {% endblock %}

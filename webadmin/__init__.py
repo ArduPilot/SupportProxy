@@ -108,11 +108,15 @@ def create_app(test_config=None):
     from .routes_owner import bp as owner_bp
     from .routes_admin import bp as admin_bp
     from .logs import admin_bp as admin_logs_bp, owner_bp as owner_logs_bp
+    from .routes_video import bp as video_bp
+    from .routes_system import bp as system_bp
     app.register_blueprint(auth_bp)
     app.register_blueprint(owner_bp)
     app.register_blueprint(admin_bp)
     app.register_blueprint(admin_logs_bp)
     app.register_blueprint(owner_logs_bp)
+    app.register_blueprint(video_bp)
+    app.register_blueprint(system_bp)
 
     @app.route('/')
     def index():

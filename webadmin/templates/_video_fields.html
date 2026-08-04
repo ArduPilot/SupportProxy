@@ -1,0 +1,107 @@
+{#
+  Video settings, shared by the owner and admin edit forms.
+
+  Port allocation and the disk budget are admin-only, so those fields are
+  only present on AdminEditForm; the owner view shows the allocated ports
+  read-only instead. WTForms' Form implements __contains__ over its field
+  names, so "in form" is the safe way to test for an optional field.
+#}
+{% from "_macros.html" import row, check, tip %}
+<h3>Video</h3>
+{{ check(form.video_enabled) }}
+
+{# Everything below is meaningless until video is on, and it is a long
+   block. video-toggle.js hides it while the box is clear. It ships
+   visible so a script failure cannot strand an operator with settings
+   they cannot reach. #}
+<div id="video-options">
+
+{% set has_ports = 'video_port_1' in form %}
+{% set count = form.video_port_count.data if has_ports else entry.video_port_count() %}
+
+{% if has_ports %}
+  {{ row(form.video_port_count) }}
+{% endif %}
+
+{% for slot in [1, 2, 3] %}
+  {% set p = entry.video_ports[slot - 1] %}
+  {# Slots past the chosen count are rendered but hidden, so the browser
+     still submits their options and lowering then raising the count does
+     not silently wipe them. video-toggle.js does the hiding; without JS
+     every slot stays reachable. #}
+  <div class="field video-slot" data-slot="{{ slot }}"
+       {% if slot > count %}hidden{% endif %}>
+    {# Every control on this row is its own hover target. If the port
+       field used the row-level tooltip instead, hovering an option --
+       which also hovers the row -- would stack two tooltips in the same
+       spot. #}
+    {% if has_ports %}
+      <span class="opt">{{ form['video_port_' ~ slot].label }}:
+        {{ form['video_port_' ~ slot]() }}{{ tip(form['video_port_' ~ slot]) }}</span>
+    {% else %}
+      Video port {{ slot }}:
+      {% if p %}<strong>{{ p }}</strong>{% else %}<em>not allocated</em>{% endif %}
+    {% endif %}
+    {# An owner can't allocate a port, so per-slot options for a slot with
+       no port are noise. An admin may be allocating one in this same save,
+       so they always see them.
+
+       Help for these three is written here rather than as field
+       descriptions: three slots x three options would be nine
+       near-identical strings in forms.py. tests/webadmin/test_tooltips.py
+       exempts them from the every-option-is-documented check and asserts
+       on this text instead. #}
+    {% if has_ports or p %}
+      <span class="video-slot-opts">
+        <span class="opt">{{ form['video_srt_' ~ slot]() }} SRT
+        <span class="tip" role="note">
+          Serve this slot's UDP side with SRT instead of plain MPEG-TS.
+          The two cannot share a port, so it is one or the other. SRT can
+          carry a publish password; plain MPEG-TS cannot.
+        </span></span>
+        <span class="opt">{{ form['video_record_' ~ slot]() }} record
+        <span class="tip" role="note">
+          Write this slot's stream to logs/&lt;port2&gt;/&lt;date&gt;/ as
+          timestamped .ts segments, alongside the tlogs. Bounded by the
+          video disk budget, never by the tlog budget.
+        </span></span>
+        <span class="opt">{{ form['video_rawtcp_' ~ slot]() }} open TCP viewers
+        <span class="tip" role="note">
+          Allow viewers that just open a TCP socket and read, with no
+          credential -- e.g. <code>ffplay tcp://host:port</code>. There is
+          nowhere in a raw stream to carry a password, so this is offered
+          only when no viewer password is set.
+        </span></span>
+        <span class="opt">RTMP
+          {{ form['video_rtmp_' ~ slot](size=16,
+                                        placeholder='app/stream') }}
+        {{ tip(form['video_rtmp_' ~ slot]) }}</span>
+      </span>
+    {% endif %}
+  </div>
+{% endfor %}
+
+{% if not has_ports and not entry.active_video_ports() %}
+  <div class="field"><em>No video ports have been allocated to this entry
+  yet — ask an admin to allocate one.</em></div>
+{% endif %}
+
+{{ check(form.video_audio) }}
+{{ row(form.video_viewer_pass) }}
+<div class="field">{{ form.video_viewer_pass_clear() }}
+  {{ form.video_viewer_pass_clear.label }}{{ tip(form.video_viewer_pass_clear) }}
+  {% if entry.video_viewer_pass_set() %}<em>(currently set)</em>
+  {% else %}<em>(currently unset — viewing is open)</em>{% endif %}
+</div>
+{{ row(form.video_publish_pass) }}
+<div class="field">{{ form.video_publish_pass_clear() }}
+  {{ form.video_publish_pass_clear.label }}{{ tip(form.video_publish_pass_clear) }}
+  {% if entry.video_publish_pass_set() %}<em>(currently set)</em>
+  {% else %}<em>(currently unset — a recent MAVLink session is required)</em>{% endif %}
+</div>
+{{ row(form.video_grace_s) }}
+{% if 'video_quota_mb' in form %}
+  {{ row(form.video_quota_mb) }}
+{% endif %}
+
+</div>{# /video-options #}

@@ -23,7 +23,9 @@ from _test_helpers import (ALICE_PASS, ALICE_PORT1, ALICE_PORT2,
 
 def _pack_entry(*, port2, conn_index, peer_ip, peer_port, transport,
                 is_user, connected_at, last_update, rx=0, tx=0,
-                pid=12345, flags=0):
+                pid=12345, flags=0, role=conn_db.CONN_ROLE_MAVLINK,
+                stream_idx=0, app_proto=conn_db.CONN_APP_MAVLINK,
+                authenticated=0):
     return struct.pack(
         conn_db.PACK_FORMAT,
         conn_db.CONN_MAGIC, connected_at, last_update,
@@ -33,6 +35,7 @@ def _pack_entry(*, port2, conn_index, peer_ip, peer_port, transport,
         socket.htons(peer_port),
         transport, 1 if is_user else 0,
         flags, 0,  # flags, _pad
+        role, stream_idx, app_proto, authenticated,
     )
 
 

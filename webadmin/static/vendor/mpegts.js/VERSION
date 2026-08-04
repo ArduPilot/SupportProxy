@@ -1,0 +1,17 @@
+mpegts.js 1.8.0
+upstream: https://registry.npmjs.org/mpegts.js/-/mpegts.js-1.8.0.tgz
+file:     dist/mpegts.js
+sha256:   e998f7a6cec5fcab56ac14e8c22d61a42565c1ebf7174b3fda078343eda6cab0
+vendored: 2026-08-01
+licence:  Apache-2.0 (see LICENSE)
+
+Vendored rather than loaded from a CDN: published artifacts are served
+with a strict policy and must be self-contained, and an external script
+tag would be a third party able to change what runs in an operator's
+browser.
+
+To refresh:
+    npm pack mpegts.js
+    tar xzf mpegts.js-<ver>.tgz
+    cp package/dist/mpegts.js package/LICENSE .
+    sha256sum mpegts.js        # record it above
