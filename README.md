@@ -16,6 +16,7 @@ For more information on using the support proxy see https://support.ardupilot.or
 - Supports WebSocket and WebSocket+SSL TCP connections for both user
   and support engineer
 - supports up to 8 simultaneous connections by support engineer
+- Optional video proxying alongside the MAVLink link, with recording
 
 ## How It Works
 
@@ -32,6 +33,59 @@ secure, authenticated connections.
 
 Both sides can optionally use WebSocket+SSL to get a fully encrypted link.
 
+## Video
+
+Optional, off unless an entry has it enabled. A user points a camera at
+one of their entry's video ports and any number of ground stations can
+watch, with the same NAT traversal and per-entry credentials the MAVLink
+side already provides. Recordings land beside the tlogs under
+`logs/<port2>/<date>/` and are covered by the same retention.
+
+Video is deliberately independent of the MAVLink session: it survives a
+telemetry dropout, and with a publish password it needs no MAVLink at
+all.
+
+**Ports.** Up to three per entry, allocated by an admin from the web UI
+(suggested from 40001). Each carries one stream, on TCP and UDP.
+**These are public listening ports and must be open in the firewall.**
+
+**Publishing.**
+
+| Transport | Credential |
+|---|---|
+| MPEG-TS over UDP | none possible — see below |
+| RTSP | `?pw=` on the request URI |
+| RTMP | `?pw=` on the stream key, e.g. `FPV?pw=secret` |
+
+Plain MPEG-TS over UDP has nowhere to carry a password, so it is
+admitted on the MAVLink-session path only: a publisher is accepted when
+a MAVLink session for the entry was seen from the same address within
+the grace window. On a non-bidi entry *any* datagram latches the user
+side, so a scanner between flights can become the authorised address and
+the aircraft's video is then refused until the grace expires. **Entries
+used for video should set `bidi_sign` or a publish password.**
+
+**Watching.** In the browser from the web UI, or outside it with the
+`ffplay`/`vlc` command the page offers. The browser player needs H.264:
+Chrome and Firefox will not decode HEVC in Media Source Extensions on
+desktop Linux, and nothing here transcodes.
+
+**Disk.** Video has its own budget, separate from telemetry, so a busy
+camera can never evict a user's tlogs. Set it per entry in the web UI;
+a free-space floor stops recording before the disk fills.
+
+**Log rotation.** The daemon's own log is not rotated by default.
+Install the supplied config once, as root:
+
+```bash
+sudo install -m 644 scripts/supportproxy.logrotate \
+    /etc/logrotate.d/supportproxy
+```
+
+It uses `copytruncate`, which is required rather than preferred when the
+daemon's stdout is a file systemd holds open — see the comments in that
+file.
+
 ## Building
 
 ### Prerequisites
@@ -40,6 +94,9 @@ Both sides can optionally use WebSocket+SSL to get a fully encrypted link.
 # Ubuntu/Debian
 sudo apt install libtdb-dev python3-tdb python3-venv gcc g++ git libssl-dev
 
+# Only if video is used: RTSP and RTMP ingest hand the stream to an
+# ffmpeg child for demuxing. Plain MPEG-TS over UDP needs nothing extra.
+sudo apt install ffmpeg
 ```
 
 ### Get the source
@@ -65,7 +122,60 @@ source venv/bin/activate
 pip install pymavlink
 ```
 
-### Building SupportProxy
+### Video
+
+Optional, off unless an entry has it enabled. A user points a camera at
+one of their entry's video ports and any number of ground stations can
+watch, with the same NAT traversal and per-entry credentials the MAVLink
+side already provides. Recordings land beside the tlogs under
+`logs/<port2>/<date>/` and are covered by the same retention.
+
+Video is deliberately independent of the MAVLink session: it survives a
+telemetry dropout, and with a publish password it needs no MAVLink at
+all.
+
+**Ports.** Up to three per entry, allocated by an admin from the web UI
+(suggested from 40001). Each carries one stream, on TCP and UDP.
+**These are public listening ports and must be open in the firewall.**
+
+**Publishing.**
+
+| Transport | Credential |
+|---|---|
+| MPEG-TS over UDP | none possible — see below |
+| RTSP | `?pw=` on the request URI |
+| RTMP | `?pw=` on the stream key, e.g. `FPV?pw=secret` |
+
+Plain MPEG-TS over UDP has nowhere to carry a password, so it is
+admitted on the MAVLink-session path only: a publisher is accepted when
+a MAVLink session for the entry was seen from the same address within
+the grace window. On a non-bidi entry *any* datagram latches the user
+side, so a scanner between flights can become the authorised address and
+the aircraft's video is then refused until the grace expires. **Entries
+used for video should set `bidi_sign` or a publish password.**
+
+**Watching.** In the browser from the web UI, or outside it with the
+`ffplay`/`vlc` command the page offers. The browser player needs H.264:
+Chrome and Firefox will not decode HEVC in Media Source Extensions on
+desktop Linux, and nothing here transcodes.
+
+**Disk.** Video has its own budget, separate from telemetry, so a busy
+camera can never evict a user's tlogs. Set it per entry in the web UI;
+a free-space floor stops recording before the disk fills.
+
+**Log rotation.** The daemon's own log is not rotated by default.
+Install the supplied config once, as root:
+
+```bash
+sudo install -m 644 scripts/supportproxy.logrotate \
+    /etc/logrotate.d/supportproxy
+```
+
+It uses `copytruncate`, which is required rather than preferred when the
+daemon's stdout is a file systemd holds open — see the comments in that
+file.
+
+## Building SupportProxy
 
 ```bash
 # Build everything (initializes submodules, generates headers, compiles)
@@ -207,7 +317,60 @@ netstat -ln | grep ":1000[0-9]"
 
 SupportProxy can also be run using Docker for easier deployment and management.
 
-### Building the Docker Image
+### Video
+
+Optional, off unless an entry has it enabled. A user points a camera at
+one of their entry's video ports and any number of ground stations can
+watch, with the same NAT traversal and per-entry credentials the MAVLink
+side already provides. Recordings land beside the tlogs under
+`logs/<port2>/<date>/` and are covered by the same retention.
+
+Video is deliberately independent of the MAVLink session: it survives a
+telemetry dropout, and with a publish password it needs no MAVLink at
+all.
+
+**Ports.** Up to three per entry, allocated by an admin from the web UI
+(suggested from 40001). Each carries one stream, on TCP and UDP.
+**These are public listening ports and must be open in the firewall.**
+
+**Publishing.**
+
+| Transport | Credential |
+|---|---|
+| MPEG-TS over UDP | none possible — see below |
+| RTSP | `?pw=` on the request URI |
+| RTMP | `?pw=` on the stream key, e.g. `FPV?pw=secret` |
+
+Plain MPEG-TS over UDP has nowhere to carry a password, so it is
+admitted on the MAVLink-session path only: a publisher is accepted when
+a MAVLink session for the entry was seen from the same address within
+the grace window. On a non-bidi entry *any* datagram latches the user
+side, so a scanner between flights can become the authorised address and
+the aircraft's video is then refused until the grace expires. **Entries
+used for video should set `bidi_sign` or a publish password.**
+
+**Watching.** In the browser from the web UI, or outside it with the
+`ffplay`/`vlc` command the page offers. The browser player needs H.264:
+Chrome and Firefox will not decode HEVC in Media Source Extensions on
+desktop Linux, and nothing here transcodes.
+
+**Disk.** Video has its own budget, separate from telemetry, so a busy
+camera can never evict a user's tlogs. Set it per entry in the web UI;
+a free-space floor stops recording before the disk fills.
+
+**Log rotation.** The daemon's own log is not rotated by default.
+Install the supplied config once, as root:
+
+```bash
+sudo install -m 644 scripts/supportproxy.logrotate \
+    /etc/logrotate.d/supportproxy
+```
+
+It uses `copytruncate`, which is required rather than preferred when the
+daemon's stdout is a file systemd holds open — see the comments in that
+file.
+
+## Building the Docker Image
 
 ```bash
 docker build -f docker/Dockerfile -t ap-supportproxy .

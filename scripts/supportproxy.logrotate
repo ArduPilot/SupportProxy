@@ -1,0 +1,43 @@
+# Rotation for the daemon and web admin activity logs.
+#
+# Install as root:
+#     install -m 644 scripts/supportproxy.logrotate \
+#         /etc/logrotate.d/supportproxy
+#
+# copytruncate is required, not optional. supportproxy.service writes
+# its log with systemd's StandardOutput=append:, so systemd holds the
+# descriptor for the life of the process -- renaming the file would
+# leave the daemon writing to an unlinked inode until the next restart,
+# and the visible log would stop growing with nothing to show why.
+# Copying and then truncating keeps the descriptor valid, and because it
+# is opened O_APPEND the next write lands at the new start.
+#
+# The trade: anything written between the copy and the truncate is lost
+# -- not merely a line, but whatever the daemon emits in that window,
+# which on a busy proxy with a large log is not nothing. The alternative
+# is restarting the daemon to make it reopen, which drops every live
+# session, so losing a moment of log is the lesser cost.
+
+# Rotated on size, not on a schedule: this is a debugging log whose rate
+# depends entirely on what the proxy is doing, so bounding the disk it
+# can take is the useful guarantee. logrotate's own timer decides how
+# often the size is checked -- daily on a stock Debian/Ubuntu -- and
+# specifying `daily` here as well would be dead text, since `size`
+# overrides it (logrotate says so itself in -d output).
+/home/fire/proxy/proxy.log /home/fire/proxy/webui.log {
+    size 64M
+    rotate 14
+    # No delaycompress: that exists to avoid compressing a file still
+    # being appended to, but copytruncate means the rotated file is a
+    # finished copy the moment it exists. Deferring would just keep an
+    # uncompressed generation on disk for no benefit.
+    compress
+    missingok
+    notifempty
+    copytruncate
+    su fire fire
+    # No `create`: logrotate ignores it under copytruncate, because the
+    # live file is never replaced. The permissions on proxy.log are
+    # whatever the daemon's umask made them; this stanza cannot set or
+    # repair them, and pretending otherwise would be misleading.
+}
