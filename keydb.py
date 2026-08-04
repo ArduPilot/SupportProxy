@@ -28,6 +28,10 @@ def main():
                                  'setretention',
                                  'setsysid',
                                  'settz',
+                                 'setvideo', 'videoflag', 'videoopt', 'setrtmp',
+                                 'setviewerpass', 'setpublishpass',
+                                 'setvideoquota', 'setvideograce',
+                                 'video',
                                  'stats'],
                         help="action to perform")
     parser.add_argument("args", default=[], nargs=argparse.REMAINDER)
@@ -120,6 +124,142 @@ def main():
                 print("Set log retention=0 (keep forever) for %s" % ke)
             else:
                 print("Set log retention=%.4g days for %s" % (days, ke))
+
+        elif args.action == "setvideo":
+            if not args.args:
+                raise CLIError(
+                    "Usage: keydb.py setvideo PORT2 [VPORT ...]  "
+                    "(up to %d ports; none clears them all)"
+                    % keydb_lib.MAX_VIDEO_PORTS)
+            port2 = int(args.args[0])
+            try:
+                vports = [int(a) for a in args.args[1:]]
+            except ValueError:
+                raise CLIError("video ports must be integers, got %r"
+                               % (args.args[1:],))
+            ke = keydb_lib.set_video_ports(db, port2, vports)
+            if any(ke.video_ports):
+                print("Set video ports %s for %s"
+                      % (','.join(str(p) for p in ke.video_ports if p), ke))
+            else:
+                print("Cleared video ports for %s" % ke)
+
+        elif args.action == "setrtmp":
+            # setrtmp PORT2 SLOT [app/stream]   -- omit to clear
+            if len(args.args) not in (2, 3):
+                raise CLIError(
+                    "Usage: keydb.py setrtmp PORT2 SLOT [app/stream]  "
+                    "(omit the path to clear)")
+            port2 = int(args.args[0])
+            slot = int(args.args[1])
+            path = args.args[2] if len(args.args) == 3 else ''
+            ke = keydb_lib.set_video_rtmp_path(db, port2, slot, path)
+            got = ke.rtmp_path(slot)
+            print("Set slot %d RTMP path to %s for %s"
+                  % (slot, repr(got) if got else "(cleared)", ke))
+
+        elif args.action in ("videoflag", "videoopt"):
+            # videoflag PORT2 SLOT NAME [on|off]   -- per-slot option
+            # videoopt  PORT2 NAME [on|off]        -- entry-wide option
+            per_slot = args.action == "videoflag"
+            usage = ("keydb.py videoflag PORT2 SLOT NAME [on|off]  (NAME: %s)"
+                     % ', '.join(sorted(keydb_lib.VIDEO_SLOT_FLAG_NAMES))
+                     if per_slot else
+                     "keydb.py videoopt PORT2 NAME [on|off]  (NAME: %s)"
+                     % ', '.join(sorted(keydb_lib.VIDEO_OPT_FLAG_NAMES)))
+            nargs = 3 if per_slot else 2
+            if len(args.args) not in (nargs, nargs + 1):
+                raise CLIError("Usage: %s" % usage)
+            state = args.args[nargs].lower() if len(args.args) > nargs else "on"
+            if state not in ("on", "off"):
+                raise CLIError("state must be 'on' or 'off', got %r" % state)
+            on = state == "on"
+            port2 = int(args.args[0])
+            if per_slot:
+                slot = int(args.args[1])
+                ke = keydb_lib.set_video_slot_flag(db, port2, slot,
+                                                   args.args[2], on)
+                print("Set slot %d %s=%s for %s"
+                      % (slot, args.args[2], state, ke))
+            else:
+                ke = keydb_lib.set_video_entry_flag(db, port2,
+                                                    args.args[1], on)
+                print("Set video %s=%s for %s" % (args.args[1], state, ke))
+
+        elif args.action in ("setviewerpass", "setpublishpass"):
+            which = ("viewer" if args.action == "setviewerpass" else "publish")
+            if len(args.args) not in (1, 2):
+                raise CLIError(
+                    "Usage: keydb.py %s PORT2 [PASSPHRASE]  "
+                    "(omit PASSPHRASE to clear)" % args.action)
+            port2 = int(args.args[0])
+            phrase = args.args[1] if len(args.args) == 2 else ''
+            fn = (keydb_lib.set_video_viewer_pass
+                  if which == "viewer" else keydb_lib.set_video_publish_pass)
+            ke = fn(db, port2, phrase)
+            if phrase:
+                print("Set video %s password for %s" % (which, ke))
+            else:
+                print("Cleared video %s password for %s" % (which, ke))
+
+        elif args.action == "setvideoquota":
+            _expect(args.args, 2,
+                    "keydb.py setvideoquota PORT2 MB  (0 = server default)")
+            try:
+                mb = int(args.args[1])
+            except ValueError:
+                raise CLIError("MB must be an integer, got %r" % args.args[1])
+            ke = keydb_lib.set_video_quota(db, int(args.args[0]), mb)
+            if mb == 0:
+                print("Cleared video quota (server default) for %s" % ke)
+            else:
+                print("Set video quota=%d MB for %s" % (mb, ke))
+
+        elif args.action == "setvideograce":
+            _expect(args.args, 2,
+                    "keydb.py setvideograce PORT2 SECONDS  (0 = default %d)"
+                    % keydb_lib.VIDEO_MAV_GRACE_DEFAULT_S)
+            try:
+                secs = int(args.args[1])
+            except ValueError:
+                raise CLIError("SECONDS must be an integer, got %r"
+                               % args.args[1])
+            ke = keydb_lib.set_video_grace(db, int(args.args[0]), secs)
+            print("Set video MAVLink grace=%ds for %s"
+                  % (ke.mav_grace_seconds(), ke))
+
+        elif args.action == "video":
+            _expect(args.args, 1, "keydb.py video PORT2")
+            port2 = int(args.args[0])
+            ke = keydb_lib.KeyEntry(port2)
+            if not ke.fetch(db):
+                raise CLIError("No entry for port2 %d" % port2)
+            print("video: %s" % ("enabled" if ke.video_enabled()
+                                 else "disabled (set the 'video' flag)"))
+            active = ke.active_video_ports()
+            if not active:
+                print("  no video ports configured")
+            for slot, port in active:
+                opts = ke.slot_opt_names(slot)
+                print("  slot %d: port %d  %s%s"
+                      % (slot, port,
+                         "srt" if 'srt' in opts else "mpegts",
+                         ''.join(' +' + o for o in sorted(opts)
+                                 if o != 'srt')))
+                rp = ke.rtmp_path(slot)
+                print("           RTMP path: %s"
+                      % (rp if rp else "(any)"))
+            eopts = ke.entry_opt_names()
+            print("  options: %s" % (','.join(sorted(eopts)) if eopts
+                                     else '(none)'))
+            print("  viewer password: %s"
+                  % ("set" if ke.video_viewer_pass_set() else "not set (open)"))
+            print("  publish password: %s"
+                  % ("set" if ke.video_publish_pass_set()
+                     else "not set (MAVLink session required)"))
+            print("  mavlink grace: %ds" % ke.mav_grace_seconds())
+            print("  quota: %s" % ("%d MB" % ke.video_quota_mb
+                                   if ke.video_quota_mb else "server default"))
 
         elif args.action == "setsysid":
             _expect(args.args, 2,

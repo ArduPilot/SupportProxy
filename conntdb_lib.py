@@ -44,12 +44,49 @@ CONNENTRY_MIN_SIZE = 64
 #   HBB   peer_port_be, transport, is_user            ( 4)
 #   I     flags                                       ( 4)
 #   I     _pad                                        ( 4)
-# Raw: 60 bytes. C++ rounds sizeof() up to 64 to align the next
-# instance at an 8-byte boundary (alignof(uint64_t)). Add 4 explicit
-# pad bytes here so the on-disk size matches.
-PACK_FORMAT = "<QQQiiIIIIHBBII4x"
+#   4x    _pad2 (was implicit C++ tail padding)       ( 4)  -> 64
+#   BBBB  role, stream_idx, app_proto, authenticated  ( 4)
+#   4x    _pad3                                       ( 4)  -> 72
+#
+# The video fields start at 64, not 60. Bytes 60..63 were implicit tail
+# padding in C++ (the struct is 8-aligned) which this format spells out
+# as "4x" -- so a field placed there would be zeroed by any writer using
+# the older format, while sizeof() stayed 64 and no size check caught it.
+PACK_FORMAT = "<QQQiiIIIIHBBII4xBBBB4x"
 CONNENTRY_CURRENT_SIZE = struct.calcsize(PACK_FORMAT)
-assert CONNENTRY_CURRENT_SIZE == 64, CONNENTRY_CURRENT_SIZE
+assert CONNENTRY_CURRENT_SIZE == 72, CONNENTRY_CURRENT_SIZE
+
+# ConnEntry.role / .app_proto — keep in sync with conntdb.h.
+CONN_ROLE_MAVLINK = 0
+CONN_ROLE_VIDEO_PUB = 1
+CONN_ROLE_VIDEO_SUB = 2
+
+ROLE_NAMES = {
+    CONN_ROLE_MAVLINK: 'mavlink',
+    CONN_ROLE_VIDEO_PUB: 'video-pub',
+    CONN_ROLE_VIDEO_SUB: 'video-sub',
+}
+
+CONN_APP_MAVLINK = 0
+CONN_APP_MPEGTS = 1
+CONN_APP_RTSP = 2
+CONN_APP_HTTP = 3
+CONN_APP_SRT = 4
+CONN_APP_RTMP = 5
+
+APP_NAMES = {
+    CONN_APP_MAVLINK: 'mavlink',
+    CONN_APP_MPEGTS: 'mpegts',
+    CONN_APP_RTSP: 'rtsp',
+    CONN_APP_HTTP: 'http',
+    CONN_APP_SRT: 'srt',
+    CONN_APP_RTMP: 'rtmp',
+}
+
+# Video rows occupy a conn_index range disjoint from the MAVLink ones so
+# the two writers can snapshot independently.
+VIDEO_CONN_INDEX_BASE = 1000
+VIDEO_CONN_STRIDE = 256
 
 # struct ConnKey { int port2; int conn_index; }
 KEY_FORMAT = "<ii"
@@ -67,7 +104,8 @@ class ConnEntry:
                  'port2', 'conn_index', 'pid',
                  'rx_msgs', 'tx_msgs',
                  'peer_ip_be', 'peer_port_be',
-                 'transport', 'is_user', 'flags')
+                 'transport', 'is_user', 'flags',
+                 'role', 'stream_idx', 'app_proto', 'authenticated')
 
     def __init__(self):
         for s in self.__slots__:
@@ -86,12 +124,26 @@ class ConnEntry:
          ce.rx_msgs, ce.tx_msgs,
          ce.peer_ip_be, ce.peer_port_be,
          ce.transport, ce.is_user,
-         ce.flags, _pad) = struct.unpack(PACK_FORMAT, body)
+         ce.flags, _pad,
+         ce.role, ce.stream_idx, ce.app_proto,
+         ce.authenticated) = struct.unpack(PACK_FORMAT, body)
         return ce
 
     @property
     def transport_name(self):
         return TRANSPORT_NAMES.get(self.transport, str(self.transport))
+
+    @property
+    def role_name(self):
+        return ROLE_NAMES.get(self.role, str(self.role))
+
+    @property
+    def app_name(self):
+        return APP_NAMES.get(self.app_proto, str(self.app_proto))
+
+    @property
+    def is_video(self):
+        return self.role in (CONN_ROLE_VIDEO_PUB, CONN_ROLE_VIDEO_SUB)
 
     @property
     def peer_ip(self):
@@ -209,6 +261,7 @@ def _flip_drop_flag(path, port2, conn_index):
                 ce.peer_ip_be, ce.peer_port_be,
                 ce.transport, ce.is_user,
                 ce.flags, 0,  # _pad
+                ce.role, ce.stream_idx, ce.app_proto, ce.authenticated,
             )
             import tdb as _tdb
             db.store(key, new_body + tail, _tdb.REPLACE)

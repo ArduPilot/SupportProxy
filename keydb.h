@@ -34,6 +34,53 @@
 #define KEY_FLAG_TLOG      (1u << 2)  // record per-connection MAVProxy-format tlogs
 #define KEY_FLAG_BINLOG    (1u << 3)  // record ArduPilot bin logs over MAVLink
 #define KEY_FLAG_USE_TZ    (1u << 4)  // name logs with tz_offset_hours; else server local
+#define KEY_FLAG_VIDEO     (1u << 5)  // video proxying enabled for this entry
+
+#define KEY_MAX_VIDEO_PORTS 3
+
+/*
+  KeyEntry.video_flags: one byte of options per video slot, plus a
+  byte of entry-wide options. A byte per slot (rather than packing bits
+  tightly) keeps the shift arithmetic obvious and leaves room to grow
+  without another schema change.
+
+    bits  0-7   slot 0
+    bits  8-15  slot 1
+    bits 16-23  slot 2
+    bits 24-31  entry-wide
+ */
+#define VIDEO_SLOT_BITS 8
+#define VIDEO_SLOT_SHIFT(slot) ((slot) * VIDEO_SLOT_BITS)
+
+// per-slot bits
+#define VIDEO_SLOT_SRT     (1u << 0)  // UDP side speaks SRT, not plain MPEG-TS
+#define VIDEO_SLOT_RECORD  (1u << 1)  // write .ts segments under logs/
+#define VIDEO_SLOT_RAW_TCP (1u << 2)  // allow raw-TCP viewers (no credential)
+
+// entry-wide bits, stored in the top byte
+#define VIDEO_OPT_SHIFT 24
+#define VIDEO_OPT_AUDIO (1u << 0)     // carry audio from RTSP ingest as AAC.
+                                      // Default off: audio is rarely useful
+                                      // from an aircraft, and dropping it
+                                      // keeps the muxed TS video-only.
+
+static inline uint32_t video_slot_opts(uint32_t video_flags, unsigned slot)
+{
+    if (slot >= KEY_MAX_VIDEO_PORTS) {
+        return 0;
+    }
+    return (video_flags >> VIDEO_SLOT_SHIFT(slot)) & 0xFFu;
+}
+
+static inline uint32_t video_entry_opts(uint32_t video_flags)
+{
+    return (video_flags >> VIDEO_OPT_SHIFT) & 0xFFu;
+}
+
+// A publisher with no credential is accepted when a MAVLink session for
+// the same entry was seen from the same address within this window, so
+// video rides through a MAVLink dropout instead of being revoked.
+#define VIDEO_MAV_GRACE_DEFAULT_S 60u
 
 struct KeyEntry {
     uint64_t magic;
@@ -48,8 +95,70 @@ struct KeyEntry {
     float    log_retention_days;    // tlog + bin; 0.0 = forever; fractional values allowed for tests
     uint32_t fc_sysid;              // 0 = match any; otherwise only monitor packets from this MAVLink sysid (binlog reboot detection)
     float    tz_offset_hours;       // log naming: GMT offset in hours (fractional allowed), used only when KEY_FLAG_USE_TZ is set
-    uint32_t reserved[14];
+    uint32_t video_ports[KEY_MAX_VIDEO_PORTS];  // 0 = slot unused
+    uint32_t video_flags;           // VIDEO_SLOT_* / VIDEO_OPT_*, see above
+    uint8_t  video_viewer_key[32];  // sha256(viewer password); all-zero = open
+    uint8_t  video_publish_key[32]; // sha256(publish password); all-zero = the
+                                    // MAVLink-session check is the only gate
+    uint32_t video_quota_mb;        // per-entry video disk budget; 0 = default
+    uint32_t video_mav_grace_s;     // publisher grace after MAVLink drops;
+                                    // 0 = VIDEO_MAV_GRACE_DEFAULT_S
+    /*
+      RTMP publish path for each slot, "app/stream" as configured on the
+      camera, e.g. "PhoenixFPV/FPV". Empty = accept whatever is
+      published.
+
+      Optional, and an access control rather than a requirement: RTMP is
+      parsed here now (videortmp.cpp), so the app and stream are read off
+      the wire. Set, only that path is admitted on the slot.
+     */
+    char video_rtmp_path[KEY_MAX_VIDEO_PORTS][32];
+    uint32_t reserved[12];
 };
+
+/*
+  The on-disk layout is an ABI shared with keydb_lib.py's PACK_FORMAT
+  ("<QQ32siIII32sIfIf3II32s32sII32s32s32s12I"). Nothing enforced that
+  agreement until these asserts: a padding change or a differently-sized
+  int/float would silently produce records the Python side misparses.
+
+  The record grew 168 -> 248 -> 344 as video fields were added. That is
+  allowed by the append-only contract at the top of this file: readers
+  zero-extend a short record and writers preserve any tail they don't
+  understand, so old and new binaries interoperate in both directions.
+ */
+static_assert(sizeof(int) == 4, "KeyEntry ABI assumes 32-bit int");
+static_assert(sizeof(float) == 4, "KeyEntry ABI assumes 32-bit float");
+static_assert(sizeof(struct KeyEntry) == 344, "KeyEntry size changed");
+static_assert(offsetof(struct KeyEntry, magic) == 0, "KeyEntry layout");
+static_assert(offsetof(struct KeyEntry, timestamp) == 8, "KeyEntry layout");
+static_assert(offsetof(struct KeyEntry, secret_key) == 16, "KeyEntry layout");
+static_assert(offsetof(struct KeyEntry, port1) == 48, "KeyEntry layout");
+static_assert(offsetof(struct KeyEntry, connections) == 52, "KeyEntry layout");
+static_assert(offsetof(struct KeyEntry, count1) == 56, "KeyEntry layout");
+static_assert(offsetof(struct KeyEntry, count2) == 60, "KeyEntry layout");
+static_assert(offsetof(struct KeyEntry, name) == 64, "KeyEntry layout");
+static_assert(offsetof(struct KeyEntry, flags) == 96, "KeyEntry layout");
+static_assert(offsetof(struct KeyEntry, log_retention_days) == 100, "KeyEntry layout");
+static_assert(offsetof(struct KeyEntry, fc_sysid) == 104, "KeyEntry layout");
+static_assert(offsetof(struct KeyEntry, tz_offset_hours) == 108, "KeyEntry layout");
+static_assert(offsetof(struct KeyEntry, video_ports) == 112, "KeyEntry layout");
+static_assert(offsetof(struct KeyEntry, video_flags) == 124, "KeyEntry layout");
+static_assert(offsetof(struct KeyEntry, video_viewer_key) == 128, "KeyEntry layout");
+static_assert(offsetof(struct KeyEntry, video_publish_key) == 160, "KeyEntry layout");
+static_assert(offsetof(struct KeyEntry, video_quota_mb) == 192, "KeyEntry layout");
+static_assert(offsetof(struct KeyEntry, video_mav_grace_s) == 196, "KeyEntry layout");
+static_assert(offsetof(struct KeyEntry, video_rtmp_path) == 200,
+              "KeyEntry layout");
+static_assert(sizeof(((struct KeyEntry *)nullptr)->video_rtmp_path) == 96,
+              "KeyEntry layout");
+static_assert(offsetof(struct KeyEntry, reserved) == 296, "KeyEntry layout");
+// No implicit tail padding, so appending a field trips the size assert.
+static_assert(offsetof(struct KeyEntry, reserved) + 12*sizeof(uint32_t)
+              == sizeof(struct KeyEntry), "KeyEntry must have no tail padding");
+// KEYENTRY_MIN_SIZE is the pre-flags layout: everything through name[].
+static_assert(KEYENTRY_MIN_SIZE == offsetof(struct KeyEntry, flags),
+              "KEYENTRY_MIN_SIZE must be the offset of the first post-legacy field");
 
 /*
   open DB with or without a transaction

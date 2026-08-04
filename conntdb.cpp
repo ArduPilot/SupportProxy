@@ -196,6 +196,46 @@ int conn_delete_for_port2(TDB_CONTEXT *db, int port2)
     return n;
 }
 
+int conn_delete_index_range(TDB_CONTEXT *db, int port2, int lo, int hi)
+{
+    struct port2_filter f { port2, {} };
+    tdb_traverse(db, collect_port2, &f);
+    int n = 0;
+    for (auto &k : f.matches) {
+        if (k.conn_index < lo || k.conn_index > hi) {
+            continue;
+        }
+        TDB_DATA kd;
+        kd.dptr = (uint8_t *)&k;
+        kd.dsize = sizeof(k);
+        if (tdb_delete(db, kd) == 0) {
+            n++;
+        }
+    }
+    return n;
+}
+
+bool conn_get_user(TDB_CONTEXT *db, int port2, struct ConnEntry &out)
+{
+    struct ConnKey k;
+    auto kd = make_key(k, port2, 0);
+    auto d = tdb_fetch(db, kd);
+    if (d.dptr == nullptr) {
+        return false;
+    }
+    bool ok = false;
+    if (d.dsize >= CONNENTRY_MIN_SIZE) {
+        // zero-extend a record written by older code: `authenticated`
+        // then reads 0, which fails closed for bidi entries
+        memset(&out, 0, sizeof(out));
+        size_t copy = d.dsize < sizeof(out) ? d.dsize : sizeof(out);
+        memcpy(&out, d.dptr, copy);
+        ok = (out.magic == CONN_MAGIC && out.is_user != 0);
+    }
+    free(d.dptr);
+    return ok;
+}
+
 void conn_recreate_empty(void)
 {
     // Easiest way to nuke all records is to remove the file. tdb_open
@@ -216,5 +256,15 @@ void conn_remove_port2(int port2)
         return;
     }
     conn_delete_for_port2(db, port2);
+    conn_db_close_commit(db);
+}
+
+void conn_remove_video(int port2)
+{
+    auto *db = conn_db_open_transaction();
+    if (db == nullptr) {
+        return;
+    }
+    conn_delete_index_range(db, port2, VIDEO_CONN_INDEX_BASE, INT32_MAX);
     conn_db_close_commit(db);
 }

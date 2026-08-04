@@ -68,14 +68,26 @@ void session_time_strings(time_t utc, bool use_offset, double tz_offset_hours,
              tm.tm_hour, tm.tm_min, tm.tm_sec);
 }
 
-// True if neither <dir>/<candidate>.tlog nor <dir>/<candidate>.bin exists.
+// Every extension a session can produce. A basename is only free if
+// none of them is taken: the files of one session share a name, so
+// handing back a name that any of them already occupies would append
+// into (or truncate) another session's log.
+static const char *SESSION_EXTS[] = {
+    ".tlog", ".bin", ".v1.ts", ".v2.ts", ".v3.ts",
+};
+
+// True if no session file of any kind exists under this basename.
 static bool basename_free(const char *dir, const char *candidate)
 {
-    char p_tlog[2048], p_bin[2048];
-    snprintf(p_tlog, sizeof(p_tlog), "%s/%s.tlog", dir, candidate);
-    snprintf(p_bin, sizeof(p_bin), "%s/%s.bin", dir, candidate);
-    struct stat st;
-    return stat(p_tlog, &st) != 0 && stat(p_bin, &st) != 0;
+    for (const char *ext : SESSION_EXTS) {
+        char p[2048];
+        snprintf(p, sizeof(p), "%s/%s%s", dir, candidate, ext);
+        struct stat st;
+        if (stat(p, &st) == 0) {
+            return false;
+        }
+    }
+    return true;
 }
 
 void session_unique_basename(const char *base_dir, uint32_t port2,
