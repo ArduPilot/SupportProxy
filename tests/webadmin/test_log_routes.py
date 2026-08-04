@@ -542,3 +542,59 @@ class TestUnauthenticated:
         # require_admin aborts 403 for unauthenticated _refresh_role:
         # they're not logged in, so role check fails. Acceptable: 403.
         assert r.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# video segments in the log browser
+# ---------------------------------------------------------------------------
+
+class TestVideoSegments:
+    """Recordings live beside the tlogs and must be browsable the same way."""
+
+    def test_owner_sees_and_downloads_a_segment(self, client, logs_dir):
+        seed_session(logs_dir, ALICE_PORT2, '2026-08-01',
+                     '2026_08_01_10:00:00.v1.ts', b'\x47VIDEO')
+        login_as(client, ALICE_PORT1, ALICE_PASS)
+        html = client.get('/me/logs/2026-08-01/').get_data(as_text=True)
+        assert '2026_08_01_10:00:00.v1.ts' in html
+
+        r = client.get('/me/logs/2026-08-01/2026_08_01_10:00:00.v1.ts')
+        assert r.status_code == 200
+        assert r.get_data() == b'\x47VIDEO'
+
+    def test_all_three_slots_are_listed(self, client, logs_dir):
+        for slot in (1, 2, 3):
+            seed_session(logs_dir, ALICE_PORT2, '2026-08-01',
+                         '2026_08_01_10:00:00.v%d.ts' % slot, b'\x47')
+        login_as(client, ALICE_PORT1, ALICE_PASS)
+        html = client.get('/me/logs/2026-08-01/').get_data(as_text=True)
+        for slot in (1, 2, 3):
+            assert '2026_08_01_10:00:00.v%d.ts' % slot in html
+
+    def test_segments_sort_with_the_collision_suffix(self, client, logs_dir):
+        """The -N ordering fix must apply to the compound .vN.ts
+        extension too, not just .tlog/.bin."""
+        for name in ('2026_08_01_10:00:00-10.v1.ts',
+                     '2026_08_01_10:00:00.v1.ts',
+                     '2026_08_01_10:00:00-2.v1.ts'):
+            seed_session(logs_dir, ALICE_PORT2, '2026-08-01', name, b'\x47')
+        login_as(client, ALICE_PORT1, ALICE_PASS)
+        html = client.get('/me/logs/2026-08-01/').get_data(as_text=True)
+        first = html.index('2026_08_01_10:00:00.v1.ts')
+        second = html.index('2026_08_01_10:00:00-2.v1.ts')
+        tenth = html.index('2026_08_01_10:00:00-10.v1.ts')
+        assert first < second < tenth, \
+            'video segments not in natural collision order'
+
+    @pytest.mark.parametrize('bad', [
+        '2026_08_01_10:00:00.v4.ts',     # slot out of range
+        '2026_08_01_10:00:00.ts',        # no slot
+        '2026_08_01_10:00:00.v1.tsx',    # not a segment
+        'evil.ts',
+    ])
+    def test_non_segment_names_are_refused(self, client, logs_dir, bad):
+        seed_session(logs_dir, ALICE_PORT2, '2026-08-01', bad, b'X')
+        login_as(client, ALICE_PORT1, ALICE_PASS)
+        r = client.get('/me/logs/2026-08-01/%s' % bad)
+        assert r.status_code == 404, \
+            '%s should not be servable' % bad

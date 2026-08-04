@@ -17,6 +17,15 @@ CONN_MAGIC = conntdb_lib.CONN_MAGIC
 CONN_FILE = conntdb_lib.CONN_FILE
 CONNENTRY_MIN_SIZE = conntdb_lib.CONNENTRY_MIN_SIZE
 
+CONN_ROLE_MAVLINK = conntdb_lib.CONN_ROLE_MAVLINK
+CONN_ROLE_VIDEO_PUB = conntdb_lib.CONN_ROLE_VIDEO_PUB
+CONN_ROLE_VIDEO_SUB = conntdb_lib.CONN_ROLE_VIDEO_SUB
+CONN_APP_MAVLINK = conntdb_lib.CONN_APP_MAVLINK
+CONN_APP_MPEGTS = conntdb_lib.CONN_APP_MPEGTS
+CONN_APP_RTSP = conntdb_lib.CONN_APP_RTSP
+CONN_APP_HTTP = conntdb_lib.CONN_APP_HTTP
+CONN_APP_SRT = conntdb_lib.CONN_APP_SRT
+
 
 def _conn_path():
     return conntdb_lib.conn_path_for(current_app.config['KEYDB_PATH'])

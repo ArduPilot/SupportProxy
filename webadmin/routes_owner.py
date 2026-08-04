@@ -7,6 +7,7 @@ from . import connections as conn_db
 from .auth import current_owner, require_login
 from .db import tdb_readonly, tdb_transaction
 from .forms import KillForm, OwnerEditForm
+from . import videoform
 
 bp = Blueprint('owner', __name__, url_prefix='/me')
 
@@ -89,6 +90,10 @@ def me():
                 ke.flags &= ~keydb_lib.FLAG_USE_TZ
             if form.reset_timestamp.data:
                 ke.timestamp = 0
+            err = videoform.apply(form, ke, db)
+            if err:
+                flash(err, 'error')
+                return redirect(url_for('owner.me'))
             ke.store(db)
         flash('Saved.', 'success')
         return redirect(url_for('owner.me'))
@@ -109,6 +114,7 @@ def me():
         form.fc_sysid.data = ke.fc_sysid
         form.tz_offset_hours.data = ke.tz_offset_hours
         form.use_tz.data = bool(ke.flags & keydb_lib.FLAG_USE_TZ)
+        videoform.populate(form, ke, db)
     active = conn_db.list_for_port2(port2)
     return render_template('owner.html', form=form, entry=ke, active=active,
                            kill_form=KillForm())

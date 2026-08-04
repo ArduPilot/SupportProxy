@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_macros.html" import icon %}
 {% block title %}Logs for {{ entry.port2 }} — {{ config.WEBUI_TITLE }}{% endblock %}
 {% block auto_refresh_seconds %}5{% endblock %}
 {% block content %}
@@ -7,6 +8,9 @@
 <p>
   <a href="{{ url_for('admin.edit', port2=entry.port2) }}">edit entry</a> ·
   <a href="{{ url_for('admin.list_entries') }}">all entries</a>
+  {% if entry.video_enabled() and entry.active_video_ports() %}
+  · <a href="{{ url_for('video.index', port2=entry.port2) }}">watch live video &rarr;</a>
+  {% endif %}
 </p>
 
 <h3>Dates</h3>
@@ -32,9 +36,20 @@
       <td>{{ s.name }}</td>
       <td>{{ s.size }} bytes</td>
       <td><time datetime="{{ s.mtime_iso }}">{{ s.mtime_utc }}</time></td>
-      <td>
-        <a href="{{ url_for('admin_logs.admin_download',
-                            port2=entry.port2, date=date, session_name=s.name) }}">download</a>
+      <td class="actions">
+        <a class="iconbtn" title="Download" aria-label="Download"
+           href="{{ url_for('admin_logs.admin_download', port2=entry.port2, date=date, session_name=s.name) }}">{{ icon('download') }}</a>
+        <form method="post" class="inline"
+              action="{{ url_for('admin_logs.admin_delete_session', port2=entry.port2, date=date, session_name=s.name) }}"
+              onsubmit="return confirm('Delete ' + {{ s.name|tojson }} + '?\n\nThis cannot be undone.');">
+          {{ del_form.csrf_token }}
+          <button type="submit" class="iconbtn danger-icon"
+                  title="Delete" aria-label="Delete">{{ icon('trash') }}</button>
+        </form>
+        {% if s.is_video %}
+        <a class="iconbtn" title="Play" aria-label="Play"
+           href="{{ url_for('admin_logs.admin_watch', port2=entry.port2, date=date, session_name=s.name) }}">{{ icon('play') }}</a>
+        {% endif %}
       </td>
     </tr>
     {% else %}
@@ -42,5 +57,11 @@
     {% endfor %}
   </tbody>
 </table>
+<form method="post" class="inline day-delete"
+      action="{{ url_for('admin_logs.admin_delete_date', port2=entry.port2, date=date) }}"
+      onsubmit="return confirm('Delete every log and video for {{ date }}?\n\nThis cannot be undone. Anything still being written is kept.');">
+  {{ del_form.csrf_token }}
+  <button type="submit" class="danger">{{ icon('trash') }} Delete all of {{ date }}</button>
+</form>
 {% endif %}
 {% endblock %}

@@ -14,6 +14,7 @@ from . import connections as conn_db
 from .auth import is_admin, require_admin
 from .db import tdb_readonly, tdb_transaction
 from .forms import AdminAddForm, AdminEditForm, DeleteForm, KillForm
+from . import videoform
 
 bp = Blueprint('admin', __name__, url_prefix='/admin')
 
@@ -164,11 +165,10 @@ def edit(port2):
 
             ke.name = form.name.data or ''
             if form.port1.data != ke.port1:
-                # check uniqueness of new port1 (must not collide with any
-                # other port1 or port2)
-                ports1, ports2 = keydb_lib.get_port_sets(db)
-                ports1.discard(ke.port1)  # our own old value is OK
-                if form.port1.data in ports1 or form.port1.data in ports2:
+                # New port1 must not collide with any port any other entry
+                # binds -- port1, port2 or a video port.
+                used = keydb_lib.ports_in_use(db, exclude_port2=port2)
+                if form.port1.data in used or form.port1.data == ke.port2:
                     flash('port1 %d is already in use.' % form.port1.data,
                           'error')
                     return redirect(url_for('admin.edit', port2=port2))
@@ -213,6 +213,10 @@ def edit(port2):
                 ke.flags &= ~keydb_lib.FLAG_USE_TZ
             if form.reset_timestamp.data:
                 ke.timestamp = 0
+            err = videoform.apply(form, ke, db)
+            if err:
+                flash(err, 'error')
+                return redirect(url_for('admin.edit', port2=port2))
             ke.store(db)
 
             # if the admin just demoted themselves, drop their session role
@@ -235,6 +239,7 @@ def edit(port2):
         form.fc_sysid.data = ke.fc_sysid
         form.tz_offset_hours.data = ke.tz_offset_hours
         form.use_tz.data = bool(ke.flags & keydb_lib.FLAG_USE_TZ)
+        videoform.populate(form, ke, db)
     return render_template('admin_edit.html', form=form, entry=ke,
                            delete_form=delete_form)
 

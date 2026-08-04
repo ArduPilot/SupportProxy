@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}{{ name }} — {{ config.WEBUI_TITLE }}{% endblock %}
+{% block content %}
+<h2>{{ name }}</h2>
+<p>
+  <a href="{{ back_url }}">&larr; back to {{ date }}</a> ·
+  <a href="{{ download_url }}">download</a>
+</p>
+
+{# Browsers cannot demux MPEG-TS, so the recording is remuxed to
+   fragmented MP4 on the way out -- a stream copy, no decoding. That
+   plays in a plain <video> element with no player library, which is
+   both far more reliable than driving Media Source Extensions from
+   JavaScript and the only thing that works with JS disabled. #}
+{% if have_ffmpeg %}
+<video id="player" controls playsinline preload="auto" autoplay muted
+       width="900" style="max-width:100%;background:#000"
+       src="{{ mp4_url }}"></video>
+<div class="video-status" id="status"></div>
+<p class="hint">Remuxed on the fly, so playback starts immediately but
+  cannot be scrubbed ahead of what has loaded. Download the file to seek
+  freely.</p>
+{% else %}
+<p class="flash flash-error">ffmpeg is not installed on this server, so
+  the recording cannot be remuxed for browser playback. Download it, or
+  use the command below.</p>
+{% endif %}
+
+<details class="video-fallback"{% if not have_ffmpeg %} open{% endif %}>
+  <summary>Play outside the browser</summary>
+  <p>Works for any codec, including ones a browser cannot decode:</p>
+  <pre><code>ffplay '{{ request.url_root.rstrip('/') }}{{ stream_url }}'</code></pre>
+  <p>A recording is a plain MPEG-TS file and needs no finalising, so even
+     a segment cut short by a crash plays in VLC as-is.</p>
+</details>
+
+{% if have_ffmpeg %}
+<script>
+(function () {
+  // The only failure worth explaining is a codec the browser cannot
+  // decode -- HEVC, in practice. Everything else the <video> element
+  // reports for itself.
+  var video = document.getElementById('player');
+  var status = document.getElementById('status');
+  video.addEventListener('error', function () {
+    status.textContent = 'This browser could not decode the recording. ' +
+      'If it is HEVC that is expected — use the command below.';
+  });
+  video.addEventListener('loadedmetadata', function () {
+    status.textContent = video.videoWidth + 'x' + video.videoHeight;
+  });
+})();
+</script>
+{% endif %}
+{% endblock %}

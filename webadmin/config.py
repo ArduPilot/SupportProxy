@@ -32,6 +32,12 @@ class DefaultConfig:
     # started from. Tests override this to a tmpdir.
     LOGS_DIR = os.environ.get('WEBADMIN_LOGS_DIR', 'logs')
 
+    # A log file modified this recently is treated as still being
+    # written and is refused for deletion. Shares the daemon's env var
+    # so the two cannot disagree about what "active" means.
+    LOG_ACTIVE_GRACE_S = int(
+        os.environ.get('SUPPORTPROXY_ACTIVE_FILE_GRACE', '60'))
+
     # Cookie hardening. Set WEBADMIN_INSECURE_COOKIES=1 only for local HTTP dev.
     SESSION_COOKIE_SECURE = not _bool_env('WEBADMIN_INSECURE_COOKIES')
     SESSION_COOKIE_HTTPONLY = True

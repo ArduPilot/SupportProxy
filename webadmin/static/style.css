@@ -113,3 +113,124 @@ button.copy-partner-text {
 }
 
 p.hint { font-size: 0.9em; color: #555; max-width: 48em; }
+
+/* Per-field help tooltips (templates/_macros.html).
+
+   The whole .field row is the hover target. An earlier version put the
+   text behind a small "?" you had to aim at, which is more work than
+   reading the sentence is worth.
+
+   `.field:hover > .tip` is deliberately a direct-child selector: the
+   per-slot video row holds three separately documented checkboxes, and
+   a descendant selector would throw all three tooltips up together.
+   Those inner ones are triggered by their own .opt instead, while
+   still being positioned against the row so they cannot run off the
+   page.
+
+   Shown with opacity rather than display so appearing can be delayed.
+   Without the delay, every row you cross on the way to the one you want
+   flashes a tooltip at you. Hiding has no delay -- the delay is only
+   applied in the :hover rule. */
+.field { position: relative; }
+.field.has-tip > label,
+.opt { text-decoration: underline dotted #999; text-underline-offset: 3px; }
+/* The underline is the "there is help here" cue. On a slot row each
+   control is its own hover target, so the cue belongs on each of them
+   rather than on the row's label. */
+.opt input { text-decoration: none; }
+.tip {
+    position: absolute;
+    left: 0;
+    top: 100%;
+    margin-top: 0.2rem;
+    z-index: 20;
+    width: max-content;
+    max-width: min(42em, calc(100vw - 2rem));
+    padding: 0.5rem 0.7rem;
+    background: #2c2c2c;
+    color: #f2f2f2;
+    border-radius: 4px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+    font-size: 0.85rem;
+    font-weight: 400;
+    line-height: 1.4;
+    text-align: left;
+    white-space: normal;
+    pointer-events: none;   /* never steal a click from the field */
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.12s linear, visibility 0s linear 0.12s;
+}
+.field:hover > .tip,
+.field:focus-within > .tip,
+.opt:hover .tip,
+.opt:focus-within .tip {
+    opacity: 1;
+    visibility: visible;
+    transition: opacity 0.12s linear 0.4s, visibility 0s linear 0.4s;
+}
+.tip code { color: #ffd9a0; }
+
+/* Per-slot video options. Each checkbox, its text and its help marker
+   are one unbreakable unit, or the marker wraps onto a line of its own
+   and reads as belonging to the next row. The group as a whole still
+   wraps between options on a narrow screen. */
+.video-slot-opts .opt { white-space: nowrap; margin-right: 0.7rem; }
+
+/* A port is five digits, so the global 18em minimum on inputs just
+   pushes the per-slot options onto a second line. */
+.video-slot input[type=number] { min-width: 7em; width: 7em; }
+
+/* Server page: the daemon's own log and controls. */
+.logview {
+    background: #111;
+    color: #ddd;
+    padding: 0.6em 0.8em;
+    border-radius: 4px;
+    max-height: 60vh;
+    overflow: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-size: 0.85em;
+    line-height: 1.35;
+}
+.log-controls {
+    display: flex;
+    align-items: center;
+    gap: 1em;
+    margin: 0.4em 0;
+}
+.help-inline {
+    font-size: 0.85em;
+    opacity: 0.75;
+    margin-left: 0.6em;
+}
+
+/* Action icons in the log listings.
+
+   The cell holds a mix of links and a one-button form; without
+   inline-block on both, the form takes a line of its own and the
+   delete drops below the other actions. */
+.icon {
+    width: 1.15em;
+    height: 1.15em;
+    vertical-align: -0.2em;
+    fill: currentColor;
+}
+td.actions { white-space: nowrap; }
+td.actions > a,
+td.actions > form { display: inline-block; vertical-align: middle; }
+.iconbtn {
+    background: none;
+    border: none;
+    padding: 0.15em 0.35em;
+    font: inherit;
+    color: #1a4f8a;
+    cursor: pointer;
+    line-height: 1;
+    border-radius: 3px;
+}
+.iconbtn:hover { background: rgba(0, 0, 0, 0.07); }
+.iconbtn.danger-icon { color: #b03030; }
+button.danger .icon { vertical-align: -0.2em; margin-right: 0.2em; }
+form.day-delete { margin-top: 0.6em; }

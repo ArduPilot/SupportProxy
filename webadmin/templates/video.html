@@ -1,0 +1,316 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Video &mdash; {{ entry.port1 }}/{{ port2 }} {{ entry.name }}</h2>
+
+{% if not enabled %}
+  <p><em>Video is not enabled for this entry.</em>
+  {% if 'video_port_1' %}Enable it on the settings page.{% endif %}</p>
+{% elif not slots %}
+  <p><em>No video ports have been allocated to this entry yet &mdash;
+  ask an admin to allocate one.</em></p>
+{% else %}
+
+<p class="hint">A stream only appears while an authorised publisher is
+sending. Playback starts at the last keyframe, so it can take a moment
+to appear.</p>
+
+{% for s in slots %}
+  <div class="video-slot-panel" data-slot="{{ s.slot }}">
+    <h3>Slot {{ s.number }} &mdash; port {{ s.port }}</h3>
+
+    {# One element for the life of the page. Picture-in-Picture is bound
+       to the element, so replacing it on reconnect tears PIP down --
+       see the teardown note in the script. #}
+    <video id="player{{ s.number }}" controls muted playsinline
+           width="640" style="max-width:100%;background:#000"></video>
+
+    <div class="video-status" id="status{{ s.number }}">Connecting&hellip;</div>
+
+    {# The fallback is not an error path: HEVC simply cannot be played
+       by most browsers, and a copyable command is more use than a
+       black rectangle. #}
+    {# The flags are not optional decoration. ffplay's default probe is
+       analyzeduration=5s, and it spends all of it before showing
+       anything -- measured as ~6.6s behind live, against ~0.9s with
+       these. VLC's default network cache is 1s on top of its own probe.
+       A command without them looks like the proxy is slow. #}
+    <details class="video-fallback">
+      <summary>Play outside the browser</summary>
+      <p>Works for any codec, including ones a browser cannot decode.
+         The flags cut the startup probe, which is otherwise 5 seconds
+         of lag:</p>
+      <pre><code>ffplay -fflags nobuffer -flags low_delay -framedrop \
+       -probesize 500000 -analyzeduration 1000000 \
+       http://{{ host }}:{{ s.port }}/v{{ s.number }}.ts{% if s.needs_password %}?pw=YOUR_VIEWER_PASSWORD{% endif %}</code></pre>
+      <pre><code>vlc --network-caching=200 --live-caching=200 \
+    http://{{ host }}:{{ s.port }}/v{{ s.number }}.ts{% if s.needs_password %}?pw=YOUR_VIEWER_PASSWORD{% endif %}</code></pre>
+    </details>
+  </div>
+{% endfor %}
+
+<script src="{{ url_for('static', filename='vendor/mpegts.js/mpegts.js') }}"></script>
+<script>
+(function () {
+  var slots = [
+    {% for s in slots %}
+    { n: {{ s.number }}, slot: {{ s.slot }}, port: {{ s.port }},
+      token: {{ s.token|tojson }} }{{ "," if not loop.last }}
+    {% endfor %}
+  ];
+  var host = {{ host|tojson }};
+  var scheme = (window.location.protocol === 'https:') ? 'wss' : 'ws';
+  var tokenUrl = {{ token_url|tojson }};
+
+  slots.forEach(function (s) {
+    var video = document.getElementById('player' + s.n);
+    var status = document.getElementById('status' + s.n);
+    var player = null;
+    var retryMs = 1000;
+    var pending = false;
+    var codecFailed = false;
+    var lastCodec = '';
+    // Consecutive media errors with no successful playback between
+    // them. Reset by MEDIA_INFO, so a stream that plays and later
+    // hiccups keeps its full retry budget.
+    var mediaErrors = 0;
+    var firstToken = s.token;
+
+    function say(msg) { status.textContent = msg; }
+
+    /*
+      The decoder's own verdict. mpegts.js only ever reports the
+      consequence -- "appendBuffer failed, HTMLMediaElement.error is not
+      null" -- which says the element had already failed and tells you
+      nothing about why. This is where the actual reason lives.
+     */
+    function mediaErrorText() {
+      var e = video.error;
+      if (!e) { return ''; }
+      var names = ['', 'aborted', 'network', 'decode', 'src-not-supported'];
+      return (names[e.code] || ('code ' + e.code))
+             + (e.message ? ': ' + e.message : '');
+    }
+
+    video.addEventListener('error', function () {
+      try {
+        console.error('[video] slot ' + s.n + ' element error',
+                      video.error && video.error.code,
+                      video.error && video.error.message);
+      } catch (e) { /* console may be absent */ }
+    });
+
+    function describe() {
+      var size = video.videoWidth
+          ? video.videoWidth + '×' + video.videoHeight : '';
+      say(('Playing ' + (lastCodec ? lastCodec + ' ' : '') + size).trim());
+    }
+
+    /*
+      Progress is taken from the element, not from mpegts.js.
+
+      MEDIA_INFO only fires once MediaInfo.isComplete(), which requires
+      hasAudio to be exactly true or false. It initialises to null and is
+      only set when audio metadata arrives, so a video-only stream --
+      which is what the backend produces by default, with -an -- leaves
+      it null and the event never fires at all. That left the status on
+      its initial text, and, because the media-error counter was reset
+      only there, let three transient errors over the life of a page
+      latch a stream that was playing perfectly well.
+
+      "playing" is the honest signal anyway: it means frames are being
+      presented, where MEDIA_INFO only ever meant metadata parsed.
+     */
+    video.addEventListener('loadedmetadata', describe);
+    video.addEventListener('playing', function () {
+      retryMs = 1000;
+      attempt = 0;
+      mediaErrors = 0;
+      describe();
+    });
+
+    /*
+      A token lives 60s; a page stays open far longer. Minting one at
+      render and reusing it means every reconnect after the first minute
+      is refused, which presents as "it only works if I reload".
+     */
+    function tokenFor(cb) {
+      if (firstToken) {
+        var t = firstToken;
+        firstToken = null;
+        cb(t);
+        return;
+      }
+      fetch(tokenUrl + '&slot=' + s.slot, { credentials: 'same-origin' })
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (j) { cb(j && j.token); })
+        .catch(function () { cb(null); });
+    }
+
+    /*
+      Full teardown, then a brand-new <video>.
+
+      mpegts.js needs pause -> unload -> detachMediaElement -> destroy.
+      Skipping detachMediaElement leaves the element bound to the old,
+      already-ended MediaSource, and the next player cannot attach a
+      fresh one -- the reconnect then does nothing at all until the page
+      is reloaded, which is exactly the reported symptom.
+
+      Replacing the element as well costs nothing and makes that whole
+      class of stale-binding bug impossible.
+     */
+    /*
+      Tear down the player, and ONLY the player.
+
+      mpegts.js needs pause -> unload -> detachMediaElement -> destroy.
+      detachMediaElement is the call that unbinds the MediaSource, which
+      is what makes the same element reusable for the next connection.
+
+      The element itself must survive. Picture-in-Picture is bound to
+      the element, not to the page: replacing it drops PIP back into the
+      page in Firefox and leaves an orphaned, frozen PIP window in
+      Chrome. For the same reason the src attribute is left alone --
+      clearing it ends playback on the element and some browsers exit
+      PIP when that happens.
+     */
+    function teardown() {
+      if (!player) {
+        return;
+      }
+      try { player.pause(); } catch (e) { /* not playing */ }
+      try { player.unload(); } catch (e) { /* not loaded */ }
+      try { player.detachMediaElement(); } catch (e) { /* not attached */ }
+      try { player.destroy(); } catch (e) { /* already gone */ }
+      player = null;
+    }
+
+    var attempt = 0;
+
+    function schedule() {
+      // One disconnect can raise several events; without this each
+      // would start its own player and they would race.
+      if (pending || codecFailed) { return; }
+      pending = true;
+      attempt++;
+      var wait = retryMs;
+      // Capped low on purpose. A retry costs one WebSocket attempt, and
+      // the thing being waited for is usually a publisher being
+      // restarted by hand -- a 15s ceiling makes that look dead.
+      retryMs = Math.min(retryMs * 2, 5000);
+      setTimeout(function () { pending = false; connect(); }, wait);
+    }
+
+    function connect() {
+      if (codecFailed) { return; }
+      teardown();
+      tokenFor(function (tok) {
+        if (!tok) {
+          say('Could not get a viewer token \u2014 retrying\u2026');
+          schedule();
+          return;
+        }
+        start(scheme + '://' + host + ':' + s.port + '/v' + s.n +
+              '?t=' + encodeURIComponent(tok));
+      });
+    }
+
+    function start(url) {
+      player = mpegts.createPlayer(
+        { type: 'mpegts', isLive: true, url: url },
+        { enableWorker: true, liveBufferLatencyChasing: true });
+
+      // A publisher going away is a *clean* close, not an error: the
+      // proxy ends the stream deliberately. mpegts.js reports that as
+      // LOADING_COMPLETE, so listening only for ERROR misses the one
+      // case this reconnect exists for.
+      player.on(mpegts.Events.LOADING_COMPLETE, function () {
+        say('Stream ended \u2014 waiting for a publisher\u2026');
+        schedule();
+      });
+      player.on(mpegts.Events.ERROR, function (type, detail, info) {
+        // Keep the real error where it can be read; the status line has
+        // room for one line and this is what a diagnosis needs.
+        try {
+          console.error('[video] slot ' + s.n + ' error', type, detail,
+                        info && (info.msg || info.code),
+                        '| element:', mediaErrorText());
+        } catch (e) { /* console may be absent */ }
+
+        /*
+          An unsupported codec or container is permanent outright. Other
+          media errors may be transient -- Chrome raises them far more
+          readily than Firefox -- so they retry, but only a bounded
+          number of times: a stream this browser simply cannot play
+          errors again every time, and retrying for ever is a flashing
+          loop rather than an answer.
+         */
+        var permanent =
+            (detail === mpegts.ErrorDetails.MEDIA_CODEC_UNSUPPORTED
+             || detail === mpegts.ErrorDetails.MEDIA_FORMAT_UNSUPPORTED);
+        if (type === mpegts.ErrorTypes.MEDIA_ERROR) {
+          mediaErrors++;
+          if (permanent || mediaErrors >= 3) {
+            codecFailed = true;
+            var why = mediaErrorText();
+            say('This browser cannot play ' + (lastCodec || 'this stream') +
+                ' \u2014 ' + (why || detail) + '. If it is HEVC that is ' +
+                'expected \u2014 use the command below.');
+            return;
+          }
+          say('Media error (' + detail + ') \u2014 retrying\u2026');
+          schedule();
+          return;
+        }
+        say('Waiting for a publisher\u2026 (attempt ' + (attempt + 1) + ')');
+        schedule();
+      });
+      /*
+        Only for the codec name, and only when it arrives at all: see
+        the element listeners for why this cannot be relied on.
+       */
+      player.on(mpegts.Events.MEDIA_INFO, function (info) {
+        lastCodec = info.videoCodec || '';
+        describe();
+      });
+
+      var wasPip = (document.pictureInPictureElement === video);
+
+      player.attachMediaElement(video);
+      player.load();
+      video.play().catch(function () { say('Ready \u2014 press play.'); });
+
+      /*
+        Keeping the element is what preserves Picture-in-Picture across
+        a reconnect, position and size included. This is only a
+        fallback for a browser that drops it anyway: it cannot restore
+        where the window was, so it is strictly worse than not losing
+        it, and it is allowed to fail silently (a re-request without a
+        user gesture is often refused).
+       */
+      if (wasPip && document.pictureInPictureEnabled) {
+        video.addEventListener('loadedmetadata', function once() {
+          video.removeEventListener('loadedmetadata', once);
+          if (document.pictureInPictureElement !== video) {
+            video.requestPictureInPicture().catch(function () {});
+          }
+        });
+      }
+    }
+
+    // Registered once, not per connection: the element outlives every
+    // player now, so re-adding this on each reconnect would stack up a
+    // handler per attempt.
+    video.addEventListener('ended', function () {
+      say('Stream ended \u2014 waiting for a publisher\u2026');
+      schedule();
+    });
+
+    if (!window.mpegts || !mpegts.isSupported()) {
+      say('This browser cannot play MPEG-TS. Use the command below.');
+      return;
+    }
+    connect();
+  });
+})();
+</script>
+{% endif %}
+{% endblock %}
