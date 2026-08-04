@@ -20,11 +20,14 @@ import keydb_lib  # noqa: E402
 KEYDB_PY = os.path.join(_REPO_ROOT, 'keydb.py')
 
 
-def test_pack_format_size_is_168():
-    """The on-disk record is 168 bytes after appending log_retention_days
-    + reserved[16]."""
-    assert struct.calcsize(keydb_lib.PACK_FORMAT) == 168
-    assert keydb_lib.KEYENTRY_CURRENT_SIZE == 168
+def test_pack_format_size_is_248():
+    """The on-disk record is 248 bytes after appending the video fields.
+
+    keydb.h carries a matching static_assert, so this catches either side
+    drifting from the other.
+    """
+    assert struct.calcsize(keydb_lib.PACK_FORMAT) == 344
+    assert keydb_lib.KEYENTRY_CURRENT_SIZE == 344
 
 
 def test_pack_unpack_roundtrip():
@@ -35,7 +38,7 @@ def test_pack_unpack_roundtrip():
     e.flags = keydb_lib.FLAG_TLOG | keydb_lib.FLAG_ADMIN
     e.log_retention_days = 0.0001
     data = e.pack()
-    assert len(data) == 168
+    assert len(data) == 344
 
     e2 = keydb_lib.KeyEntry(0)
     e2.unpack(data)
@@ -45,7 +48,7 @@ def test_pack_unpack_roundtrip():
     # float32 quantisation: tolerate ~1e-7 relative error
     assert abs(e2.log_retention_days - 0.0001) < 1e-7
     assert e2.tz_offset_hours == 0.0
-    assert e2.reserved == [0] * 14
+    assert e2.reserved == [0] * keydb_lib.RESERVED_WORDS
 
 
 def test_legacy_104byte_record_zero_extends():
@@ -71,11 +74,16 @@ def test_legacy_104byte_record_zero_extends():
     assert decoded.log_retention_days == 0.0
     assert decoded.fc_sysid == 0
     assert decoded.tz_offset_hours == 0.0
-    assert decoded.reserved == [0] * 14
+    assert decoded.reserved == [0] * keydb_lib.RESERVED_WORDS
 
-    # Re-pack: should emit the full 168-byte modern layout.
+    # video fields default to unset
+    assert decoded.video_ports == [0] * keydb_lib.MAX_VIDEO_PORTS
+    assert decoded.video_flags == 0
+    assert not decoded.video_viewer_pass_set()
+
+    # Re-pack: should emit the full 248-byte modern layout.
     re = decoded.pack()
-    assert len(re) == 168
+    assert len(re) == 344
 
 
 def test_forward_compat_tail_is_preserved():
@@ -94,7 +102,7 @@ def test_forward_compat_tail_is_preserved():
     assert decoded._tail == extra
     re = decoded.pack()
     assert re.endswith(extra)
-    assert len(re) == 168 + len(extra)
+    assert len(re) == 344 + len(extra)
 
 
 def test_flag_names_includes_tlog():
@@ -318,7 +326,7 @@ def test_tz_offset_round_trip():
     e2 = keydb_lib.KeyEntry(0)
     e2.unpack(e.pack())
     assert abs(e2.tz_offset_hours - 5.5) < 1e-6
-    assert e2.reserved == [0] * 14
+    assert e2.reserved == [0] * keydb_lib.RESERVED_WORDS
 
 
 def test_format_tz_offset():
