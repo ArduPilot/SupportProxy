@@ -12,6 +12,10 @@ cd "$(dirname "$0")/.."
 
 echo "=== Setting up CI environment for SupportProxy tests ==="
 
+# ffmpeg is a real test dependency, not a convenience. RTSP and RTMP
+# ingest hand the stream to an ffmpeg child, and the video tests skip
+# themselves without it -- so leaving it out means the whole ingest,
+# recording and viewer suite silently does not run in CI.
 echo "Installing system dependencies..."
 sudo apt-get update
 sudo apt-get install -y \
@@ -24,7 +28,8 @@ sudo apt-get install -y \
     python3-tdb \
     python3-pip \
     python3-venv \
-    libtdb1
+    libtdb1 \
+    ffmpeg
 
 # Check if virtual environment exists
 if [ ! -d "venv" ]; then

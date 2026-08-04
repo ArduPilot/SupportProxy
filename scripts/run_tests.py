@@ -35,7 +35,17 @@ PHASES = [
                               'tests/test_conn2_slot_orphan.py',
                               'tests/test_drop_lost_request.py',
                               'tests/test_websocket_decode.py',
-                              'tests/test_ws_handshake_ordering.py']),
+                              'tests/test_ws_handshake_ordering.py',
+                              'tests/test_websocket_framing.py',
+                              'tests/test_bidi_video_preauth.py',
+                              'tests/test_video_schema.py',
+                              'tests/test_video_ports.py',
+                              'tests/test_video_child.py',
+                              'tests/test_video_ingest.py',
+                              'tests/test_video_record.py',
+                              'tests/test_video_view.py',
+                              'tests/test_video_rtsp.py',
+                              'tests/test_video_testtool.py']),
     ('Webadmin Tests',       ['tests/webadmin/']),
 ]
 
