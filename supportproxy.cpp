@@ -43,6 +43,9 @@
 #include "session.h"
 #include "cleanup.h"
 #include "websocket.h"
+#include "video.h"
+#include "videots.h"
+#include "videostream.h"
 
 #include <vector>
 
@@ -79,6 +82,14 @@ struct listen_port {
     int sock1_udp, sock2_udp;
     int sock1_tcp, sock2_listen;
     pid_t pid;
+    // Long-lived video child. Independent of `pid`: video must survive
+    // a MAVLink session ending, and must run with no session at all
+    // when the entry has a publish password.
+    pid_t video_pid;
+    time_t video_respawn_after;   // backoff so a child that dies at once
+                                  // can't be re-forked in a tight loop
+    uint32_t video_ports[KEY_MAX_VIDEO_PORTS];
+    uint32_t video_flags;
     uint32_t flags;
     uint8_t  fc_sysid;     // 0 = match any; otherwise the FC's MAVLink
                            // sysid for binlog reboot detection
@@ -135,12 +146,56 @@ static void close_sockets(struct listen_port *p);
   Used both at startup and on each reload; reload_ports() handles the
   flip side (entries that were in keys.tdb last time and aren't now).
  */
+/*
+  Video config that requires a rebind: the enable bit, the ports, and
+  the per-slot options (SRT vs plain MPEG-TS changes how the UDP socket
+  is used). A change here re-forks the video child. Policy that does not
+  need a rebind -- credentials, grace, quota -- is re-read by the child
+  itself on its tick, so those take effect without dropping a publisher.
+ */
+static bool video_cfg_differs(const struct listen_port *p, uint32_t flags,
+                              const uint32_t *video_ports,
+                              uint32_t video_flags)
+{
+    if ((p->flags & KEY_FLAG_VIDEO) != (flags & KEY_FLAG_VIDEO)) {
+        return true;
+    }
+    if (p->video_flags != video_flags) {
+        return true;
+    }
+    for (int i = 0; i < KEY_MAX_VIDEO_PORTS; i++) {
+        if (p->video_ports[i] != video_ports[i]) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static void video_stop_child(struct listen_port *p, const char *why)
+{
+    if (p->video_pid == 0) {
+        return;
+    }
+    printf("[%d] video child %d stopping (%s)\n",
+           p->port2, int(p->video_pid), why);
+    kill(p->video_pid, SIGTERM);
+}
+
 static void upsert_port(int port1, int port2, uint32_t flags, uint8_t fc_sysid,
-                        float tz_offset_hours)
+                        float tz_offset_hours, const uint32_t *video_ports,
+                        uint32_t video_flags)
 {
     for (auto *p = ports; p; p=p->next) {
         if (p->port2 == port2) {
             p->seen = true;
+            if (video_cfg_differs(p, flags, video_ports, video_flags)) {
+                // Ports/enable/slot options changed: the running child
+                // still binds the old set, so stop it and let
+                // check_children() re-fork with the new config.
+                video_stop_child(p, "video config changed");
+            }
+            memcpy(p->video_ports, video_ports, sizeof(p->video_ports));
+            p->video_flags = video_flags;
             if (p->removed) {
                 // came back: re-add as a fresh listener
                 printf("[%d] re-added (port1=%d)\n", port2, port1);
@@ -185,6 +240,10 @@ static void upsert_port(int port1, int port2, uint32_t flags, uint8_t fc_sysid,
     p->sock1_tcp = -1;
     p->sock2_listen = -1;
     p->pid = 0;
+    p->video_pid = 0;
+    p->video_respawn_after = 0;
+    memcpy(p->video_ports, video_ports, sizeof(p->video_ports));
+    p->video_flags = video_flags;
     p->flags = flags;
     p->fc_sysid = fc_sysid;
     p->tz_offset_hours = tz_offset_hours;
@@ -211,7 +270,7 @@ static int handle_record(struct tdb_context *db, TDB_DATA key, TDB_DATA data, vo
     // a MAVLink sysid (0..255), so truncate to uint8 once it crosses the
     // C++/binlog boundary. The CLI / web UI already cap at 255.
     upsert_port(k.port1, port2, k.flags, uint8_t(k.fc_sysid),
-                k.tz_offset_hours);
+                k.tz_offset_hours, k.video_ports, k.video_flags);
     return 0;
 }
 
@@ -331,6 +390,12 @@ static void main_loop(struct listen_port *p)
     // polluted by log traffic. Engineer→user direction is unchanged.
     BinlogWriter binlog;
     const bool binlog_enabled = (p->flags & KEY_FLAG_BINLOG) != 0;
+
+    // Video counts as a downstream consumer of user-side packets even
+    // though nothing here writes video: with bidi signing, the video
+    // side needs this session to reach an authenticated state, and on
+    // the TCP path that only happens inside the parse block below.
+    const bool video_enabled = (p->flags & KEY_FLAG_VIDEO) != 0;
     if (binlog_enabled) {
         // Per-entry sysid filter for SYSTEM_TIME-based reboot
         // detection. 0 (default) accepts any sysid.
@@ -613,10 +678,11 @@ static void main_loop(struct listen_port *p)
             }
             mavlink_message_t msg {};
 	    // Parse user-side bytes whenever there's anywhere for them to
-	    // go: a connected engineer (forward), tlog recording, or
-	    // binlog recording. Without one of those, the bytes are read
-	    // off the socket but discarded.
-	    if (conn2_count > 0 || binlog_enabled || tlog_enabled) {
+	    // go: a connected engineer (forward), tlog recording, binlog
+	    // recording, or video (which needs the session to authenticate).
+	    // Without one of those, the bytes are read off the socket but
+	    // discarded.
+	    if (conn2_count > 0 || binlog_enabled || tlog_enabled || video_enabled) {
 		uint8_t *buf0 = buf;
 		while (n > 0 && mav1.receive_message(buf0, n, msg)) {
 		    mav1_rx_msgs++;
@@ -807,8 +873,18 @@ static void main_loop(struct listen_port *p)
             count1++;
 	    mavlink_message_t msg {};
 	    // Parse whenever a downstream consumer needs it (engineer
-	    // forward, tlog, or binlog). Otherwise just discard.
-	    if (conn2_count > 0 || binlog_enabled || tlog_enabled) {
+	    // forward, tlog, binlog, or video). Otherwise just discard.
+	    //
+	    // video_enabled is load-bearing here, not just symmetry. On
+	    // this TCP path conn1 latches at accept(), before any
+	    // signature check, and receive_message() below is the only
+	    // thing that ever sets is_authenticated(). A bidi entry with
+	    // video but no engineer/tlog/binlog would therefore never
+	    // authenticate, and the CONN1_BIDI_PREAUTH_SECONDS check
+	    // would kill the session. (The UDP path differs: it
+	    // validates inside its latch block, so it authenticates
+	    // regardless of this gate.)
+	    if (conn2_count > 0 || binlog_enabled || tlog_enabled || video_enabled) {
 		uint8_t *buf0 = buf;
 		while (n > 0 && mav1.receive_message(buf0, n, msg)) {
 		    mav1_rx_msgs++;
@@ -1127,6 +1203,101 @@ static void open_sockets(struct listen_port *p)
 }
 
 /*
+  Fork the long-lived video child for one entry.
+
+  Unlike handle_connection()'s per-pair child this is forked from
+  reload_ports() rather than on traffic, and it outlives any MAVLink
+  session. The parent owns it directly, which is what makes shutdown
+  ordering knowable: check_children() reaps it and clears video_pid.
+ */
+static void fork_video_child(struct listen_port *p)
+{
+    int ready[2] = { -1, -1 };
+    if (pipe(ready) != 0) {
+        printf("[%d] video: pipe failed - %s\n", p->port2, strerror(errno));
+        return;
+    }
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        printf("[%d] video: fork failed - %s\n", p->port2, strerror(errno));
+        close(ready[0]);
+        close(ready[1]);
+        return;
+    }
+    if (pid == 0) {
+        close(ready[0]);
+        // Die with the parent. PDEATHSIG only fires for a parent that
+        // was alive when it was armed, hence the getppid() recheck.
+        prctl(PR_SET_PDEATHSIG, SIGTERM);
+        if (getppid() == 1) {
+            _exit(0);
+        }
+        // The session children set SIGCHLD to SIG_IGN, which makes
+        // waitpid() fail with ECHILD. We are not descended from them,
+        // but be explicit: this child supervises its own subprocesses
+        // in later phases and needs real exit statuses.
+        signal(SIGCHLD, SIG_DFL);
+        signal(SIGUSR1, SIG_DFL);
+
+        // fd sanitation. Being a child of the *parent* rather than of a
+        // session child, we never inherit conn1, the accepted engineer
+        // sockets, SSL state or the open tlog/binlog fds -- only the
+        // listeners and the epoll instance, which all go here.
+        if (g_epfd != -1) {
+            close(g_epfd);
+            g_epfd = -1;
+        }
+        for (auto *p2 = ports; p2; p2 = p2->next) {
+            close_sockets(p2);
+        }
+        video_child_main(p->port2, ready[1]);
+        // video_child_main is noreturn and _exit()s: never fall back
+        // into the parent's code with copied destructors that would
+        // close fd numbers we have since reused.
+    }
+
+    close(ready[1]);
+    p->video_pid = pid;
+
+    // Read the readiness byte. The child writes it right after binding,
+    // and closes the fd on any exit path, so this cannot hang.
+    uint8_t st = 0;
+    ssize_t n = read(ready[0], &st, 1);
+    close(ready[0]);
+    if (n == 1 && st != 0) {
+        printf("[%d] video child %d started but a port failed to bind - %s\n",
+               p->port2, int(pid), strerror(int(st)));
+    } else if (n == 1) {
+        printf("[%d] video child %d ready\n", p->port2, int(pid));
+    } else {
+        printf("[%d] video child %d exited before signalling ready\n",
+               p->port2, int(pid));
+    }
+}
+
+/*
+  Start or stop video children so the running set matches keys.tdb.
+
+  Called from main() as well as reload_ports(): without the startup
+  call, an entry with video enabled would sit with its ports unbound
+  until the first 5 s reload, which looks like the feature is broken.
+ */
+static void reconcile_video_children(void)
+{
+    const time_t now = time(nullptr);
+    for (auto *p = ports; p; p=p->next) {
+        const bool want = !p->removed
+            && video_entry_wants_child(p->flags, p->video_ports);
+        if (want && p->video_pid == 0 && now >= p->video_respawn_after) {
+            fork_video_child(p);
+        } else if (!want && p->video_pid != 0) {
+            video_stop_child(p, "video disabled");
+        }
+    }
+}
+
+/*
   check for child exit. Returns true if a per-port-pair child was
   reaped (the caller should refresh the epoll set so the reopened
   listeners are watched again).
@@ -1148,11 +1319,34 @@ static bool check_children(void)
         }
         bool found_child = false;
         for (auto *p = ports; p; p=p->next) {
+            if (p->video_pid == pid) {
+                // Video children are long-lived, so an exit is either a
+                // config change we asked for or a crash. Either way the
+                // backoff keeps a child that dies immediately from being
+                // re-forked in a tight loop; reload_ports() re-forks it.
+                printf("[%d] video child %d exited (status %d)\n",
+                       p->port2, int(pid),
+                       WIFEXITED(wstatus) ? WEXITSTATUS(wstatus) : -1);
+                p->video_pid = 0;
+                p->video_respawn_after = time(nullptr) + 2;
+                conn_remove_video(p->port2);
+                found_child = true;
+                break;
+            }
             if (p->pid == pid) {
                 printf("[%d] Child %d exited\n", p->port2, int(pid));
                 p->pid = 0;
-		// drop any live-connection records the child wrote
-		conn_remove_port2(p->port2);
+		// Drop the records this child wrote -- but only its own
+		// index range. A video child for the same entry may still
+		// be running, and whole-port2 delete would erase its rows.
+		{
+		    auto *cdb = conn_db_open_transaction();
+		    if (cdb != nullptr) {
+			conn_delete_index_range(cdb, p->port2, 0,
+						VIDEO_CONN_INDEX_BASE - 1);
+			conn_db_close_commit(cdb);
+		    }
+		}
 		found_child = true;
 		reaped = true;
 		// Don't reopen listening sockets for an entry that was
@@ -1293,6 +1487,7 @@ static void reload_ports(void)
             if (p->pid != 0) {
                 kill(p->pid, SIGTERM);
             }
+            video_stop_child(p, "entry removed");
             conn_remove_port2(p->port2);
         }
     }
@@ -1303,6 +1498,8 @@ static void reload_ports(void)
 	    open_sockets(p);
 	}
     }
+
+    reconcile_video_children();
 }
 
 /*
@@ -1402,6 +1599,24 @@ static void wait_connection(void)
 int main(int argc, char *argv[])
 {
     setvbuf(stdout, nullptr, _IOLBF, 4096);
+    // Unit checks for the TS scanner's bit twiddling. End-to-end tests
+    // find that class of bug only intermittently, so it gets a direct
+    // entry point that the suite invokes.
+    if (argc > 1 && strcmp(argv[1], "--selftest-video") == 0) {
+        int rc = videots_selftest();
+        if (rc == 0) {
+            rc = videostream_selftest();
+        }
+        if (rc == 0) {
+            // A short deterministic fuzz run on every invocation, so a
+            // regression in the PSI parsing shows up in the normal
+            // suite rather than only in a dedicated campaign.
+            const unsigned iters = argc > 2 ? unsigned(atoi(argv[2])) : 2000;
+            const uint32_t seed = argc > 3 ? uint32_t(atoi(argv[3])) : 1;
+            rc = videots_fuzz(iters, seed);
+        }
+        return rc;
+    }
     // a peer-closed TCP/WS/SSL connection must fail the write with
     // EPIPE, not kill the child (and its whole session) with SIGPIPE
     signal(SIGPIPE, SIG_IGN);
@@ -1420,6 +1635,7 @@ int main(int argc, char *argv[])
     printf("Added %u ports\n", unsigned(count_ports()));
     db_close_cancel(db);
 
+    reconcile_video_children();
     fork_cleanup_child();
 
     wait_connection();

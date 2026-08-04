@@ -12,7 +12,7 @@ CXXFLAGS := $(CXXFLAGS) -DMAVLINK_SIGNING_TIMESTAMP_LIMIT=600
 LIBS := -ltdb -lssl -lcrypto
 
 # Source files
-SOURCES := supportproxy.cpp mavlink.cpp util.cpp keydb.cpp conntdb.cpp tlog.cpp session.cpp binlog.cpp cleanup.cpp websocket.cpp
+SOURCES := supportproxy.cpp mavlink.cpp util.cpp keydb.cpp conntdb.cpp tlog.cpp session.cpp binlog.cpp cleanup.cpp websocket.cpp video.cpp videoauth.cpp videots.cpp videostream.cpp videorec.cpp videoview.cpp httpreq.cpp videortsp.cpp videortmp.cpp
 OBJECTS := $(SOURCES:.cpp=.o)
 TARGET := supportproxy
 
@@ -73,7 +73,7 @@ mavlink.o: mavlink.cpp mavlink.h $(MAVLINK_DIR)/protocol.h
 
 # Dependencies. mavlink.h includes keydb.h, so any object that pulls in
 # mavlink.h transitively depends on keydb.h too.
-supportproxy.o: supportproxy.cpp mavlink.h util.h keydb.h conntdb.h tlog.h binlog.h session.h cleanup.h websocket.h
+supportproxy.o: supportproxy.cpp mavlink.h util.h keydb.h conntdb.h tlog.h binlog.h session.h cleanup.h websocket.h video.h videots.h
 mavlink.o: mavlink.cpp mavlink.h keydb.h $(MAVLINK_DIR)/protocol.h
 util.o: util.cpp util.h
 keydb.o: keydb.cpp keydb.h
@@ -83,6 +83,15 @@ session.o: session.cpp session.h
 binlog.o: binlog.cpp binlog.h session.h mavlink.h util.h cleanup.h $(MAVLINK_DIR)/protocol.h
 cleanup.o: cleanup.cpp cleanup.h keydb.h
 websocket.o: websocket.cpp websocket.h util.h
+video.o: video.cpp video.h videoauth.h videots.h videostream.h videorec.h videoview.h httpreq.h videortsp.h videortmp.h conntdb.h keydb.h util.h
+videoauth.o: videoauth.cpp videoauth.h conntdb.h keydb.h
+videots.o: videots.cpp videots.h
+videostream.o: videostream.cpp videostream.h
+videorec.o: videorec.cpp videorec.h session.h cleanup.h
+videoview.o: videoview.cpp videoview.h httpreq.h videostream.h videots.h videoauth.h keydb.h
+httpreq.o: httpreq.cpp httpreq.h
+videortsp.o: videortsp.cpp videortsp.h
+videortmp.o: videortmp.cpp videortmp.h httpreq.h
 
 # Testing
 test: $(TARGET)
