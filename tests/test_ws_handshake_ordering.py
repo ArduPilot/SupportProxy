@@ -82,7 +82,38 @@ def _start_proxy(workdir):
         proc.kill()
         proc.wait(timeout=2)
         raise RuntimeError('proxy did not load test port pair')
+    _wait_accepting(PORT_USER)
     return proc
+
+
+def _wait_accepting(port, timeout=10.0):
+    """Block until `port` is in LISTEN.
+
+    The readiness line only says the parent has the pair in its table;
+    the listening socket is not necessarily up yet. Connecting on the
+    strength of the log line alone is a race that stays hidden on an
+    idle machine and starts losing when the runner is busy -- which is
+    what it did once CI grew a video suite to run alongside.
+
+    Read from /proc rather than probed with a connection: a connection
+    to the user port latches conn1, so probing would consume the very
+    thing the test is about to set up.
+    """
+    want = '%04X' % port
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            with open('/proc/net/tcp') as f:
+                next(f)
+                for line in f:
+                    fields = line.split()
+                    if (fields[1].split(':')[1].upper() == want
+                            and fields[3] == '0A'):      # LISTEN
+                        return
+        except OSError:
+            pass
+        time.sleep(0.05)
+    raise RuntimeError('proxy never listened on port %d' % port)
 
 
 def _terminate(proc):

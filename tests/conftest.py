@@ -84,6 +84,33 @@ class SupportProxyProcess:
             self.proc.kill()
 
 
+def _wait_listening(ports, timeout=15.0):
+    """Block until every port is in LISTEN.
+
+    Read from /proc rather than probed with a connection: connecting to
+    a user port latches conn1, which would consume the very thing the
+    test is about to set up.
+    """
+    want = {'%04X' % p for p in ports}
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        listening = set()
+        try:
+            with open('/proc/net/tcp') as f:
+                next(f)
+                for line in f:
+                    fields = line.split()
+                    if fields[3] == '0A':            # LISTEN
+                        listening.add(fields[1].split(':')[1].upper())
+        except OSError:
+            pass
+        if want <= listening:
+            return
+        time.sleep(0.05)
+    raise RuntimeError('SupportProxy never listened on %s'
+                       % sorted(ports))
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _worker_cwd(tmp_path_factory):
     """Each xdist worker runs in its own tmpdir so workers don't share a
@@ -165,6 +192,12 @@ def test_server(_worker_cwd):
                 markers[m] = True
                 print(f"DEBUG: SupportProxy loaded {m.replace('Added port ', '')}")
         if all(markers.values()):
+            # The marker is printed before the socket is bound
+            # (supportproxy.cpp prints "Added port" and then calls
+            # open_sockets), so a test that connects on the strength of
+            # it alone is racing. Harmless on an idle machine, and it
+            # starts losing when the runner is busy.
+            _wait_listening([port1, port2, port1_b, port2_b])
             print("DEBUG: SupportProxy ready for testing!")
             break
     else:
