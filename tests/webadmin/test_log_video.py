@@ -86,6 +86,35 @@ def _seed_real_ts(app, port2):
     return root
 
 
+def _our_ffmpeg_count():
+    """ffmpeg processes this test process started.
+
+    Counting every ffmpeg on the machine made this fail whenever a
+    sibling xdist worker happened to start one between the two samples
+    -- a leak reported against a test that leaked nothing. The remux
+    spawns its ffmpeg as our direct child, so that is what to count.
+    """
+    mine = 0
+    us = os.getpid()
+    for name in os.listdir('/proc'):
+        if not name.isdigit():
+            continue
+        pid = int(name)
+        try:
+            with open('/proc/%d/comm' % pid) as f:
+                if f.read().strip() != 'ffmpeg':
+                    continue
+            with open('/proc/%d/status' % pid) as f:
+                for line in f:
+                    if line.startswith('PPid:'):
+                        if int(line.split()[1]) == us:
+                            mine += 1
+                        break
+        except (OSError, ValueError):
+            continue
+    return mine
+
+
 def _enable_video(keydb_path, port2, ports=(VPORT, 0, 0)):
     db = keydb_lib.open_db(keydb_path)
     db.transaction_start()
@@ -352,16 +381,13 @@ class TestRemuxToMp4:
         """The generator kills ffmpeg in a finally, so a client that
         disconnects mid-stream cannot leak one."""
         self._skip_without_ffmpeg()
-        import subprocess as sp
         _seed_real_ts(app, ALICE_PORT2)
         login_as(client, BOB_PORT1, BOB_PASS)
-        before = sp.run(['pgrep', '-c', '-x', 'ffmpeg'],
-                        capture_output=True, text=True).stdout.strip() or '0'
+        before = _our_ffmpeg_count()
         r = client.get('/admin/logs/%d/%s/%s/play.mp4'
                        % (ALICE_PORT2, DATE, VIDEO))
         r.get_data()
         r.close()
         time.sleep(0.5)
-        after = sp.run(['pgrep', '-c', '-x', 'ffmpeg'],
-                       capture_output=True, text=True).stdout.strip() or '0'
-        assert int(after) <= int(before)
+        after = _our_ffmpeg_count()
+        assert after <= before
