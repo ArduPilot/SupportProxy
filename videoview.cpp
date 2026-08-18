@@ -295,7 +295,7 @@ bool VideoViewer::detect_timeout(const struct KeyEntry &ke, int slot,
     // credential, so this is only offered when the slot allows it and
     // no viewer password is set.
     kind_ = VVK_RAW;
-    const uint32_t opts = video_slot_opts(ke.video_flags, unsigned(slot));
+    const uint32_t opts = video_slot_opts_of(ke, unsigned(slot));
     if ((opts & VIDEO_SLOT_RAW_TCP) == 0) {
         drop_reason_ = "raw-TCP viewers not enabled on this slot";
         return false;

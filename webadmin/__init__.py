@@ -32,6 +32,8 @@ import json
 import os
 import subprocess
 
+import keydb_lib
+
 from flask import Flask, redirect, url_for
 from flask_wtf.csrf import CSRFProtect
 from werkzeug.middleware.proxy_fix import ProxyFix
@@ -117,6 +119,10 @@ def create_app(test_config=None):
     app.register_blueprint(owner_logs_bp)
     app.register_blueprint(video_bp)
     app.register_blueprint(system_bp)
+
+    # The video templates loop over slots; keep the count in one place
+    # rather than repeating it in every route that renders them.
+    app.jinja_env.globals['max_video_slots'] = keydb_lib.MAX_VIDEO_PORTS
 
     @app.route('/')
     def index():

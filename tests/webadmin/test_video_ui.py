@@ -70,7 +70,7 @@ class TestOwnerVideo:
         _owner_post(client, video_enabled='y', video_port_1=str(VPORT_A),
                     video_quota_mb='9999')
         ke = fetch_entry(keydb_path, ALICE_PORT2)
-        assert ke.video_ports == [0, 0, 0]
+        assert ke.video_ports == [0, 0, 0, 0, 0]
         assert ke.video_quota_mb == 0
 
     def test_owner_grace_out_of_range_rejected(self, client, keydb_path):
@@ -136,7 +136,7 @@ class TestAdminVideo:
                            video_quota_mb='4096')
         assert resp.status_code == 302
         ke = fetch_entry(keydb_path, ALICE_PORT2)
-        assert ke.video_ports == [VPORT_A, VPORT_B, 0]
+        assert ke.video_ports == [VPORT_A, VPORT_B, 0, 0, 0]
         assert ke.video_quota_mb == 4096
         assert ke.active_video_ports() == [(0, VPORT_A), (1, VPORT_B)]
 
@@ -147,14 +147,14 @@ class TestAdminVideo:
                            video_port_1=str(BOB_PORT1))
         assert resp.status_code == 302
         ke = fetch_entry(keydb_path, ALICE_PORT2)
-        assert ke.video_ports == [0, 0, 0], 'collision must not be stored'
+        assert ke.video_ports == [0, 0, 0, 0, 0], 'collision must not be stored'
 
     def test_admin_video_port_cannot_take_own_port2(self, client, keydb_path):
         login_as(client, BOB_PORT1, BOB_PASS)
         resp = _admin_post(client, ALICE_PORT2, video_enabled='y',
                            video_port_1=str(ALICE_PORT2))
         assert resp.status_code == 302
-        assert fetch_entry(keydb_path, ALICE_PORT2).video_ports == [0, 0, 0]
+        assert fetch_entry(keydb_path, ALICE_PORT2).video_ports == [0, 0, 0, 0, 0]
 
     def test_admin_can_clear_ports(self, client, keydb_path):
         login_as(client, BOB_PORT1, BOB_PASS)
@@ -162,7 +162,7 @@ class TestAdminVideo:
                     video_port_1=str(VPORT_A))
         assert fetch_entry(keydb_path, ALICE_PORT2).video_ports[0] == VPORT_A
         _admin_post(client, ALICE_PORT2, video_enabled='y', video_port_1='')
-        assert fetch_entry(keydb_path, ALICE_PORT2).video_ports == [0, 0, 0]
+        assert fetch_entry(keydb_path, ALICE_PORT2).video_ports == [0, 0, 0, 0, 0]
 
     def test_allocated_port_blocks_a_later_port1_change(self, client,
                                                         keydb_path):
@@ -282,14 +282,16 @@ class TestVideoPortCountSelector:
 
     def test_unused_slots_ship_hidden(self, client, keydb_path):
         """No-JS and first paint: an entry with one port must not show
-        three rows even before the script runs."""
+        every slot's row before the script runs."""
         login_as(client, BOB_PORT1, BOB_PASS)
         html = client.get('/admin/%d' % ALICE_PORT2).get_data(as_text=True)
         rows = re.findall(r'<div class="field video-slot" data-slot="(\d)"'
                           r'\s*([^>]*)>', html)
-        assert len(rows) == 3
-        assert {int(s): ('hidden' in a) for s, a in rows} == {
-            1: False, 2: True, 3: True}
+        assert len(rows) == keydb_lib.MAX_VIDEO_PORTS
+        # Slot 1 shown, every other slot hidden.
+        expected = {n: (n != 1)
+                    for n in range(1, keydb_lib.MAX_VIDEO_PORTS + 1)}
+        assert {int(s): ('hidden' in a) for s, a in rows} == expected
 
     def test_ports_default_to_the_base(self, client, keydb_path):
         login_as(client, BOB_PORT1, BOB_PASS)
@@ -317,7 +319,7 @@ class TestVideoPortCountSelector:
                            video_port_2='40002', video_port_3='40003')
         assert resp.status_code == 302
         ke = fetch_entry(keydb_path, ALICE_PORT2)
-        assert ke.video_ports == [0, 0, 0]
+        assert ke.video_ports == [0, 0, 0, 0, 0]
         assert not ke.video_enabled()
 
     def test_count_bounds_what_is_stored(self, client, keydb_path):
@@ -329,7 +331,7 @@ class TestVideoPortCountSelector:
                            video_port_2=str(VPORT_B))
         assert resp.status_code == 302
         ke = fetch_entry(keydb_path, ALICE_PORT2)
-        assert ke.video_ports == [VPORT_A, 0, 0]
+        assert ke.video_ports == [VPORT_A, 0, 0, 0, 0]
         assert ke.video_port_count() == 1
 
     def test_count_two_stores_two(self, client, keydb_path):
@@ -339,7 +341,7 @@ class TestVideoPortCountSelector:
                            video_port_2=str(VPORT_B))
         assert resp.status_code == 302
         ke = fetch_entry(keydb_path, ALICE_PORT2)
-        assert ke.video_ports == [VPORT_A, VPORT_B, 0]
+        assert ke.video_ports == [VPORT_A, VPORT_B, 0, 0, 0]
         assert ke.video_port_count() == 2
 
     def test_a_submission_without_the_count_keeps_every_slot(self, client,
@@ -351,7 +353,7 @@ class TestVideoPortCountSelector:
                            video_port_2=str(VPORT_B))
         assert resp.status_code == 302
         ke = fetch_entry(keydb_path, ALICE_PORT2)
-        assert ke.video_ports == [VPORT_A, VPORT_B, 0]
+        assert ke.video_ports == [VPORT_A, VPORT_B, 0, 0, 0]
 
     def test_allocated_ports_are_not_renumbered_on_reopen(self, client,
                                                           keydb_path):
@@ -372,8 +374,10 @@ class TestVideoPortCountSelector:
         html = client.get('/admin/%d' % ALICE_PORT2).get_data(as_text=True)
         rows = re.findall(r'<div class="field video-slot" data-slot="(\d)"'
                           r'\s*([^>]*)>', html)
-        assert {int(s): ('hidden' in a) for s, a in rows} == {
-            1: False, 2: False, 3: True}
+        # Two allocated: slots 1 and 2 shown, the rest hidden.
+        expected = {n: (n > 2)
+                    for n in range(1, keydb_lib.MAX_VIDEO_PORTS + 1)}
+        assert {int(s): ('hidden' in a) for s, a in rows} == expected
 
 
 def client_logged_in_as_admin(client):

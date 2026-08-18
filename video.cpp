@@ -267,7 +267,7 @@ int VideoChild::bind_slots(void)
 {
     int first_err = 0;
     for (int i = 0; i < KEY_MAX_VIDEO_PORTS; i++) {
-        const uint32_t port = ke_.video_ports[i];
+        const uint32_t port = video_port_of(ke_, unsigned(i));
         if (port == 0) {
             continue;
         }
@@ -465,7 +465,7 @@ void VideoChild::handle_udp(Slot &s, int idx)
     s.ring.init(video_ring_bytes());
     s.scanner = TSScanner();
     s.had_anchor = false;
-    s.recording = (video_slot_opts(ke_.video_flags, unsigned(idx))
+    s.recording = (video_slot_opts_of(ke_, unsigned(idx))
                    & VIDEO_SLOT_RECORD) != 0;
     if (s.recording) {
         s.rec.configure(uint32_t(port2_), idx,
@@ -557,7 +557,7 @@ void VideoChild::latch_publisher(Slot &s, int idx, time_t now)
     s.ring.init(video_ring_bytes());
     s.scanner = TSScanner();
     s.had_anchor = false;
-    s.recording = (video_slot_opts(ke_.video_flags, unsigned(idx))
+    s.recording = (video_slot_opts_of(ke_, unsigned(idx))
                    & VIDEO_SLOT_RECORD) != 0;
     if (s.recording) {
         s.rec.configure(uint32_t(port2_), idx,
@@ -825,7 +825,8 @@ bool VideoChild::promote_pending(Slot &s, int idx, PendingRtmp &p,
       expect. Left blank the slot takes whatever is published.
      */
     char want[sizeof(ke_.video_rtmp_path[0]) + 1] {};
-    memcpy(want, ke_.video_rtmp_path[idx], sizeof(ke_.video_rtmp_path[idx]));
+    memcpy(want, video_rtmp_path_of(ke_, unsigned(idx)),
+           sizeof(ke_.video_rtmp_path[0]));
     want[sizeof(want) - 1] = '\0';
     if (want[0] != '\0' && r.path() != want) {
         printf("[%d] video slot %d RTMP publisher refused: published %s, "

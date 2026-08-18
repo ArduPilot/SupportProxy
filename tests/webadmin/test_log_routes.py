@@ -587,7 +587,7 @@ class TestVideoSegments:
             'video segments not in natural collision order'
 
     @pytest.mark.parametrize('bad', [
-        '2026_08_01_10:00:00.v4.ts',     # slot out of range
+        '2026_08_01_10:00:00.v6.ts',     # slot out of range
         '2026_08_01_10:00:00.ts',        # no slot
         '2026_08_01_10:00:00.v1.tsx',    # not a segment
         'evil.ts',
