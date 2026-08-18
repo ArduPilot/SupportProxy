@@ -47,9 +47,9 @@ def _ports(d, port2=PORT2):
 
 def test_set_and_clear_video_ports(db):
     keydb_lib.set_video_ports(db, PORT2, [21001, 21002])
-    assert _ports(db) == [21001, 21002, 0]
+    assert _ports(db) == [21001, 21002, 0, 0, 0]
     keydb_lib.set_video_ports(db, PORT2, [])
-    assert _ports(db) == [0, 0, 0]
+    assert _ports(db) == [0, 0, 0, 0, 0]
 
 
 @pytest.mark.parametrize('bad,msg', [
@@ -60,14 +60,14 @@ def test_set_and_clear_video_ports(db):
     ([22000, 22000], 'listed twice'),      # duplicate in one call
     ([80000], 'out of range'),             # above the port range
     ([80], 'out of range'),                # below VIDEO_PORT_MIN
-    ([1, 2, 3, 4], 'at most 3'),           # too many
+    ([1] * (keydb_lib.MAX_VIDEO_PORTS + 1), 'at most'),   # too many
 ])
 def test_video_port_collisions_rejected(db, bad, msg):
     with pytest.raises(CLIError) as ei:
         keydb_lib.set_video_ports(db, PORT2, bad)
     assert msg in str(ei.value)
     # a rejected call must not have partially applied
-    assert _ports(db) == [0, 0, 0]
+    assert _ports(db) == [0, 0, 0, 0, 0]
 
 
 def test_video_port_blocks_a_later_add(db):
@@ -82,10 +82,10 @@ def test_video_port_can_be_reassigned_to_itself(db):
     """Re-setting the same ports must not collide with the entry's own."""
     keydb_lib.set_video_ports(db, PORT2, [21001, 21002])
     keydb_lib.set_video_ports(db, PORT2, [21001, 21002])
-    assert _ports(db) == [21001, 21002, 0]
+    assert _ports(db) == [21001, 21002, 0, 0, 0]
     # and reordering is fine
     keydb_lib.set_video_ports(db, PORT2, [21002, 21001])
-    assert _ports(db) == [21002, 21001, 0]
+    assert _ports(db) == [21002, 21001, 0, 0, 0]
 
 
 def test_ports_in_use_excludes_named_entry(db):
@@ -236,11 +236,11 @@ class TestSuggestVideoPorts:
         ke = keydb_lib.add_entry(db, 10001, 10002, 'a', 'p')
         got = keydb_lib.suggest_video_ports(db, ke, 1)
         assert got[0] == keydb_lib.VIDEO_PORT_BASE
-        assert got[1:] == [0, 0]
+        assert got[1:] == [0] * (keydb_lib.MAX_VIDEO_PORTS - 1)
 
     def test_consecutive_within_one_entry(self, db):
         ke = keydb_lib.add_entry(db, 10001, 10002, 'a', 'p')
-        assert keydb_lib.suggest_video_ports(db, ke, 3) == [
+        assert keydb_lib.suggest_video_ports(db, ke, 3)[:3] == [
             keydb_lib.VIDEO_PORT_BASE,
             keydb_lib.VIDEO_PORT_BASE + 1,
             keydb_lib.VIDEO_PORT_BASE + 2]
@@ -248,16 +248,16 @@ class TestSuggestVideoPorts:
     def test_skips_ports_another_entry_holds(self, db):
         base = keydb_lib.VIDEO_PORT_BASE
         other = keydb_lib.add_entry(db, 10001, 10002, 'a', 'p')
-        other.video_ports = [base, base + 2, 0]
+        other.video_ports = [base, base + 2, 0, 0, 0]
         other.store(db)
         ke = keydb_lib.add_entry(db, 10003, 10004, 'b', 'p')
-        assert keydb_lib.suggest_video_ports(db, ke, 2) == [base + 1,
-                                                           base + 3, 0]
+        assert keydb_lib.suggest_video_ports(db, ke, 2)[:3] == [
+            base + 1, base + 3, 0]
 
     def test_skips_port1_and_port2(self, db):
         base = keydb_lib.VIDEO_PORT_BASE
         ke = keydb_lib.add_entry(db, base, base + 1, 'a', 'p')
-        assert keydb_lib.suggest_video_ports(db, ke, 1) == [base + 2, 0, 0]
+        assert keydb_lib.suggest_video_ports(db, ke, 1) == [base + 2] + [0] * (keydb_lib.MAX_VIDEO_PORTS - 1)
 
     def test_keeps_an_already_allocated_port(self, db):
         """An entry that is already streaming on a port must not be
@@ -266,14 +266,14 @@ class TestSuggestVideoPorts:
         ke = keydb_lib.add_entry(db, 10001, 10002, 'a', 'p')
         ke.video_ports = [50000, 0, 0]
         got = keydb_lib.suggest_video_ports(db, ke, 2, keep=ke.video_ports)
-        assert got == [50000, base, 0]
+        assert got == [50000, base, 0, 0, 0]
 
     def test_kept_port_is_not_reused_for_another_slot(self, db):
         base = keydb_lib.VIDEO_PORT_BASE
         ke = keydb_lib.add_entry(db, 10001, 10002, 'a', 'p')
-        ke.video_ports = [0, base, 0]
+        ke.video_ports = [0, base, 0, 0, 0]
         got = keydb_lib.suggest_video_ports(db, ke, 2, keep=ke.video_ports)
-        assert got == [base + 1, base, 0]
+        assert got[:3] == [base + 1, base, 0]
         assert len(set(p for p in got if p)) == 2
 
     def test_suggestions_validate(self, db):

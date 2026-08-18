@@ -37,12 +37,12 @@ KEY_MAGIC = 0x6b73e867a72cdd1f
 # server-local naming (the flag, not the value, decides whether the offset
 # is used), needing no conversion.
 KEYENTRY_MIN_SIZE = 96
-PACK_FORMAT = "<QQ32siIII32sIfIf3II32s32sII32s32s32s12I"
+PACK_FORMAT = "<QQ32siIII32sIfIf3II32s32sII32s32s32s12I2II32s32s9I"
 KEYENTRY_CURRENT_SIZE = struct.calcsize(PACK_FORMAT)
-# The C++ side asserts sizeof(KeyEntry) == 344 in keydb.h. Assert the same
+# The C++ side asserts sizeof(KeyEntry) == 456 in keydb.h. Assert the same
 # here so a PACK_FORMAT edit that drifts from the struct fails at import
 # rather than by writing records the C++ reader misparses.
-assert KEYENTRY_CURRENT_SIZE == 344, KEYENTRY_CURRENT_SIZE
+assert KEYENTRY_CURRENT_SIZE == 456, KEYENTRY_CURRENT_SIZE
 
 # Flag bits — keep in sync with KEY_FLAG_* in keydb.h.
 FLAG_ADMIN     = 1 << 0
@@ -63,9 +63,16 @@ FLAG_NAMES = {
 
 DEFAULT_LOG_RETENTION_DAYS = 7.0
 RESERVED_WORDS = 12
+RESERVED2_WORDS = 9
 
 # Video. Keep in sync with the KEY_MAX_VIDEO_PORTS / VIDEO_* block in keydb.h.
-MAX_VIDEO_PORTS = 3
+MAX_VIDEO_PORTS = 5
+# Slots 0..2 live in the fields the 344-byte record had; 3 and 4 are in
+# fields appended after reserved[]. Middle fields cannot grow without
+# shifting everything after them, which would misparse every record
+# already on disk. pack/unpack join the two halves so nothing outside
+# this module sees the seam.
+VIDEO_PORTS_INLINE = 3
 
 # video_flags carries one byte of options per slot plus a byte of
 # entry-wide options:
@@ -104,18 +111,28 @@ VIDEO_PORT_MAX = 65535
 VIDEO_PORT_BASE = 40001
 
 
-def video_slot_opts(video_flags, slot):
-    """The option byte for one slot."""
-    if not 0 <= slot < MAX_VIDEO_PORTS:
+# Slots a single flags word can carry. The low word holds three plus the
+# entry-wide byte at VIDEO_OPT_SHIFT, which is why a fourth slot cannot
+# live there: its byte would land exactly on the entry options.
+VIDEO_SLOTS_PER_WORD = 3
+
+
+def video_slot_opts(video_flags, index):
+    """The option byte at `index` within one flags word.
+
+    `index` is a position in the word, not an entry slot number --
+    KeyEntry.slot_opts picks the word first.
+    """
+    if not 0 <= index < VIDEO_SLOTS_PER_WORD:
         return 0
-    return (video_flags >> (slot * VIDEO_SLOT_BITS)) & 0xFF
+    return (video_flags >> (index * VIDEO_SLOT_BITS)) & 0xFF
 
 
-def video_set_slot_opts(video_flags, slot, opts):
-    """Return video_flags with slot's option byte replaced."""
-    if not 0 <= slot < MAX_VIDEO_PORTS:
-        raise ValueError("slot out of range: %r" % (slot,))
-    shift = slot * VIDEO_SLOT_BITS
+def video_set_slot_opts(video_flags, index, opts):
+    """Return the word with the option byte at `index` replaced."""
+    if not 0 <= index < VIDEO_SLOTS_PER_WORD:
+        raise ValueError("slot index out of range: %r" % (index,))
+    shift = index * VIDEO_SLOT_BITS
     return (video_flags & ~(0xFF << shift)) | ((opts & 0xFF) << shift)
 
 
@@ -200,12 +217,14 @@ class KeyEntry:
         self.tz_offset_hours = 0.0
         self.video_ports = [0] * MAX_VIDEO_PORTS
         self.video_flags = 0
+        self.video_flags_hi = 0
         self.video_viewer_key = bytearray(32)
         self.video_publish_key = bytearray(32)
         self.video_quota_mb = 0
         self.video_mav_grace_s = 0
         self.video_rtmp_path = [''] * MAX_VIDEO_PORTS
         self.reserved = [0] * RESERVED_WORDS
+        self.reserved2 = [0] * RESERVED2_WORDS
         self.port2 = port2
         # opaque trailing bytes from a record written by a future schema
         self._tail = b''
@@ -214,6 +233,8 @@ class KeyEntry:
         name = self.name.encode('UTF-8').ljust(32, b'\x00')[:32]
         reserved = list(self.reserved) + [0] * (RESERVED_WORDS - len(self.reserved))
         vports = list(self.video_ports) + [0] * (MAX_VIDEO_PORTS - len(self.video_ports))
+        reserved2 = (list(self.reserved2)
+                     + [0] * (RESERVED2_WORDS - len(self.reserved2)))
         body = struct.pack(PACK_FORMAT,
                            self.magic, self.timestamp, bytes(self.secret_key),
                            self.port1, self.connections, self.count1,
@@ -221,15 +242,21 @@ class KeyEntry:
                            self.log_retention_days,
                            self.fc_sysid,
                            self.tz_offset_hours,
-                           *vports[:MAX_VIDEO_PORTS],
-                           self.video_flags,
+                           *vports[:VIDEO_PORTS_INLINE],
+                           self.video_flags & 0xFFFFFFFF,
                            bytes(self.video_viewer_key),
                            bytes(self.video_publish_key),
                            self.video_quota_mb,
                            self.video_mav_grace_s,
                            *[self._rtmp_bytes(i)
-                             for i in range(MAX_VIDEO_PORTS)],
-                           *reserved[:RESERVED_WORDS])
+                             for i in range(VIDEO_PORTS_INLINE)],
+                           *reserved[:RESERVED_WORDS],
+                           *vports[VIDEO_PORTS_INLINE:MAX_VIDEO_PORTS],
+                           self.video_flags_hi & 0xFFFFFFFF,
+                           *[self._rtmp_bytes(i)
+                             for i in range(VIDEO_PORTS_INLINE,
+                                            MAX_VIDEO_PORTS)],
+                           *reserved2[:RESERVED2_WORDS])
         return body + self._tail
 
     def unpack(self, data):
@@ -248,16 +275,27 @@ class KeyEntry:
          self.flags, self.log_retention_days,
          self.fc_sysid, self.tz_offset_hours) = unpacked[:12]
         n = 12
-        self.video_ports = list(unpacked[n:n + MAX_VIDEO_PORTS])
-        n += MAX_VIDEO_PORTS
+        self.video_ports = list(unpacked[n:n + VIDEO_PORTS_INLINE])
+        n += VIDEO_PORTS_INLINE
         (self.video_flags, viewer_key, publish_key,
          self.video_quota_mb, self.video_mav_grace_s) = unpacked[n:n + 5]
         n += 5
         self.video_rtmp_path = [
             b.decode('utf-8', errors='ignore').rstrip('\0')
-            for b in unpacked[n:n + MAX_VIDEO_PORTS]]
-        n += MAX_VIDEO_PORTS
+            for b in unpacked[n:n + VIDEO_PORTS_INLINE]]
+        n += VIDEO_PORTS_INLINE
         self.reserved = list(unpacked[n:n + RESERVED_WORDS])
+        n += RESERVED_WORDS
+        n_hi = MAX_VIDEO_PORTS - VIDEO_PORTS_INLINE
+        self.video_ports += list(unpacked[n:n + n_hi])
+        n += n_hi
+        self.video_flags_hi = unpacked[n]
+        n += 1
+        self.video_rtmp_path += [
+            b.decode('utf-8', errors='ignore').rstrip('\0')
+            for b in unpacked[n:n + n_hi]]
+        n += n_hi
+        self.reserved2 = list(unpacked[n:n + RESERVED2_WORDS])
         self.video_viewer_key = bytearray(viewer_key)
         self.video_publish_key = bytearray(publish_key)
         self.secret_key = bytearray(secret_key)
@@ -314,9 +352,11 @@ class KeyEntry:
         still accounts for every port it owns. Never 0: an entry with no
         ports yet is presented as wanting one.
         """
+        # Tolerate a short list: callers build KeyEntry objects by hand
+        # and the slot count has grown before.
         highest = 0
-        for slot in range(MAX_VIDEO_PORTS):
-            if self.video_ports[slot]:
+        for slot, port in enumerate(self.video_ports[:MAX_VIDEO_PORTS]):
+            if port:
                 highest = slot + 1
         return highest or 1
 
@@ -353,10 +393,23 @@ class KeyEntry:
         self.video_rtmp_path = paths[:MAX_VIDEO_PORTS]
 
     def slot_opts(self, slot):
-        return video_slot_opts(self.video_flags, slot)
+        """Options for one slot, from whichever word holds it."""
+        if not 0 <= slot < MAX_VIDEO_PORTS:
+            return 0
+        if slot < VIDEO_PORTS_INLINE:
+            return video_slot_opts(self.video_flags, slot)
+        return video_slot_opts(self.video_flags_hi,
+                               slot - VIDEO_PORTS_INLINE)
 
     def set_slot_opts(self, slot, opts):
-        self.video_flags = video_set_slot_opts(self.video_flags, slot, opts)
+        if not 0 <= slot < MAX_VIDEO_PORTS:
+            raise CLIError("slot must be 0..%d" % (MAX_VIDEO_PORTS - 1))
+        if slot < VIDEO_PORTS_INLINE:
+            self.video_flags = video_set_slot_opts(self.video_flags, slot,
+                                                   opts)
+        else:
+            self.video_flags_hi = video_set_slot_opts(
+                self.video_flags_hi, slot - VIDEO_PORTS_INLINE, opts)
 
     def slot_opt_names(self, slot):
         opts = self.slot_opts(slot)

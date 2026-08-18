@@ -23,7 +23,7 @@
   {{ row(form.video_port_count) }}
 {% endif %}
 
-{% for slot in [1, 2, 3] %}
+{% for slot in range(1, max_video_slots + 1) %}
   {% set p = entry.video_ports[slot - 1] %}
   {# Slots past the chosen count are rendered but hidden, so the browser
      still submits their options and lowering then raising the count does

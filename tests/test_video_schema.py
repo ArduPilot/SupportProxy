@@ -44,11 +44,11 @@ def test_keyentry_video_roundtrip():
     e.video_mav_grace_s = 90
 
     blob = e.pack()
-    assert len(blob) == 344
+    assert len(blob) == 456
 
     d = keydb_lib.KeyEntry(0)
     d.unpack(blob)
-    assert d.video_ports == [20001, 20002, 0]
+    assert d.video_ports == [20001, 20002, 0, 0, 0]
     assert d.active_video_ports() == [(0, 20001), (1, 20002)]
     assert set(d.slot_opt_names(0)) == {'srt', 'record'}
     assert set(d.slot_opt_names(1)) == {'raw_tcp'}
@@ -135,7 +135,7 @@ def test_prevideo_keyentry_zero_extends():
     assert not d.video_publish_pass_set()
     assert d.mav_grace_seconds() == keydb_lib.VIDEO_MAV_GRACE_DEFAULT_S
     # and re-packing upgrades it in place without losing anything
-    assert len(d.pack()) == 344
+    assert len(d.pack()) == keydb_lib.KEYENTRY_CURRENT_SIZE
 
 
 def test_keyentry_future_tail_preserved():
@@ -200,3 +200,74 @@ def test_video_conn_index_range_is_disjoint():
         last_sub = pub + conntdb_lib.VIDEO_CONN_STRIDE - 1
         next_pub = pub + conntdb_lib.VIDEO_CONN_STRIDE
         assert last_sub < next_pub
+
+
+def test_five_slots_round_trip():
+    """All five slots survive a pack/unpack, including the split.
+
+    Slots 0-2 live in the fields the 344-byte record had; 3 and 4 are in
+    fields appended after reserved[]. Nothing outside keydb_lib should
+    be able to tell.
+    """
+    e = keydb_lib.KeyEntry(4242)
+    e.video_ports = [40001, 40002, 40003, 40004, 40005]
+    e.video_rtmp_path = ['a/1', 'b/2', 'c/3', 'd/4', 'e/5']
+    for slot in range(keydb_lib.MAX_VIDEO_PORTS):
+        e.set_slot_opts(slot, keydb_lib.VIDEO_SLOT_RECORD)
+    e.video_flags = keydb_lib.video_set_entry_opts(
+        e.video_flags, keydb_lib.VIDEO_OPT_AUDIO)
+
+    d = keydb_lib.KeyEntry(4242)
+    d.unpack(e.pack())
+    assert d.video_ports == [40001, 40002, 40003, 40004, 40005]
+    assert d.video_rtmp_path == ['a/1', 'b/2', 'c/3', 'd/4', 'e/5']
+    for slot in range(keydb_lib.MAX_VIDEO_PORTS):
+        assert d.slot_opts(slot) & keydb_lib.VIDEO_SLOT_RECORD, slot
+    assert keydb_lib.video_entry_opts(d.video_flags) \
+        & keydb_lib.VIDEO_OPT_AUDIO
+
+
+def test_slot_three_does_not_clobber_the_entry_options():
+    """The low flags word is full: three slot bytes plus the entry byte.
+
+    A fourth slot byte at shift 24 would land exactly on the entry-wide
+    options, which is why slots past the third have their own word.
+    """
+    e = keydb_lib.KeyEntry(4243)
+    e.video_flags = keydb_lib.video_set_entry_opts(
+        e.video_flags, keydb_lib.VIDEO_OPT_AUDIO)
+    e.set_slot_opts(3, 0xFF)
+    e.set_slot_opts(4, 0xFF)
+    assert keydb_lib.video_entry_opts(e.video_flags) \
+        & keydb_lib.VIDEO_OPT_AUDIO, 'entry options lost'
+
+    d = keydb_lib.KeyEntry(4243)
+    d.unpack(e.pack())
+    assert keydb_lib.video_entry_opts(d.video_flags) \
+        & keydb_lib.VIDEO_OPT_AUDIO
+    assert d.slot_opts(3) == 0xFF and d.slot_opts(4) == 0xFF
+
+
+def test_three_slot_record_still_reads():
+    """A record written before slots 3-4 existed must be untouched.
+
+    The three inline fields stay exactly where they were, so an existing
+    database keeps working and an older binary can still read what a
+    newer one writes.
+    """
+    e = keydb_lib.KeyEntry(4244)
+    e.video_ports = [40001, 40002, 40003, 0, 0]
+    e.video_rtmp_path = ['x/1', 'y/2', 'z/3', '', '']
+    e.set_slot_opts(1, keydb_lib.VIDEO_SLOT_RECORD)
+    e.video_flags = keydb_lib.video_set_entry_opts(
+        e.video_flags, keydb_lib.VIDEO_OPT_AUDIO)
+    old = e.pack()[:344]            # truncated, as an old writer would
+    assert len(old) == 344
+
+    d = keydb_lib.KeyEntry(4244)
+    d.unpack(old)
+    assert d.video_ports == [40001, 40002, 40003, 0, 0]
+    assert d.video_rtmp_path == ['x/1', 'y/2', 'z/3', '', '']
+    assert d.slot_opts(1) & keydb_lib.VIDEO_SLOT_RECORD
+    assert keydb_lib.video_entry_opts(d.video_flags) \
+        & keydb_lib.VIDEO_OPT_AUDIO

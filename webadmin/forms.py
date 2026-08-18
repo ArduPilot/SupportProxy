@@ -6,6 +6,8 @@ _macros.html and the .help rules in style.css), which keeps the labels
 short enough to scan while the detail stays one hover away. Put the
 explanation in `description`, not in the label.
 """
+import keydb_lib
+
 from flask_wtf import FlaskForm
 from wtforms import (BooleanField, FloatField, IntegerField, PasswordField,
                      SelectField, StringField, SubmitField)
@@ -137,6 +139,14 @@ class _VideoOwnerFields:
         'Slot 3 RTMP path',
         description='As above, for the third slot.',
         validators=[Optional(), Length(max=31)])
+    video_rtmp_4 = StringField(
+        'Slot 4 RTMP path',
+        description='As above, for the fourth slot.',
+        validators=[Optional(), Length(max=31)])
+    video_rtmp_5 = StringField(
+        'Slot 5 RTMP path',
+        description='As above, for the fifth slot.',
+        validators=[Optional(), Length(max=31)])
     video_srt_1 = BooleanField('Slot 1: UDP side speaks SRT (else MPEG-TS)')
     video_record_1 = BooleanField('Slot 1: record to disk')
     video_rawtcp_1 = BooleanField('Slot 1: allow raw-TCP viewers (no password)')
@@ -146,18 +156,25 @@ class _VideoOwnerFields:
     video_srt_3 = BooleanField('Slot 3: UDP side speaks SRT (else MPEG-TS)')
     video_record_3 = BooleanField('Slot 3: record to disk')
     video_rawtcp_3 = BooleanField('Slot 3: allow raw-TCP viewers (no password)')
+    video_srt_4 = BooleanField('Slot 4: UDP side speaks SRT (else MPEG-TS)')
+    video_record_4 = BooleanField('Slot 4: record to disk')
+    video_rawtcp_4 = BooleanField('Slot 4: allow raw-TCP viewers (no password)')
+    video_srt_5 = BooleanField('Slot 5: UDP side speaks SRT (else MPEG-TS)')
+    video_record_5 = BooleanField('Slot 5: record to disk')
+    video_rawtcp_5 = BooleanField('Slot 5: allow raw-TCP viewers (no password)')
 
 
 class _VideoAdminFields(_VideoOwnerFields):
     """Adds the port allocation and the disk budget."""
-    # How many of the three slots this entry uses. Most entries want one
-    # camera, so showing three sets of ports and per-slot options by
-    # default is noise; this drives which slots the page shows at all.
+    # How many slots this entry uses. Most entries want one camera, so
+    # showing every set of ports and per-slot options by default is
+    # noise; this drives which slots the page shows at all.
     video_port_count = SelectField(
         'Number of video ports',
         description='One port carries one stream, so allocate one per '
                     'camera. Slots you do not use are hidden.',
-        choices=[(n, str(n)) for n in range(1, 4)],
+        choices=[(n, str(n))
+                 for n in range(1, keydb_lib.MAX_VIDEO_PORTS + 1)],
         coerce=int, default=1)
     video_port_1 = IntegerField(
         'Video port 1',
@@ -174,6 +191,16 @@ class _VideoAdminFields(_VideoOwnerFields):
     video_port_3 = IntegerField(
         'Video port 3',
         description='Third camera. One port carries exactly one stream.',
+        validators=[Optional(), NumberRange(min=VIDEO_PORT_MIN,
+                                            max=VIDEO_PORT_MAX)])
+    video_port_4 = IntegerField(
+        'Video port 4',
+        description='Fourth camera. One port carries exactly one stream.',
+        validators=[Optional(), NumberRange(min=VIDEO_PORT_MIN,
+                                            max=VIDEO_PORT_MAX)])
+    video_port_5 = IntegerField(
+        'Video port 5',
+        description='Fifth camera. One port carries exactly one stream.',
         validators=[Optional(), NumberRange(min=VIDEO_PORT_MIN,
                                             max=VIDEO_PORT_MAX)])
     video_quota_mb = IntegerField(
