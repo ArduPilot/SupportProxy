@@ -235,8 +235,29 @@ bool RtspBackend::start(int port2, int slot, bool want_audio,
         }
         argv[n++] = "-i";
         argv[n++] = url;
+        /*
+          Map the streams we can actually carry, not everything.
+
+          "-map 0" took whatever the publisher offered, and a stream
+          MPEG-TS has no encoder for kills the whole output: ffmpeg
+          fails with "Error selecting an encoder" before writing a byte,
+          so the slot sits at 0 KiB with the backend apparently running.
+
+          gstreamer walks straight into this. flvmux re-sends
+          onMetaData throughout the stream rather than once at the head,
+          and ffmpeg's FLV demuxer surfaces that as a second, data
+          stream -- so the stock gst-launch RTMP pipeline never
+          produced a frame here, while ffmpeg publishing the same video
+          worked, because its own FLV carries no such stream.
+
+          "0:a?" is optional: no audio track is not an error.
+         */
         argv[n++] = "-map";
-        argv[n++] = "0";
+        argv[n++] = "0:v:0";
+        if (want_audio) {
+            argv[n++] = "-map";
+            argv[n++] = "0:a?";
+        }
         argv[n++] = "-c:v";
         argv[n++] = "copy";
         if (vbsf != nullptr && vbsf[0] != '\0') {
