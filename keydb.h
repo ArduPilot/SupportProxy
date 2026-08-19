@@ -73,6 +73,24 @@
 #define VIDEO_SLOT_SRT     (1u << 0)  // UDP side speaks SRT, not plain MPEG-TS
 #define VIDEO_SLOT_RECORD  (1u << 1)  // write .ts segments under logs/
 #define VIDEO_SLOT_RAW_TCP (1u << 2)  // allow raw-TCP viewers (no credential)
+/*
+  Accept a publisher on this slot that its MAVLink session authorises,
+  even though the entry has a publish password.
+
+  Some publishers cannot present one: a camera speaking RTMP straight
+  out of its own firmware has nowhere to put a credential unless its
+  stream-key field tolerates a query, and plain MPEG-TS over UDP never
+  does. Without this the choice was all-or-nothing per entry -- set a
+  password and those streams stop, or leave it off and every stream is
+  admitted on its source address.
+
+  Opt-in, and per slot, so an entry that already has a password keeps
+  password-only publishing everywhere until someone deliberately widens
+  one slot. The fallback applies only when no credential was offered at
+  all: a wrong password is still a wrong password, so a typo does not
+  quietly succeed on the strength of the address.
+ */
+#define VIDEO_SLOT_SESSION_OK (1u << 3)
 
 // entry-wide bits, stored in the top byte
 #define VIDEO_OPT_SHIFT 24
