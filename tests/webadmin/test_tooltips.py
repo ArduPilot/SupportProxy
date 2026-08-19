@@ -19,7 +19,11 @@ from webadmin import forms
 # _video_fields.html instead: five slots x four options would mean twenty
 # near-identical strings in forms.py, and the row is rendered by hand
 # there anyway.
-_NO_DESCRIPTION_NEEDED = {'submit', 'csrf_token'}
+# 'passphrase' is the login password field. A tooltip on it froze
+# Chrome's renderer on paste -- the tab stopped accepting input at all --
+# so it deliberately carries no description and its text moved into the
+# blurb above the form.
+_NO_DESCRIPTION_NEEDED = {'submit', 'csrf_token', 'passphrase'}
 
 
 def _documented(form_cls):
