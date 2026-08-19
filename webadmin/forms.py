@@ -150,18 +150,28 @@ class _VideoOwnerFields:
     video_srt_1 = BooleanField('Slot 1: UDP side speaks SRT (else MPEG-TS)')
     video_record_1 = BooleanField('Slot 1: record to disk')
     video_rawtcp_1 = BooleanField('Slot 1: allow raw-TCP viewers (no password)')
+    video_sessok_1 = BooleanField(
+        'Slot 1: publish with no password when the MAVLink session matches')
     video_srt_2 = BooleanField('Slot 2: UDP side speaks SRT (else MPEG-TS)')
     video_record_2 = BooleanField('Slot 2: record to disk')
     video_rawtcp_2 = BooleanField('Slot 2: allow raw-TCP viewers (no password)')
+    video_sessok_2 = BooleanField(
+        'Slot 2: publish with no password when the MAVLink session matches')
     video_srt_3 = BooleanField('Slot 3: UDP side speaks SRT (else MPEG-TS)')
     video_record_3 = BooleanField('Slot 3: record to disk')
     video_rawtcp_3 = BooleanField('Slot 3: allow raw-TCP viewers (no password)')
+    video_sessok_3 = BooleanField(
+        'Slot 3: publish with no password when the MAVLink session matches')
     video_srt_4 = BooleanField('Slot 4: UDP side speaks SRT (else MPEG-TS)')
     video_record_4 = BooleanField('Slot 4: record to disk')
     video_rawtcp_4 = BooleanField('Slot 4: allow raw-TCP viewers (no password)')
+    video_sessok_4 = BooleanField(
+        'Slot 4: publish with no password when the MAVLink session matches')
     video_srt_5 = BooleanField('Slot 5: UDP side speaks SRT (else MPEG-TS)')
     video_record_5 = BooleanField('Slot 5: record to disk')
     video_rawtcp_5 = BooleanField('Slot 5: allow raw-TCP viewers (no password)')
+    video_sessok_5 = BooleanField(
+        'Slot 5: publish with no password when the MAVLink session matches')
 
 
 class _VideoAdminFields(_VideoOwnerFields):
