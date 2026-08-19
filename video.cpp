@@ -211,6 +211,13 @@ private:
     void handle_tcp(Slot &s, int idx);
     void tick(time_t now);
     void write_conn_rows(time_t now);
+    // Does this slot fall back to the MAVLink session when a publish
+    // password is set but the publisher offered none?
+    bool session_ok(int idx) const {
+        return (video_slot_opts_of(ke_, unsigned(idx))
+                & VIDEO_SLOT_SESSION_OK) != 0;
+    }
+
     void log_reject(Slot &s, int idx, uint32_t ip_be, video_admit_t r,
                     time_t now);
     void ingest(Slot &s, int idx, const uint8_t *buf, size_t n);
@@ -429,10 +436,11 @@ void VideoChild::handle_udp(Slot &s, int idx)
 
     // Plain MPEG-TS over UDP carries no credential, so path A can't
     // apply here; admit() falls through to the MAVLink-session check
-    // unless a publish password is set, in which case UDP can't satisfy
-    // it and the datagram is refused.
+    // unless a publish password is set and the slot is not flagged
+    // session_ok, in which case UDP can't satisfy it and the datagram
+    // is refused.
     video_admit_t r = auth_.admit(ke_, uint32_t(from.sin_addr.s_addr),
-                                  nullptr, now);
+                                  nullptr, session_ok(idx), now);
     if (r != VIDEO_ADMIT_OK) {
         log_reject(s, idx, uint32_t(from.sin_addr.s_addr), r, now);
         return;
@@ -650,7 +658,7 @@ void VideoChild::handle_rtsp(Slot &s, int idx, int fd,
     // RTSP connection is a publisher (we do not parse enough to tell
     // them apart -- see videortsp.h).
     const video_admit_t r = auth_.admit(ke_, uint32_t(from.sin_addr.s_addr),
-                                        pw.c_str(), now);
+                                        pw.c_str(), session_ok(idx), now);
     if (r != VIDEO_ADMIT_OK) {
         log_reject(s, idx, uint32_t(from.sin_addr.s_addr), r, now);
         close(fd);
@@ -812,7 +820,7 @@ bool VideoChild::promote_pending(Slot &s, int idx, PendingRtmp &p,
     RtmpSession &r = *p.sess;
 
     const video_admit_t a = auth_.admit(ke_, p.ip_be, r.password().c_str(),
-                                        now);
+                                        session_ok(idx), now);
     if (a != VIDEO_ADMIT_OK) {
         log_reject(s, idx, p.ip_be, a, now);
         r.reject_publish("NetStream.Publish.Denied", video_admit_str(a));

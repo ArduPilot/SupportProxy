@@ -65,6 +65,23 @@ side, so a scanner between flights can become the authorised address and
 the aircraft's video is then refused until the grace expires. **Entries
 used for video should set `bidi_sign` or a publish password.**
 
+A publish password normally *replaces* the MAVLink-session check rather
+than adding to it — an operator sets one precisely so address matching
+is not the gate. Some publishers cannot present one at all, though: a
+camera speaking RTMP from its own firmware has nowhere to put it unless
+its stream-key field tolerates a query, and plain UDP never does. The
+per-slot **MAVLink publish** option lets one slot fall back to the
+session check while the rest of the entry stays password-only:
+
+```bash
+./keydb.py videoflag 11024 0 session_ok
+```
+
+It is opt-in and per slot, so enabling it on the camera's slot does not
+weaken the others. A password that *is* supplied and is wrong is still
+refused — the fallback applies only when none was offered, so a typo
+cannot quietly succeed on the strength of the address.
+
 **Watching.** In the browser from the web UI, or outside it with the
 `ffplay`/`vlc` command the page offers. The browser player needs H.264:
 Chrome and Firefox will not decode HEVC in Media Source Extensions on

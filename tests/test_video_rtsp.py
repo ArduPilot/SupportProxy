@@ -57,7 +57,7 @@ def clip(tmp_path_factory):
 
 
 def _workdir(tmp_path, record=True, publish_pass=None,
-             rtmp_path=None):
+             rtmp_path=None, session_ok=False):
     p = tmp_path / 'work'
     p.mkdir()
     db = keydb_lib.init_db(str(p / 'keys.tdb'))
@@ -71,6 +71,8 @@ def _workdir(tmp_path, record=True, publish_pass=None,
         keydb_lib.set_video_publish_pass(db, PORT_ENG, publish_pass)
     if rtmp_path:
         keydb_lib.set_video_rtmp_path(db, PORT_ENG, 0, rtmp_path)
+    if session_ok:
+        keydb_lib.set_video_slot_flag(db, PORT_ENG, 0, 'session_ok')
     db.transaction_prepare_commit()
     db.transaction_commit()
     db.close()
@@ -227,7 +229,7 @@ def session(tmp_path):
     def _start(**kw):
         made['s'] = RtspSession(_workdir(tmp_path, **{
             k: v for k, v in kw.items()
-            if k in ('record', 'publish_pass')}),
+            if k in ('record', 'publish_pass', 'session_ok')}),
             with_mav=kw.get('with_mav', True))
         return made['s']
 
@@ -432,6 +434,89 @@ class TestPublishPassword:
         assert s.proxy.wait_for(r'wrong publish password', timeout=25), \
             s.proxy.log
         assert 'RTSP publisher' not in s.proxy.log
+
+
+@pytest.mark.integration
+class TestSessionOkSlot:
+    """VIDEO_SLOT_SESSION_OK: one slot opts back out of password-only.
+
+    A camera speaking RTMP out of its own firmware, and plain MPEG-TS
+    over UDP, have nowhere to put a credential. Without this the entry
+    faced an all-or-nothing choice: set a password and those streams
+    stop, or leave it off and every slot is admitted on its source
+    address. The flag is per slot and opt-in, so the streams that can
+    present a password still have to.
+    """
+
+    def test_udp_is_admitted_by_the_session_on_a_flagged_slot(self, session):
+        import socket
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import tsgen
+        s = session(with_mav=True, publish_pass='pubsecret', session_ok=True)
+        g = tsgen.TSGen()
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            for dg in g.datagrams(g.stream(60, gop=10, psi_every=20)):
+                sock.sendto(dg, ('127.0.0.1', VPORT))
+                time.sleep(0.003)
+        finally:
+            sock.close()
+        assert s.proxy.wait_for(r'join=ready', timeout=25), s.proxy.log
+        assert 'cannot carry one' not in s.proxy.log
+
+    def test_an_unflagged_slot_still_refuses_the_same_publisher(self, session):
+        """The property the design turns on: a MAVLink session does not
+        become a way past a publish password unless a slot says so."""
+        import socket
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import tsgen
+        s = session(with_mav=True, publish_pass='pubsecret', session_ok=False)
+        g = tsgen.TSGen()
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            for dg in g.datagrams(g.stream(60, gop=10, psi_every=20)):
+                sock.sendto(dg, ('127.0.0.1', VPORT))
+                time.sleep(0.003)
+        finally:
+            sock.close()
+        assert s.proxy.wait_for(r'cannot carry one', timeout=20), s.proxy.log
+        assert 'join=ready' not in s.proxy.log
+
+    def test_a_wrong_password_is_still_refused_on_a_flagged_slot(self,
+                                                                session, clip):
+        """The fallback is for a publisher that offered nothing. A
+        credential that was offered and is wrong must not be silently
+        downgraded to address matching, or a typo would look like it
+        worked."""
+        s = session(with_mav=True, publish_pass='pubsecret', session_ok=True)
+        s.pub = _publish_with('?pw=wrong', clip)
+        assert s.proxy.wait_for(r'wrong publish password', timeout=25), \
+            s.proxy.log
+        assert 'RTSP publisher' not in s.proxy.log
+
+    def test_offering_none_falls_back_on_a_flagged_slot(self, session, clip):
+        s = session(with_mav=True, publish_pass='pubsecret', session_ok=True)
+        s.pub = _publish_with('', clip)
+        assert s.proxy.wait_for(r'RTSP publisher', timeout=25), s.proxy.log
+        assert 'none was supplied' not in s.proxy.log
+
+    def test_the_flag_is_not_a_blanket_bypass(self, session):
+        """With no MAVLink session anywhere it refuses, and says why --
+        the flag redirects to path B, it does not skip admission."""
+        import socket
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import tsgen
+        s = session(with_mav=False, publish_pass='pubsecret', session_ok=True)
+        g = tsgen.TSGen()
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            for dg in g.datagrams(g.stream(30, gop=10, psi_every=20)):
+                sock.sendto(dg, ('127.0.0.1', VPORT))
+                time.sleep(0.003)
+        finally:
+            sock.close()
+        assert s.proxy.wait_for(r'no MAVLink session', timeout=20), s.proxy.log
+        assert 'join=ready' not in s.proxy.log
 
 
 class TestRtspPublisherRestart:

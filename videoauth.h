@@ -6,9 +6,11 @@
     A. publish password  -- accepted standalone, no MAVLink needed. For
        CGNAT, split-egress (video on a second link) and video-only use.
 
-    B. MAVLink session    -- with no publish password set, a publisher is
-       accepted when a MAVLink session for this entry was seen from the
-       same IPv4 address within the entry's grace window. The grace is
+    B. MAVLink session    -- with no publish password set (or on a slot
+       flagged VIDEO_SLOT_SESSION_OK, where one is set but the publisher
+       offered none), a publisher is accepted when a MAVLink session for
+       this entry was seen from the same IPv4 address within the entry's
+       grace window. The grace is
        what lets video ride through a telemetry dropout instead of being
        revoked by a link flap. On a bidi entry the session must also have
        been signature-validated.
@@ -63,9 +65,14 @@ public:
         nullptr  the transport cannot carry a credential at all (UDP)
         ""       it could, but none was supplied (RTSP with no ?pw=)
         "..."    a credential to check
+
+      `session_ok` is the slot's VIDEO_SLOT_SESSION_OK bit: when set, a
+      publisher that offered no credential falls back to path B even
+      though the entry has a publish password. A credential that was
+      offered and is wrong is still refused.
      */
     video_admit_t admit(const struct KeyEntry &ke, uint32_t peer_ip_be,
-                        const char *password, time_t now);
+                        const char *password, bool session_ok, time_t now);
 
     // Force the next lookup to re-read, e.g. after a config change.
     void invalidate(void) { fetched_at_ = 0; }
