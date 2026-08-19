@@ -171,6 +171,17 @@ p.hint { font-size: 0.9em; color: #555; max-width: 48em; }
 }
 .tip code { color: #ffd9a0; }
 
+/* Static help under a password field. Password rows deliberately do not
+   get the hover tooltip above: pasting into one while the tip is up
+   wedges Chrome's renderer and the tab stops accepting input. */
+.field-hint {
+    display: block;
+    margin: 0.15rem 0 0.4rem;
+    max-width: 48em;
+    font-size: 0.85rem;
+    color: #555;
+}
+
 /* Per-slot video options. Each checkbox, its text and its help marker
    are one unbreakable unit, or the marker wraps onto a line of its own
    and reads as belonging to the next row. The group as a whole still

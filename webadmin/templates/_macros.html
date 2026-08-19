@@ -19,21 +19,31 @@
    of their tooltips up at once. #}
 {% macro tip(field) -%}
   {%- if field.description -%}
-    <span class="tip" id="{{ field.id }}-tip" role="note">{{ field.description }}</span>
+    {%- if field.type == 'PasswordField' -%}
+      {#- A hover tooltip over a password field wedges Chrome's renderer
+          when you paste into it -- the tab stops taking input at all.
+          The text is worth keeping, so it renders in flow instead. -#}
+      <span class="field-hint" id="{{ field.id }}-tip">{{ field.description }}</span>
+    {%- else -%}
+      <span class="tip" id="{{ field.id }}-tip" role="note">{{ field.description }}</span>
+    {%- endif -%}
   {%- endif -%}
 {%- endmacro %}
 
 {# Label-then-input, for text/number/password/select fields. #}
 {% macro row(field) -%}
-  <div class="field{{ ' has-tip' if field.description }}">
-    {{ field.label }}: {{ field(aria_describedby=field.id ~ '-tip', **kwargs) }}{{ tip(field) }}
+  <div class="field{{ ' has-tip' if field.description and field.type != 'PasswordField' }}">
+    {# Only point at the help element when there is one to point at. #}
+    {{ field.label }}: {{ field(aria_describedby=field.id ~ '-tip', **kwargs)
+                           if field.description else field(**kwargs) }}{{ tip(field) }}
   </div>
 {%- endmacro %}
 
 {# Checkbox-then-label, for BooleanFields. #}
 {% macro check(field) -%}
-  <div class="field{{ ' has-tip' if field.description }}">
-    {{ field(aria_describedby=field.id ~ '-tip', **kwargs) }} {{ field.label }}{{ tip(field) }}
+  <div class="field{{ ' has-tip' if field.description and field.type != 'PasswordField' }}">
+    {{ field(aria_describedby=field.id ~ '-tip', **kwargs)
+         if field.description else field(**kwargs) }} {{ field.label }}{{ tip(field) }}
   </div>
 {%- endmacro %}
 
