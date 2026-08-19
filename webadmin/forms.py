@@ -229,10 +229,12 @@ class LoginForm(FlaskForm):
                     'you get the engineer view; either way you reach the '
                     'same entry.',
         validators=[DataRequired(), NumberRange(min=1, max=65535)])
+    # No description, so no tooltip: pasting into this field with the
+    # tooltip up wedges Chrome's renderer hard enough that the tab stops
+    # responding to input entirely. The text it carried is in the blurb
+    # above the form instead, where it costs nothing.
     passphrase = PasswordField(
         'Passphrase',
-        description='The shared MAVLink passphrase for this entry -- the '
-                    'same one set with keydb.py, not a separate web login.',
         validators=[DataRequired(), Length(min=1, max=256)],
         render_kw=_CURRENT_PW_KW)
     submit = SubmitField('Log in')
