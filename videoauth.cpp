@@ -103,7 +103,8 @@ video_admit_t VideoAuth::check_session(const struct KeyEntry &ke,
 }
 
 video_admit_t VideoAuth::admit(const struct KeyEntry &ke, uint32_t peer_ip_be,
-                               const char *password, time_t now)
+                               const char *password, bool session_ok,
+                               time_t now)
 {
     // Path A: a publish password, when set, is sufficient on its own.
     bool have_pw = false;
@@ -112,22 +113,30 @@ video_admit_t VideoAuth::admit(const struct KeyEntry &ke, uint32_t peer_ip_be,
     }
     if (have_pw) {
         /*
-          The password replaces the MAVLink-session check rather than
-          adding to it: an operator sets one precisely because they do
-          not want address matching to be the gate.
-
-          Say so clearly when the transport had no way to present it.
-          "wrong publish password" is true but useless to someone whose
-          udpsink never sent one.
+          A credential that was offered is judged on its own merits, and
+          a wrong one is fatal even on a session_ok slot: falling back
+          on a typo would turn a clear rejection into a silent downgrade
+          to address matching.
          */
-        if (password == nullptr) {
-            return VIDEO_ADMIT_NO_CREDENTIAL;
+        if (password != nullptr && *password != '\0') {
+            return video_password_matches(ke.video_publish_key, password)
+                ? VIDEO_ADMIT_OK : VIDEO_ADMIT_BAD_PASSWORD;
         }
-        if (*password == '\0') {
-            return VIDEO_ADMIT_MISSING_PASSWORD;
+        /*
+          None offered. By default the password replaces the
+          MAVLink-session check rather than adding to it: an operator
+          sets one precisely because they do not want address matching
+          to be the gate. VIDEO_SLOT_SESSION_OK opts one slot back out,
+          for a publisher with nowhere to put a credential.
+
+          Distinguish the two cases when refusing -- "wrong publish
+          password" is true but useless to someone whose udpsink never
+          sent one.
+         */
+        if (!session_ok) {
+            return password == nullptr ? VIDEO_ADMIT_NO_CREDENTIAL
+                                       : VIDEO_ADMIT_MISSING_PASSWORD;
         }
-        return video_password_matches(ke.video_publish_key, password)
-            ? VIDEO_ADMIT_OK : VIDEO_ADMIT_BAD_PASSWORD;
     }
 
     // Path B: match a recent MAVLink session.
