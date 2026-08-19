@@ -81,11 +81,16 @@ VIDEO_SLOT_BITS = 8
 VIDEO_SLOT_SRT     = 1 << 0   # UDP side speaks SRT, not plain MPEG-TS
 VIDEO_SLOT_RECORD  = 1 << 1   # write .ts segments under logs/
 VIDEO_SLOT_RAW_TCP = 1 << 2   # allow raw-TCP viewers (no credential)
+# Accept a publisher this slot's MAVLink session authorises even when the
+# entry has a publish password. For streams that cannot carry one -- a
+# camera's own RTMP, plain MPEG-TS over UDP. Opt-in, per slot.
+VIDEO_SLOT_SESSION_OK = 1 << 3
 
 VIDEO_SLOT_FLAG_NAMES = {
     "srt":     VIDEO_SLOT_SRT,
     "record":  VIDEO_SLOT_RECORD,
     "raw_tcp": VIDEO_SLOT_RAW_TCP,
+    "session_ok": VIDEO_SLOT_SESSION_OK,
 }
 
 VIDEO_OPT_SHIFT = 24
