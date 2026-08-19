@@ -823,6 +823,44 @@ class TestRtmpIngest:
                 pub.close()
             s.stop()
 
+    def test_repeated_script_tags_do_not_kill_the_backend(self, tmp_path,
+                                                          clip):
+        """A publisher may re-send onMetaData throughout the stream.
+
+        gstreamer's flvmux does exactly that rather than emitting it
+        once at the head, and ffmpeg's FLV demuxer surfaces the repeats
+        as a second, data stream. The backend mapped every input stream
+        into MPEG-TS, which has no encoder for that one, so ffmpeg died
+        on "Error selecting an encoder" before writing a byte: the slot
+        sat at 0 KiB with the backend apparently running. ffmpeg's own
+        FLV has no such stream, which is why publishing with ffmpeg
+        worked and the stock gst-launch pipeline never produced a frame.
+        """
+        meta = (rtmp_client._amf_str('@setDataFrame')
+                + rtmp_client._amf_str('onMetaData')
+                + rtmp_client._amf_obj({'width': 1280.0, 'height': 720.0,
+                                        'videocodecid': 7.0}))
+        tags = self._flv_of(clip, tmp_path)
+        wd = _workdir(tmp_path, record=True)
+        s = RtspSession(wd)
+        pub = None
+        try:
+            pub = rtmp_client.RtmpPublisher('127.0.0.1', VPORT)
+            pub.handshake()
+            pub.connect()
+            pub.publish(first_tags=tags[:1])
+            for i, (ttype, ts, body) in enumerate(tags[1:]):
+                pub.send_tag(ttype, ts, body)
+                # Interleaved the way flvmux does, not just at the head.
+                if i % 5 == 0:
+                    pub.send_tag(18, ts, meta)
+                time.sleep(0.004)
+            assert s.proxy.wait_for(r'join=ready', timeout=40), s.proxy.log
+        finally:
+            if pub:
+                pub.close()
+            s.stop()
+
     def test_a_split_chunk_does_not_inflate_timestamps(self, tmp_path, clip):
         """A chunk header split from its payload must not double its delta.
 
