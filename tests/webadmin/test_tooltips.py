@@ -133,6 +133,37 @@ class TestTooltipsRender:
         assert 'ffplay tcp://' in html             # raw TCP viewers
         assert 'nowhere to put a credential' in html   # MAVLink publish
 
+    def test_no_password_field_gets_a_hover_tooltip(self, client,
+                                                    keydb_path):
+        """A hover tooltip over a password field wedges Chrome's
+        renderer when you paste into it -- the tab stops accepting
+        input at all and does not recover. Their help renders in flow
+        as .field-hint instead, so this must hold on every page."""
+        login_as(client, BOB_PORT1, BOB_PASS)
+        pages = ['/admin/%d' % ALICE_PORT2, '/admin/']
+        client.get('/logout')
+        pages.append('/login')
+        seen_any = False
+        for url in pages:
+            if url != '/login':
+                login_as(client, BOB_PORT1, BOB_PASS)
+            html = client.get(url).get_data(as_text=True)
+            for pw_id in re.findall(
+                    r'<input[^>]*type="password"[^>]*id="([^"]+)"', html) + \
+                    re.findall(r'<input[^>]*id="([^"]+)"[^>]*type="password"',
+                               html):
+                seen_any = True
+                assert '<span class="tip" id="%s-tip"' % pw_id not in html, \
+                    '%s has a hover tooltip on %s' % (pw_id, url)
+        assert seen_any, 'found no password fields to check'
+
+    def test_password_help_is_still_shown(self, client, keydb_path):
+        """Removing the tooltip must not silently drop the text."""
+        login_as(client, BOB_PORT1, BOB_PASS)
+        html = client.get('/admin/%d' % ALICE_PORT2).get_data(as_text=True)
+        assert 'class="field-hint"' in html
+        assert 'REPLACES the address check' in html   # publish password
+
     def test_description_is_escaped(self, app):
         """Descriptions are trusted text today, but they are rendered
         into HTML, so the macro must not become an injection point if one
