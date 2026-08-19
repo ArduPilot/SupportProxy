@@ -72,6 +72,14 @@
           nowhere in a raw stream to carry a password, so this is offered
           only when no viewer password is set.
         </span></span>
+        <span class="opt">{{ form['video_sessok_' ~ slot]() }} MAVLink publish
+        <span class="tip" role="note">
+          Accept a publisher on this slot that the entry's MAVLink session
+          authorises, even though a publish password is set. For a camera
+          that speaks RTMP from its own firmware, or plain MPEG-TS over
+          UDP, with nowhere to put a credential. A password that is given
+          and is wrong is still refused.
+        </span></span>
         <span class="opt">RTMP
           {{ form['video_rtmp_' ~ slot](size=16,
                                         placeholder='app/stream') }}

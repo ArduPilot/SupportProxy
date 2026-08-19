@@ -16,7 +16,7 @@ from webadmin import forms
 # Fields that legitimately have no `description`.
 #
 # The per-slot video booleans are documented by hand in
-# _video_fields.html instead: three slots x three options would mean nine
+# _video_fields.html instead: five slots x four options would mean twenty
 # near-identical strings in forms.py, and the row is rendered by hand
 # there anyway.
 _NO_DESCRIPTION_NEEDED = {'submit', 'csrf_token'}
@@ -30,7 +30,7 @@ def _documented(form_cls):
         name = field.name
         if name in _NO_DESCRIPTION_NEEDED:
             continue
-        if re.match(r'^video_(srt|record|rawtcp)_\d$', name):
+        if re.match(r'^video_(srt|record|rawtcp|sessok)_\d$', name):
             continue
         need.add(name)
         if field.description:
@@ -120,13 +120,14 @@ class TestTooltipsRender:
 
     def test_video_slot_options_are_documented_in_the_template(
             self, client, keydb_path):
-        """These three are exempt from the forms.py check, so make sure
-        they really are documented where they are rendered."""
+        """These are exempt from the forms.py check, so make sure they
+        really are documented where they are rendered."""
         login_as(client, BOB_PORT1, BOB_PASS)
         html = client.get('/admin/%d' % ALICE_PORT2).get_data(as_text=True)
         assert 'cannot share a port' in html       # SRT
         assert 'timestamped .ts segments' in html  # record
         assert 'ffplay tcp://' in html             # raw TCP viewers
+        assert 'nowhere to put a credential' in html   # MAVLink publish
 
     def test_description_is_escaped(self, app):
         """Descriptions are trusted text today, but they are rendered
@@ -165,8 +166,8 @@ class TestStylesheet:
         assert ':focus' in css, 'tooltip must open on keyboard focus'
 
     def test_row_selector_is_direct_child_only(self, client):
-        """The per-slot video row holds three separately documented
-        checkboxes; a descendant selector would throw all three
+        """The per-slot video row holds several separately documented
+        checkboxes; a descendant selector would throw all of their
         tooltips up at once when the row is hovered."""
         css = _css_rules(client)
         assert '.field:hover > .tip' in css
