@@ -69,6 +69,7 @@ def me():
                 ke.flags &= ~keydb_lib.FLAG_BINLOG
             if form.log_retention_days.data is not None:
                 ke.log_retention_days = float(form.log_retention_days.data)
+            ke.set_log_access(form.log_access.data)
             # First-enable default: when either recording flag flips
             # from off to on and retention is still "keep forever",
             # seed 7 days so freshly-toggled flags have a reasonable
@@ -111,6 +112,7 @@ def me():
         form.tlog_enabled.data = bool(ke.flags & keydb_lib.FLAG_TLOG)
         form.binlog_enabled.data = bool(ke.flags & keydb_lib.FLAG_BINLOG)
         form.log_retention_days.data = ke.log_retention_days
+        form.log_access.data = ke.log_access()
         form.fc_sysid.data = ke.fc_sysid
         form.tz_offset_hours.data = ke.tz_offset_hours
         form.use_tz.data = bool(ke.flags & keydb_lib.FLAG_USE_TZ)

@@ -49,6 +49,16 @@ def _refresh_role():
     return ke
 
 
+def current_entry():
+    """Return the logged-in user's live entry, or None.
+
+    Unlike current_owner(), this revalidates the session against keys.tdb and
+    refreshes its admin role. Routes with optional authentication use this
+    when anonymous access may also be valid.
+    """
+    return _refresh_role()
+
+
 def is_admin():
     """For *display* only (templates). Authorisation paths must call
     require_admin so the role is re-validated from keys.tdb."""

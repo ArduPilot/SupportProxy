@@ -35,6 +35,8 @@
 #define KEY_FLAG_BINLOG    (1u << 3)  // record ArduPilot bin logs over MAVLink
 #define KEY_FLAG_USE_TZ    (1u << 4)  // name logs with tz_offset_hours; else server local
 #define KEY_FLAG_VIDEO     (1u << 5)  // video proxying enabled for this entry
+#define KEY_FLAG_LOG_LOGIN (1u << 6)  // any authenticated web user may read logs
+#define KEY_FLAG_LOG_PUBLIC (1u << 7) // anyone with the URL may read logs
 
 #define KEY_MAX_VIDEO_PORTS 5
 

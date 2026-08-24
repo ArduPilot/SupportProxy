@@ -56,6 +56,10 @@ _D_RETENTION = ('The cleanup pass deletes .tlog and .bin files older than '
                 'this. 0 keeps them forever. Fractional days are allowed. '
                 'Video recordings are covered by their own disk budget, '
                 'not by this.')
+_D_LOG_ACCESS = ('Controls read-only access to this entry\'s log browser and '
+                 'downloads. Private allows only this entry\'s owner and '
+                 'server admins. Login Required also allows any user with a '
+                 'SupportProxy login. Public allows anyone with the URL.')
 _D_SYSID = ('Restricts flight-controller reboot detection -- which is what '
             'starts a new .bin file -- to packets from this MAVLink system '
             'ID. 0 accepts any sysid, which is usually right unless several '
@@ -72,6 +76,17 @@ _D_RESET_TS = ('Zero the stored MAVLink signing timestamp. Use this when '
 _D_NEW_PASS = ('Sets the shared MAVLink signing passphrase. Leave blank to '
                'keep the current one. Everyone connecting to this entry '
                'must use the new value, so tell them before you save.')
+
+
+def _log_access_field():
+    return SelectField(
+        'Log access', description=_D_LOG_ACCESS,
+        choices=[
+            (keydb_lib.LOG_ACCESS_PRIVATE, 'Private'),
+            (keydb_lib.LOG_ACCESS_LOGIN_REQUIRED, 'Login Required'),
+            (keydb_lib.LOG_ACCESS_PUBLIC, 'Public'),
+        ],
+        coerce=int, default=keydb_lib.LOG_ACCESS_PRIVATE)
 
 
 class _VideoOwnerFields:
@@ -272,6 +287,7 @@ class OwnerEditForm(FlaskForm, _VideoOwnerFields):
                     'admin for longer.' % OWNER_MAX_LOG_RETENTION_DAYS,
         validators=[Optional(),
                     NumberRange(min=0.0, max=OWNER_MAX_LOG_RETENTION_DAYS)])
+    log_access = _log_access_field()
     fc_sysid = IntegerField(
         'Flight-controller MAVLink sysid (0 = any)', description=_D_SYSID,
         validators=[Optional(), NumberRange(min=0, max=255)])
@@ -325,6 +341,7 @@ class AdminEditForm(FlaskForm, _VideoAdminFields):
         'Log retention (days, 0 = keep forever)', description=_D_RETENTION,
         validators=[Optional(),
                     NumberRange(min=0.0, max=ADMIN_MAX_LOG_RETENTION_DAYS)])
+    log_access = _log_access_field()
     fc_sysid = IntegerField(
         'Flight-controller MAVLink sysid (0 = any)', description=_D_SYSID,
         validators=[Optional(), NumberRange(min=0, max=255)])

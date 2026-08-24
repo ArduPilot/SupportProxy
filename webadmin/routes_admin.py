@@ -195,6 +195,7 @@ def edit(port2):
                 ke.flags &= ~keydb_lib.FLAG_BINLOG
             if form.log_retention_days.data is not None:
                 ke.log_retention_days = float(form.log_retention_days.data)
+            ke.set_log_access(form.log_access.data)
             # First-enable default for either recording flag.
             just_enabled = ((form.tlog_enabled.data and not was_tlog)
                             or (form.binlog_enabled.data and not was_binlog))
@@ -236,6 +237,7 @@ def edit(port2):
         form.tlog_enabled.data = bool(ke.flags & keydb_lib.FLAG_TLOG)
         form.binlog_enabled.data = bool(ke.flags & keydb_lib.FLAG_BINLOG)
         form.log_retention_days.data = ke.log_retention_days
+        form.log_access.data = ke.log_access()
         form.fc_sysid.data = ke.fc_sysid
         form.tz_offset_hours.data = ke.tz_offset_hours
         form.use_tz.data = bool(ke.flags & keydb_lib.FLAG_USE_TZ)
