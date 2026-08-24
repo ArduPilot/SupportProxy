@@ -55,10 +55,16 @@
   {{ check(form.tlog_enabled) }}
   {{ check(form.binlog_enabled) }}
   {{ row(form.log_retention_days) }}
+  {{ row(form.log_access) }}
   {{ row(form.fc_sysid) }}
   {{ check(form.use_tz) }}
   {{ row(form.tz_offset_hours) }}
-  <div class="field"><a href="{{ url_for('owner_logs.owner_dates') }}">browse logs &rarr;</a></div>
+  <div class="field">
+    <a href="{{ url_for('owner_logs.owner_dates') }}">browse logs &rarr;</a>
+    {% if entry.log_access() %}
+    · <a href="{{ url_for('admin_logs.admin_dates', port2=entry.port2) }}">shared read-only link &rarr;</a>
+    {% endif %}
+  </div>
   {% include "_video_fields.html" %}
   {{ check(form.reset_timestamp) }}
   <div>{{ form.submit() }}</div>

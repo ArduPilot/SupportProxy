@@ -11,12 +11,14 @@ accepted so older logs remain browsable.
 
 Two parallel views, sharing the listing/download helpers below:
 
-  * admin: /admin/logs/<port2>/[<date>] — admin can browse any entry
+  * shared: /admin/logs/<port2>/[<date>] — admin access, plus the entry's
+    configured Private / Login Required / Public read policy
   * owner: /me/logs/[<date>]            — owner can browse only their own
 
-The blueprints differ only in which port2 they resolve and which auth
-decorator they use.
+Only admins can mutate logs through the shared namespace; widened entry
+access is always read-only.
 """
+import functools
 import os
 import re
 import shutil
@@ -24,12 +26,12 @@ import stat
 import subprocess
 import time
 
-from flask import (Blueprint, Response, abort, current_app, flash, redirect,
-                   render_template, send_from_directory, url_for)
+from flask import (Blueprint, Response, abort, current_app, flash, g, redirect,
+                   render_template, request, send_from_directory, url_for)
 
 import keydb_lib
 
-from .auth import current_owner, require_admin, require_login
+from .auth import current_entry, current_owner, require_admin, require_login
 from .forms import DeleteLogForm
 from .db import tdb_readonly
 
@@ -272,6 +274,37 @@ def _entry_label(port2):
         return ke
 
 
+def require_log_read(view):
+    """Allow an admin, or a reader admitted by the entry's log policy.
+
+    These are the existing /admin/logs/<port2>/ URLs so shared links remain
+    stable. Only GET views use this decorator; deletion stays behind
+    require_admin regardless of the configured read policy.
+    """
+    @functools.wraps(view)
+    def wrapper(port2, *args, **kwargs):
+        entry = _entry_label(port2)
+        if entry is None:
+            abort(404)
+
+        viewer = current_entry()
+        can_manage = viewer is not None and viewer.is_admin()
+        access = entry.log_access()
+        if access == keydb_lib.LOG_ACCESS_PRIVATE and not can_manage:
+            abort(403)
+        if (access == keydb_lib.LOG_ACCESS_LOGIN_REQUIRED
+                and viewer is None):
+            return redirect(url_for('auth.login', next=request.path))
+
+        # Avoid a second database read in each listing/playback view and give
+        # the template an explicit capability rather than trusting session
+        # presentation state for security-sensitive controls.
+        g.log_entry = entry
+        g.can_manage_logs = can_manage
+        return view(port2, *args, **kwargs)
+    return wrapper
+
+
 def _list_dates(port2):
     """All date subdirs under logs/<port2>/, newest first.
 
@@ -450,48 +483,43 @@ admin_bp = Blueprint('admin_logs', __name__, url_prefix='/admin/logs')
 
 
 @admin_bp.route('/<int:port2>/', methods=['GET'])
-@require_admin
+@require_log_read
 def admin_dates(port2):
-    entry = _entry_label(port2)
-    if entry is None:
-        abort(404)
     return render_template('admin_logs.html',
-                           entry=entry, dates=_list_dates(port2),
+                           entry=g.log_entry, dates=_list_dates(port2),
                            date=None, sessions=None,
-                           del_form=DeleteLogForm())
+                           can_manage=g.can_manage_logs,
+                           del_form=(DeleteLogForm()
+                                     if g.can_manage_logs else None))
 
 
 @admin_bp.route('/<int:port2>/<date>/', methods=['GET'])
-@require_admin
+@require_log_read
 def admin_sessions(port2, date):
     _safe_date(date)
-    entry = _entry_label(port2)
-    if entry is None:
-        abort(404)
     return render_template('admin_logs.html',
-                           entry=entry, dates=_list_dates(port2),
+                           entry=g.log_entry, dates=_list_dates(port2),
                            date=date, sessions=_list_sessions(port2, date),
-                           del_form=DeleteLogForm())
+                           can_manage=g.can_manage_logs,
+                           del_form=(DeleteLogForm()
+                                     if g.can_manage_logs else None))
 
 
 @admin_bp.route('/<int:port2>/<date>/<session_name>', methods=['GET'])
-@require_admin
+@require_log_read
 def admin_download(port2, date, session_name):
     return _send_session_file(port2, date, session_name)
 
 
 @admin_bp.route('/<int:port2>/<date>/<session_name>/watch', methods=['GET'])
-@require_admin
+@require_log_read
 def admin_watch(port2, date, session_name):
     _safe_date(date)
     _safe_session(session_name)
     if not _is_video(session_name):
         abort(404)
-    entry = _entry_label(port2)
-    if entry is None:
-        abort(404)
     return render_template(
-        'log_play.html', entry=entry, date=date, name=session_name,
+        'log_play.html', entry=g.log_entry, date=date, name=session_name,
         stream_url=url_for('admin_logs.admin_stream', port2=port2,
                            date=date, session_name=session_name),
         mp4_url=url_for('admin_logs.admin_play_mp4', port2=port2,
@@ -504,14 +532,14 @@ def admin_watch(port2, date, session_name):
 
 
 @admin_bp.route('/<int:port2>/<date>/<session_name>/stream', methods=['GET'])
-@require_admin
+@require_log_read
 def admin_stream(port2, date, session_name):
     return _send_session_inline(port2, date, session_name)
 
 
 @admin_bp.route('/<int:port2>/<date>/<session_name>/play.mp4',
                 methods=['GET'])
-@require_admin
+@require_log_read
 def admin_play_mp4(port2, date, session_name):
     return _remux_response(port2, date, session_name)
 

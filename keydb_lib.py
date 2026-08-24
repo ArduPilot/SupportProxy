@@ -51,6 +51,18 @@ FLAG_TLOG      = 1 << 2   # record per-connection MAVProxy-format tlogs
 FLAG_BINLOG    = 1 << 3   # record ArduPilot bin logs over MAVLink
 FLAG_USE_TZ    = 1 << 4   # name logs with tz_offset_hours; else server local
 FLAG_VIDEO     = 1 << 5   # video proxying enabled for this entry
+FLAG_LOG_LOGIN = 1 << 6   # any authenticated web user may read logs
+FLAG_LOG_PUBLIC = 1 << 7  # anyone with the URL may read logs
+
+# Per-entry web log access. The two flag bits deliberately encode the wider
+# policies independently: if an old/new CLI combination ever sets both,
+# Public wins rather than unexpectedly making a shared URL private.
+LOG_ACCESS_PRIVATE = 0
+LOG_ACCESS_LOGIN_REQUIRED = 1
+LOG_ACCESS_PUBLIC = 2
+LOG_ACCESS_CHOICES = (LOG_ACCESS_PRIVATE, LOG_ACCESS_LOGIN_REQUIRED,
+                      LOG_ACCESS_PUBLIC)
+LOG_ACCESS_MASK = FLAG_LOG_LOGIN | FLAG_LOG_PUBLIC
 
 FLAG_NAMES = {
     "admin":     FLAG_ADMIN,
@@ -59,6 +71,8 @@ FLAG_NAMES = {
     "binlog":    FLAG_BINLOG,
     "use_tz":    FLAG_USE_TZ,
     "video":     FLAG_VIDEO,
+    "log_login": FLAG_LOG_LOGIN,
+    "log_public": FLAG_LOG_PUBLIC,
 }
 
 DEFAULT_LOG_RETENTION_DAYS = 7.0
@@ -337,6 +351,24 @@ class KeyEntry:
 
     def is_admin(self):
         return bool(self.flags & FLAG_ADMIN)
+
+    def log_access(self):
+        """Who may read this entry's logs through the web UI."""
+        if self.flags & FLAG_LOG_PUBLIC:
+            return LOG_ACCESS_PUBLIC
+        if self.flags & FLAG_LOG_LOGIN:
+            return LOG_ACCESS_LOGIN_REQUIRED
+        return LOG_ACCESS_PRIVATE
+
+    def set_log_access(self, access):
+        """Set the web log access policy while preserving unrelated flags."""
+        if access not in LOG_ACCESS_CHOICES:
+            raise ValueError("invalid log access policy: %r" % (access,))
+        self.flags &= ~LOG_ACCESS_MASK
+        if access == LOG_ACCESS_LOGIN_REQUIRED:
+            self.flags |= FLAG_LOG_LOGIN
+        elif access == LOG_ACCESS_PUBLIC:
+            self.flags |= FLAG_LOG_PUBLIC
 
     # --- video ---------------------------------------------------------
 

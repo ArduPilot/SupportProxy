@@ -39,11 +39,41 @@ def seed_session(logs_root, port2, date, session_name, content=b'TLOGDATA'):
     return f
 
 
+def set_log_access(keydb_path, port2, access):
+    db = keydb_lib.open_db(keydb_path)
+    db.transaction_start()
+    ke = keydb_lib.KeyEntry(port2)
+    assert ke.fetch(db)
+    ke.set_log_access(access)
+    ke.store(db)
+    db.transaction_prepare_commit()
+    db.transaction_commit()
+    db.close()
+
+
 # ---------------------------------------------------------------------------
 # form: enable / disable / retention validation
 # ---------------------------------------------------------------------------
 
 class TestOwnerTlogForm:
+    def test_owner_can_make_logs_public(self, client, keydb_path):
+        login_as(client, ALICE_PORT1, ALICE_PASS)
+        resp = client.post('/me/', data={
+            'name': 'alice',
+            'log_access': str(keydb_lib.LOG_ACCESS_PUBLIC),
+            'submit': 'Save',
+        })
+        assert resp.status_code == 302
+        assert (fetch_entry(keydb_path, ALICE_PORT2).log_access()
+                == keydb_lib.LOG_ACCESS_PUBLIC)
+
+    def test_owner_form_offers_all_log_access_choices(self, client):
+        login_as(client, ALICE_PORT1, ALICE_PASS)
+        body = client.get('/me/').get_data(as_text=True)
+        assert '>Private<' in body
+        assert '>Login Required<' in body
+        assert '>Public<' in body
+
     def test_owner_enable_default_retention(self, client, keydb_path):
         login_as(client, ALICE_PORT1, ALICE_PASS)
         resp = client.post('/me/', data={
@@ -153,6 +183,18 @@ class TestOwnerTlogForm:
 
 
 class TestAdminTlogForm:
+    def test_admin_can_require_login_for_logs(self, client, keydb_path):
+        login_as(client, BOB_PORT1, BOB_PASS)
+        resp = client.post('/admin/' + str(ALICE_PORT2), data={
+            'name': 'alice',
+            'port1': str(ALICE_PORT1),
+            'log_access': str(keydb_lib.LOG_ACCESS_LOGIN_REQUIRED),
+            'submit': 'Save',
+        })
+        assert resp.status_code == 302
+        assert (fetch_entry(keydb_path, ALICE_PORT2).log_access()
+                == keydb_lib.LOG_ACCESS_LOGIN_REQUIRED)
+
     def test_admin_can_set_high_retention(self, client, keydb_path):
         login_as(client, BOB_PORT1, BOB_PASS)
         # bob_admin edits alice's entry
@@ -502,6 +544,81 @@ class TestAdminTlogListing:
         login_as(client, BOB_PORT1, BOB_PASS)
         r = client.get('/admin/logs/99999/')
         assert r.status_code == 404
+
+
+class TestSharedLogAccess:
+    def test_public_listing_and_download_need_no_login(self, client,
+                                                        keydb_path,
+                                                        logs_dir):
+        seed_session(logs_dir, ALICE_PORT2, '2026-08-25',
+                     'session1.tlog', content=b'PUBLIC_LOG')
+        set_log_access(keydb_path, ALICE_PORT2,
+                       keydb_lib.LOG_ACCESS_PUBLIC)
+
+        base = '/admin/logs/%d/2026-08-25/' % ALICE_PORT2
+        listing = client.get(base)
+        assert listing.status_code == 200
+        assert b'session1.tlog' in listing.data
+        assert b'Read-only log access' in listing.data
+        assert b'edit entry' not in listing.data
+        assert b'/delete' not in listing.data
+
+        download = client.get(base + 'session1.tlog')
+        assert download.status_code == 200
+        assert download.data.endswith(b'PUBLIC_LOG')
+
+    def test_public_video_playback_routes_need_no_login(self, client,
+                                                         keydb_path,
+                                                         logs_dir):
+        name = '2026_08_25_10:00:00.v1.ts'
+        seed_session(logs_dir, ALICE_PORT2, '2026-08-25', name,
+                     content=b'\x47PUBLIC_VIDEO')
+        set_log_access(keydb_path, ALICE_PORT2,
+                       keydb_lib.LOG_ACCESS_PUBLIC)
+        base = '/admin/logs/%d/2026-08-25/%s' % (ALICE_PORT2, name)
+
+        assert client.get(base + '/watch').status_code == 200
+        stream = client.get(base + '/stream')
+        assert stream.status_code == 200
+        assert stream.data == b'\x47PUBLIC_VIDEO'
+
+    def test_login_required_redirects_anonymous_reader(self, client,
+                                                        keydb_path):
+        set_log_access(keydb_path, BOB_PORT2,
+                       keydb_lib.LOG_ACCESS_LOGIN_REQUIRED)
+        url = '/admin/logs/%d/' % BOB_PORT2
+        r = client.get(url, follow_redirects=False)
+        assert r.status_code == 302
+        assert '/login' in r.location
+        assert 'next=' in r.location
+
+    def test_login_required_accepts_any_valid_login_read_only(self, client,
+                                                               keydb_path,
+                                                               logs_dir):
+        seed_session(logs_dir, BOB_PORT2, '2026-08-25',
+                     'session2.bin', content=b'LOGIN_LOG')
+        set_log_access(keydb_path, BOB_PORT2,
+                       keydb_lib.LOG_ACCESS_LOGIN_REQUIRED)
+        login_as(client, ALICE_PORT1, ALICE_PASS)
+
+        base = '/admin/logs/%d/2026-08-25/' % BOB_PORT2
+        listing = client.get(base)
+        assert listing.status_code == 200
+        assert b'session2.bin' in listing.data
+        assert b'Read-only log access' in listing.data
+        assert b'/delete' not in listing.data
+        assert client.get(base + 'session2.bin').data.endswith(b'LOGIN_LOG')
+
+    def test_shared_access_never_grants_delete(self, client, keydb_path,
+                                                logs_dir):
+        path = seed_session(logs_dir, ALICE_PORT2, '2026-08-25',
+                            'session1.tlog')
+        set_log_access(keydb_path, ALICE_PORT2,
+                       keydb_lib.LOG_ACCESS_PUBLIC)
+        r = client.post('/admin/logs/%d/2026-08-25/session1.tlog/delete'
+                        % ALICE_PORT2)
+        assert r.status_code == 403
+        assert path.exists()
 
 
 class TestPathSafety:

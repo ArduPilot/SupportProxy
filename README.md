@@ -414,6 +414,21 @@ proxy restart.
 - Everyone else gets the self-service UI (rename their own entry, rotate
   their own passphrase, reset their signing timestamp).
 
+### Log access
+
+Each entry's edit page has a **Log access** setting:
+
+- **Private** (the default): only the entry owner and server admins can read
+  its logs.
+- **Login Required**: any user with a valid SupportProxy login can browse and
+  download them.
+- **Public**: anyone with the `/admin/logs/<port2>/...` URL can browse and
+  download them without logging in.
+
+Shared access is read-only. Deleting individual recordings or a whole day
+continues to require either the entry owner's `/me/logs/` view or a server
+admin. Log responses remain non-cacheable even when the entry is Public.
+
 ### Install dependencies
 
 ```bash
