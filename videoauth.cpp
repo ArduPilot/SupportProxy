@@ -38,18 +38,21 @@ const char *video_admit_str(video_admit_t r)
     return "unknown";
 }
 
-bool video_password_matches(const uint8_t stored[32], const char *candidate)
+bool video_password_matches(const uint8_t stored[32],
+                            const std::string &candidate)
 {
     // An all-zero key is the "unset" sentinel, never a hash to match.
     bool any = false;
     for (int i = 0; i < 32; i++) {
         any |= stored[i] != 0;
     }
-    if (!any || candidate == nullptr || *candidate == '\0') {
+    if (!any || candidate.empty()
+        || candidate.find('\0') != std::string::npos) {
         return false;
     }
     uint8_t want[SHA256_DIGEST_LENGTH];
-    SHA256((const unsigned char *)candidate, strlen(candidate), want);
+    SHA256(reinterpret_cast<const unsigned char *>(candidate.data()),
+           candidate.size(), want);
     return CRYPTO_memcmp(want, stored, sizeof(want)) == 0;
 }
 
@@ -103,7 +106,8 @@ video_admit_t VideoAuth::check_session(const struct KeyEntry &ke,
 }
 
 video_admit_t VideoAuth::admit(const struct KeyEntry &ke, uint32_t peer_ip_be,
-                               const char *password, bool session_ok,
+                               const std::string *password,
+                               bool credential_capable, bool session_ok,
                                time_t now)
 {
     // Path A: a publish password, when set, is sufficient on its own.
@@ -118,8 +122,8 @@ video_admit_t VideoAuth::admit(const struct KeyEntry &ke, uint32_t peer_ip_be,
           on a typo would turn a clear rejection into a silent downgrade
           to address matching.
          */
-        if (password != nullptr && *password != '\0') {
-            return video_password_matches(ke.video_publish_key, password)
+        if (password != nullptr) {
+            return video_password_matches(ke.video_publish_key, *password)
                 ? VIDEO_ADMIT_OK : VIDEO_ADMIT_BAD_PASSWORD;
         }
         /*
@@ -134,8 +138,8 @@ video_admit_t VideoAuth::admit(const struct KeyEntry &ke, uint32_t peer_ip_be,
           sent one.
          */
         if (!session_ok) {
-            return password == nullptr ? VIDEO_ADMIT_NO_CREDENTIAL
-                                       : VIDEO_ADMIT_MISSING_PASSWORD;
+            return credential_capable ? VIDEO_ADMIT_MISSING_PASSWORD
+                                      : VIDEO_ADMIT_NO_CREDENTIAL;
         }
     }
 

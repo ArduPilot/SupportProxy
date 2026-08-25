@@ -24,7 +24,7 @@ bool video_viewer_authorised(const struct KeyEntry &ke,
     if (!has_pw) {
         return true;   // open viewing
     }
-    return video_password_matches(ke.video_viewer_key, password.c_str());
+    return video_password_matches(ke.video_viewer_key, password);
 }
 
 void VideoViewer::start(int fd, int port2, uint32_t peer_ip_be,
@@ -203,6 +203,18 @@ bool VideoViewer::on_readable(const struct KeyEntry &ke, int slot,
     for (const char *m : rtsp_methods) {
         const size_t len = strlen(m);
         if (size_t(n) >= len && memcmp(buf, m, len) == 0) {
+            // The request target carries the publish credential. Do not hand
+            // the socket off while that target can still be split across TCP
+            // segments: an early decision would turn a supplied password into
+            // "absent" and permit the session fallback. The peek is bounded,
+            // so a line that fills it without ending is malformed.
+            if (memchr(buf, '\n', size_t(n)) == nullptr) {
+                if (size_t(n) == sizeof(buf)) {
+                    drop_reason_ = "RTSP request line too long";
+                    return false;
+                }
+                return true;
+            }
             kind_ = VVK_RTSP;
             return true;   // the child takes the socket from here
         }

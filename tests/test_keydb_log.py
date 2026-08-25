@@ -20,14 +20,14 @@ import keydb_lib  # noqa: E402
 KEYDB_PY = os.path.join(_REPO_ROOT, 'keydb.py')
 
 
-def test_pack_format_size_is_248():
-    """The on-disk record is 248 bytes after appending the video fields.
+def test_pack_format_size_is_456():
+    """The on-disk record is 456 bytes after appending five-slot video.
 
     keydb.h carries a matching static_assert, so this catches either side
     drifting from the other.
     """
-    assert struct.calcsize(keydb_lib.PACK_FORMAT) == 344
-    assert keydb_lib.KEYENTRY_CURRENT_SIZE == 344
+    assert struct.calcsize(keydb_lib.PACK_FORMAT) == 456
+    assert keydb_lib.KEYENTRY_CURRENT_SIZE == 456
 
 
 def test_pack_unpack_roundtrip():
@@ -38,7 +38,7 @@ def test_pack_unpack_roundtrip():
     e.flags = keydb_lib.FLAG_TLOG | keydb_lib.FLAG_ADMIN
     e.log_retention_days = 0.0001
     data = e.pack()
-    assert len(data) == 344
+    assert len(data) == 456
 
     e2 = keydb_lib.KeyEntry(0)
     e2.unpack(data)
@@ -81,9 +81,9 @@ def test_legacy_104byte_record_zero_extends():
     assert decoded.video_flags == 0
     assert not decoded.video_viewer_pass_set()
 
-    # Re-pack: should emit the full 248-byte modern layout.
+    # Re-pack: should emit the full 456-byte modern layout.
     re = decoded.pack()
-    assert len(re) == 344
+    assert len(re) == 456
 
 
 def test_forward_compat_tail_is_preserved():
@@ -102,7 +102,7 @@ def test_forward_compat_tail_is_preserved():
     assert decoded._tail == extra
     re = decoded.pack()
     assert re.endswith(extra)
-    assert len(re) == 344 + len(extra)
+    assert len(re) == 456 + len(extra)
 
 
 def test_flag_names_includes_tlog():

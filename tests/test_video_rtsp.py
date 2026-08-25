@@ -494,6 +494,40 @@ class TestSessionOkSlot:
             s.proxy.log
         assert 'RTSP publisher' not in s.proxy.log
 
+    @pytest.mark.parametrize('target', [
+        '/cam?mode=x&pw=wrong',
+        '/cam?pw=%00wrong',
+    ])
+    def test_malformed_or_nonfirst_password_never_falls_back(self, session,
+                                                              target):
+        """Presence is independent of decoded value and query position."""
+        s = session(with_mav=True, publish_pass='pubsecret', session_ok=True)
+        sock = socket.create_connection(('127.0.0.1', VPORT), 5)
+        try:
+            req = ('OPTIONS rtsp://127.0.0.1:%d%s RTSP/1.0\r\n'
+                   'CSeq: 1\r\n\r\n' % (VPORT, target)).encode()
+            sock.sendall(req)
+            assert s.proxy.wait_for(r'wrong publish password', timeout=10), \
+                s.proxy.log
+            assert 'RTSP publisher' not in s.proxy.log
+        finally:
+            sock.close()
+
+    def test_fragmented_request_line_waits_for_the_credential(self, session):
+        """Do not authorise from a TCP prefix before ?pw= has arrived."""
+        s = session(with_mav=True, publish_pass='pubsecret', session_ok=True)
+        sock = socket.create_connection(('127.0.0.1', VPORT), 5)
+        try:
+            sock.sendall(('OPTIONS rtsp://127.0.0.1:%d/cam' % VPORT).encode())
+            time.sleep(1.0)
+            assert 'RTSP publisher' not in s.proxy.log, s.proxy.log
+            sock.sendall(b'?pw=wrong RTSP/1.0\r\nCSeq: 1\r\n\r\n')
+            assert s.proxy.wait_for(r'wrong publish password', timeout=10), \
+                s.proxy.log
+            assert 'RTSP publisher' not in s.proxy.log
+        finally:
+            sock.close()
+
     def test_offering_none_falls_back_on_a_flagged_slot(self, session, clip):
         s = session(with_mav=True, publish_pass='pubsecret', session_ok=True)
         s.pub = _publish_with('', clip)
@@ -1026,6 +1060,34 @@ class TestRtmpIngest:
             assert s.proxy.wait_for(r'rejected', timeout=25), s.proxy.log
             assert 'RTMP publishing' not in s.proxy.log
         finally:
+            s.stop()
+
+    @pytest.mark.parametrize('stream', [
+        'FPV?pw=wrong&pw=',
+        'FPV?pw=%00wrong',
+    ])
+    def test_supplied_rtmp_password_cannot_become_absent(self, tmp_path,
+                                                         stream):
+        """Duplicates and decoded NULs remain supplied wrong credentials.
+
+        This uses the MAVLink fallback so the pre-fix collapse to an empty
+        C string would be observable as successful publishing.
+        """
+        wd = _workdir(tmp_path, publish_pass='secret', session_ok=True)
+        s = RtspSession(wd, with_mav=True)
+        pub = None
+        try:
+            pub = rtmp_client.RtmpPublisher(
+                '127.0.0.1', VPORT, app='PhoenixFPV', stream=stream)
+            pub.handshake()
+            pub.connect()
+            pub.publish()
+            assert s.proxy.wait_for(r'wrong publish password', timeout=15), \
+                s.proxy.log
+            assert 'RTMP publishing' not in s.proxy.log
+        finally:
+            if pub:
+                pub.close()
             s.stop()
 
     def test_no_orphan_backend_after_the_rtmp_publisher_leaves(

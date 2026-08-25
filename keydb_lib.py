@@ -24,13 +24,12 @@ KEY_MAGIC = 0x6b73e867a72cdd1f
 # Pre-flags layout was 96 bytes. Anything smaller is invalid; anything bigger
 # is acceptable (extra trailing bytes belong to a newer schema we ignore).
 #
-# The current C++ struct ends with the video fields -- ports, flags, the
-# viewer and publish keys, the quota, the MAVLink grace window, the per-slot
-# RTMP paths -- and `uint32_t reserved[12]`. All are 4-byte aligned and slot in
-# cleanly after the existing fields, so the struct is 344 bytes with no
-# trailing pad. When a future field is added, claim
-# another `reserved[]` slot (renumber: shrink reserved by 1, add a named field)
-# so the on-disk byte layout stays compatible — the zero-init paths in
+# The current C++ struct carries three video slots inline, then the original
+# `uint32_t reserved[12]`, followed by the two appended slots and
+# `uint32_t reserved2[9]`. All are 4-byte aligned, so the struct is 456 bytes
+# with no trailing pad. When a future field is added, claim another trailing
+# `reserved2[]` slot (renumber: shrink reserved2 by 1, add a named field) so
+# the on-disk byte layout stays compatible — the zero-init paths in
 # db_load_key (C++) and unpack() (Python) handle older records transparently.
 # tz_offset_hours took a slot that was previously a zeroed reserved word, so
 # older records read back as 0.0 with the KEY_FLAG_USE_TZ bit clear — i.e.
@@ -837,7 +836,7 @@ def validate_video_ports(db, ke, ports):
 
 
 def set_video_ports(db, port2, ports):
-    """Set this entry's video ports. `ports` is a list of up to 3 ints;
+    """Set this entry's video ports. `ports` is a list of up to 5 ints;
     0 (or a short list) leaves the remaining slots unused."""
     ke = KeyEntry(port2)
     if not ke.fetch(db):

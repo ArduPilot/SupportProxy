@@ -1097,6 +1097,7 @@ static void main_loop(struct listen_port *p)
 				e.transport = mav1_is_tcp ? CONN_TRANSPORT_TCP : CONN_TRANSPORT_UDP;
 			    }
 			    e.is_user = 1;
+			    e.authenticated = mav1.is_authenticated() ? 1 : 0;
 			    if (drop_mask & 1u) {
 				e.flags |= CONN_FLAG_DROP_REQUESTED;
 			    }
