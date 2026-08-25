@@ -440,7 +440,7 @@ void VideoChild::handle_udp(Slot &s, int idx)
     // session_ok, in which case UDP can't satisfy it and the datagram
     // is refused.
     video_admit_t r = auth_.admit(ke_, uint32_t(from.sin_addr.s_addr),
-                                  nullptr, session_ok(idx), now);
+                                  nullptr, false, session_ok(idx), now);
     if (r != VIDEO_ADMIT_OK) {
         log_reject(s, idx, uint32_t(from.sin_addr.s_addr), r, now);
         return;
@@ -636,29 +636,40 @@ void VideoChild::handle_rtsp(Slot &s, int idx, int fd,
       configured on an aircraft rather than typed into a browser, so it
       does not end up in history or a Referer header.
      */
-    uint8_t line[512] {};
+    uint8_t line[2048] {};
     std::string pw;
-    const ssize_t ln = ::recv(fd, line, sizeof(line) - 1, MSG_PEEK);
-    if (ln > 0) {
-        const std::string req(reinterpret_cast<char *>(line), size_t(ln));
-        const size_t eol = req.find('\r');
-        const std::string first = req.substr(0, eol == std::string::npos
-                                             ? req.size() : eol);
-        const size_t q = first.find("?pw=");
-        if (q != std::string::npos) {
-            size_t end = first.find_first_of(" &", q + 4);
-            if (end == std::string::npos) {
-                end = first.size();
-            }
-            pw = http_url_decode(first.substr(q + 4, end - (q + 4)));
-        }
+    bool pw_present = false;
+    const ssize_t ln = ::recv(fd, line, sizeof(line), MSG_PEEK);
+    if (ln <= 0) {
+        close(fd);               // fail closed if the peek changed under us
+        return;
     }
+    const std::string req(reinterpret_cast<char *>(line), size_t(ln));
+    const size_t eol = req.find('\n');
+    if (eol == std::string::npos) {
+        close(fd);               // detect phase promised a complete line
+        return;
+    }
+    std::string first = req.substr(0, eol);
+    if (!first.empty() && first.back() == '\r') {
+        first.pop_back();
+    }
+    const size_t sp1 = first.find(' ');
+    const size_t sp2 = sp1 == std::string::npos
+        ? std::string::npos : first.find(' ', sp1 + 1);
+    if (sp1 == std::string::npos || sp2 == std::string::npos) {
+        close(fd);
+        return;
+    }
+    const std::string target = first.substr(sp1 + 1, sp2 - sp1 - 1);
+    pw_present = http_query_value(target, "pw", pw);
 
     // Publishers are authorised; viewers are not, and on this port an
     // RTSP connection is a publisher (we do not parse enough to tell
     // them apart -- see videortsp.h).
     const video_admit_t r = auth_.admit(ke_, uint32_t(from.sin_addr.s_addr),
-                                        pw.c_str(), session_ok(idx), now);
+                                        pw_present ? &pw : nullptr, true,
+                                        session_ok(idx), now);
     if (r != VIDEO_ADMIT_OK) {
         log_reject(s, idx, uint32_t(from.sin_addr.s_addr), r, now);
         close(fd);
@@ -819,8 +830,9 @@ bool VideoChild::promote_pending(Slot &s, int idx, PendingRtmp &p,
 {
     RtmpSession &r = *p.sess;
 
-    const video_admit_t a = auth_.admit(ke_, p.ip_be, r.password().c_str(),
-                                        session_ok(idx), now);
+    const video_admit_t a = auth_.admit(
+        ke_, p.ip_be, r.password_present() ? &r.password() : nullptr, true,
+        session_ok(idx), now);
     if (a != VIDEO_ADMIT_OK) {
         log_reject(s, idx, p.ip_be, a, now);
         r.reject_publish("NetStream.Publish.Denied", video_admit_str(a));

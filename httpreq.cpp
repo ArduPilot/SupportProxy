@@ -112,24 +112,9 @@ std::string HttpRequest::header(const char *name) const
 
 std::string HttpRequest::query(const char *name) const
 {
-    const std::string want = name;
-    size_t pos = 0;
-    while (pos <= query_.size()) {
-        size_t amp = query_.find('&', pos);
-        if (amp == std::string::npos) {
-            amp = query_.size();
-        }
-        const std::string kv = query_.substr(pos, amp - pos);
-        const size_t eq = kv.find('=');
-        if (eq != std::string::npos && kv.compare(0, eq, want) == 0) {
-            return http_url_decode(kv.substr(eq + 1));
-        }
-        if (amp == query_.size()) {
-            break;
-        }
-        pos = amp + 1;
-    }
-    return "";
+    std::string value;
+    (void)http_query_value(target_, name, value);
+    return value;
 }
 
 std::string http_url_decode(const std::string &s)
@@ -150,6 +135,35 @@ std::string http_url_decode(const std::string &s)
         }
     }
     return o;
+}
+
+bool http_query_value(const std::string &target, const char *name,
+                      std::string &value)
+{
+    value.clear();
+    const size_t q = target.find('?');
+    if (q == std::string::npos) {
+        return false;
+    }
+    const std::string want = name;
+    size_t pos = q + 1;
+    while (pos <= target.size()) {
+        size_t amp = target.find('&', pos);
+        if (amp == std::string::npos) {
+            amp = target.size();
+        }
+        const std::string kv = target.substr(pos, amp - pos);
+        const size_t eq = kv.find('=');
+        if (eq != std::string::npos && kv.compare(0, eq, want) == 0) {
+            value = http_url_decode(kv.substr(eq + 1));
+            return true;        // first value wins; duplicates cannot erase it
+        }
+        if (amp == target.size()) {
+            break;
+        }
+        pos = amp + 1;
+    }
+    return false;
 }
 
 std::string http_basic_password(const std::string &authorization)

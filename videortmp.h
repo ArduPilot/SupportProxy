@@ -150,6 +150,7 @@ public:
     const std::string &app(void) const { return app_; }
     const std::string &stream(void) const { return stream_; }
     const std::string &password(void) const { return password_; }
+    bool password_present(void) const { return password_present_; }
 
     // "app/stream", for matching against a configured path.
     std::string path(void) const;
@@ -202,6 +203,7 @@ private:
     std::string app_;
     std::string stream_;
     std::string password_;
+    bool password_present_ = false;
     double publish_txn_ = 0;
     uint32_t publish_sid_ = 1;
     bool publishing_ = false;

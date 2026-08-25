@@ -26,6 +26,8 @@
 #include <stdint.h>
 #include <time.h>
 
+#include <string>
+
 #include "keydb.h"
 
 enum video_admit_t {
@@ -60,11 +62,12 @@ public:
     /*
       Decide whether `peer_ip_be` may publish.
 
-      `password` distinguishes three cases, and the difference is what
-      the operator sees in the log:
-        nullptr  the transport cannot carry a credential at all (UDP)
-        ""       it could, but none was supplied (RTSP with no ?pw=)
-        "..."    a credential to check
+      `password` is non-null only when a credential was explicitly supplied.
+      It is length-aware, so an empty or embedded-NUL value is still an
+      offered (wrong) credential rather than silently becoming absent.
+      `credential_capable` distinguishes a transport that supplied none
+      (RTSP/RTMP) from one that cannot carry one at all (UDP), which is what
+      the operator sees in the rejection log.
 
       `session_ok` is the slot's VIDEO_SLOT_SESSION_OK bit: when set, a
       publisher that offered no credential falls back to path B even
@@ -72,7 +75,8 @@ public:
       offered and is wrong is still refused.
      */
     video_admit_t admit(const struct KeyEntry &ke, uint32_t peer_ip_be,
-                        const char *password, bool session_ok, time_t now);
+                        const std::string *password, bool credential_capable,
+                        bool session_ok, time_t now);
 
     // Force the next lookup to re-read, e.g. after a config change.
     void invalidate(void) { fetched_at_ = 0; }
@@ -107,7 +111,8 @@ private:
 
 // Constant-time compare of a candidate password against a stored
 // sha256. Returns false when the stored key is all-zero (unset).
-bool video_password_matches(const uint8_t stored[32], const char *candidate);
+bool video_password_matches(const uint8_t stored[32],
+                            const std::string &candidate);
 
 /*
   Verify a short-lived viewer token minted by the web admin.

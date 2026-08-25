@@ -56,6 +56,15 @@ private:
 std::string http_url_decode(const std::string &s);
 
 /*
+  Fetch the first named query parameter from a request target. The boolean
+  distinguishes an absent parameter from one explicitly supplied with an
+  empty value; callers making access-control decisions must not collapse the
+  two. `value` is percent-decoded when present.
+ */
+bool http_query_value(const std::string &target, const char *name,
+                      std::string &value);
+
+/*
   A request target with credential query values replaced.
 
   Anything logged has to go through this. A viewer may authenticate with

@@ -275,11 +275,11 @@ bool amf_object_strings(const uint8_t *p, size_t n, size_t &i,
   credential. Cameras put the stream key in a single field, so a query on
   the stream name is the only place RTMP has to carry one.
  */
-void split_credential(std::string &name, std::string &pw)
+bool split_credential(std::string &name, std::string &pw)
 {
     const size_t q = name.find_first_of("?&");
     if (q == std::string::npos) {
-        return;
+        return false;
     }
     const std::string query = name.substr(q + 1);
     name.resize(q);
@@ -295,10 +295,12 @@ void split_credential(std::string &name, std::string &pw)
             const std::string k = kv.substr(0, eq);
             if (k == "pw" || k == "password" || k == "key") {
                 pw = http_url_decode(kv.substr(eq + 1));
+                return true;    // first credential wins; a duplicate cannot erase it
             }
         }
         at = end + 1;
     }
+    return false;
 }
 
 }  // namespace
@@ -735,12 +737,14 @@ bool RtmpSession::on_command(ChunkStream &c, const uint8_t *p, size_t n)
         connected_ = true;
         std::string tc_url;
         amf_object_strings(p, n, i, "app", app_, "tcUrl", tc_url);
-        split_credential(app_, password_);
-        if (password_.empty() && !tc_url.empty()) {
+        password_present_ = split_credential(app_, password_);
+        if (!password_present_ && !tc_url.empty()) {
             std::string ignored = tc_url;
             std::string pw;
-            split_credential(ignored, pw);
-            password_ = pw;
+            if (split_credential(ignored, pw)) {
+                password_ = pw;
+                password_present_ = true;
+            }
         }
         // Window Ack Size, Set Peer Bandwidth, Stream Begin, chunk size.
         const uint8_t win[4] = { 0x00, 0x26, 0x25, 0xa0 };
@@ -855,9 +859,9 @@ bool RtmpSession::on_command(ChunkStream &c, const uint8_t *p, size_t n)
         }
         stream_ = name;
         std::string pw;
-        split_credential(stream_, pw);
-        if (!pw.empty()) {
+        if (split_credential(stream_, pw)) {
             password_ = pw;
+            password_present_ = true;
         }
         publish_txn_ = txn;
         publish_sid_ = c.sid != 0 ? c.sid : 1;

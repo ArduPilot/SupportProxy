@@ -54,6 +54,8 @@ def _make_workdir(tmp_path, flags=('video',), vports=(VPORT,), **kw):
         keydb_lib.set_video_ports(db, PORT_ENG, list(vports))
     if kw.get('publish_pass'):
         keydb_lib.set_video_publish_pass(db, PORT_ENG, kw['publish_pass'])
+    if kw.get('session_ok'):
+        keydb_lib.set_video_slot_flag(db, PORT_ENG, 0, 'session_ok')
     if kw.get('grace') is not None:
         keydb_lib.set_video_grace(db, PORT_ENG, kw['grace'])
     db.transaction_prepare_commit()
@@ -447,6 +449,38 @@ class TestVideoAdmission:
             assert p.wait_for(r'rejected'), p.log
             assert 'video slot 0 publisher' not in p.log, \
                 'unsigned session authorised video on a bidi entry:\n%s' % p.log
+        finally:
+            mav.stop()
+
+    def test_bidi_signed_session_authorises_flagged_password_slot(self, proxy):
+        """The signed state exported to connections.tdb is what lets the
+        independent video child use session fallback on a bidi entry."""
+        p = proxy(flags=('video', 'bidi_sign'), publish_pass='pubpw',
+                  session_ok=True)
+        assert p.wait_for(r'video slot 0 listening'), p.log
+        mav = _Mav(signed=True)
+        try:
+            assert p.wait_for(r'have UDP conn1'), p.log
+            deadline = time.time() + 12
+            authenticated = False
+            conn_path = conntdb_lib.conn_path_for(
+                str(p.workdir / 'keys.tdb'))
+            while time.time() < deadline:
+                rows = conntdb_lib.list_active(conn_path, max_age_s=60)
+                users = [r for r in rows if r.conn_index == 0]
+                if users and users[0].authenticated:
+                    authenticated = True
+                    break
+                time.sleep(0.3)
+            assert authenticated, 'signed state was not exported:\n%s' % p.log
+
+            for _ in range(10):
+                _send_ts(VPORT, n=2)
+                if re.search(r'video slot 0 publisher', p.log):
+                    break
+                time.sleep(0.5)
+            assert re.search(r'video slot 0 publisher', p.log), p.log
+            assert 'not signature-validated' not in p.log
         finally:
             mav.stop()
 
