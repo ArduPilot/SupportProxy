@@ -388,6 +388,9 @@ class TestPublishPassword:
     """
 
     def test_accepted_with_no_mavlink_session_at_all(self, session, clip):
+        # ffmpeg later resolves the SDP control URI as
+        # ?pw=pubsecret/streamid=0. Reaching join=ready therefore also
+        # covers the guard's exact-password-plus-control-path handling.
         s = session(with_mav=False, publish_pass='pubsecret')
         s.pub = _publish_with('?pw=pubsecret', clip)
         assert s.proxy.wait_for(r'RTSP publisher', timeout=25), s.proxy.log
@@ -525,6 +528,43 @@ class TestSessionOkSlot:
             assert s.proxy.wait_for(r'wrong publish password', timeout=10), \
                 s.proxy.log
             assert 'RTSP publisher' not in s.proxy.log
+        finally:
+            sock.close()
+
+    def test_wrong_password_on_later_rtsp_request_is_refused(self, session):
+        """Session fallback on OPTIONS must not hide a credential later."""
+        s = session(with_mav=True, publish_pass='pubsecret', session_ok=True)
+        sock = socket.create_connection(('127.0.0.1', VPORT), 5)
+        sock.settimeout(10)
+        try:
+            sock.sendall(
+                ('OPTIONS rtsp://127.0.0.1:%d/cam RTSP/1.0\r\n'
+                 'CSeq: 1\r\n\r\n' % VPORT).encode())
+            assert b'RTSP/1.0 200' in sock.recv(4096)
+            sock.sendall(
+                ('ANNOUNCE rtsp://127.0.0.1:%d/cam?pw=wrong RTSP/1.0\r\n'
+                 'CSeq: 2\r\nContent-Length: 0\r\n\r\n' % VPORT).encode())
+            assert s.proxy.wait_for(r'wrong publish password', timeout=10), \
+                s.proxy.log
+        finally:
+            sock.close()
+
+    def test_ambiguous_rtsp_body_length_is_refused(self, session):
+        """A framing disagreement must not hide a later credential."""
+        s = session(with_mav=True, publish_pass='pubsecret', session_ok=True)
+        sock = socket.create_connection(('127.0.0.1', VPORT), 5)
+        sock.settimeout(10)
+        try:
+            sock.sendall(
+                ('OPTIONS rtsp://127.0.0.1:%d/cam RTSP/1.0\r\n'
+                 'CSeq: 1\r\n\r\n' % VPORT).encode())
+            assert b'RTSP/1.0 200' in sock.recv(4096)
+            sock.sendall(
+                b'ANNOUNCE rtsp://127.0.0.1/cam RTSP/1.0\r\n'
+                b'CSeq: 2\r\nContent-Length: 64\r\n'
+                b'Content-Length: 0\r\n\r\n')
+            assert s.proxy.wait_for(r'RTSP publisher gone', timeout=10), \
+                s.proxy.log
         finally:
             sock.close()
 
@@ -1084,6 +1124,36 @@ class TestRtmpIngest:
             pub.publish()
             assert s.proxy.wait_for(r'wrong publish password', timeout=15), \
                 s.proxy.log
+            assert 'RTMP publishing' not in s.proxy.log
+        finally:
+            if pub:
+                pub.close()
+            s.stop()
+
+    @pytest.mark.parametrize('source', ['duplicate_app', 'fcpublish'])
+    def test_earlier_rtmp_password_cannot_be_erased(self, tmp_path, source):
+        """Every pre-publish credential source preserves explicit presence."""
+        wd = _workdir(tmp_path, publish_pass='secret', session_ok=True)
+        s = RtspSession(wd, with_mav=True)
+        pub = None
+        try:
+            pub = rtmp_client.RtmpPublisher(
+                '127.0.0.1', VPORT, app='PhoenixFPV', stream='FPV')
+            pub.handshake()
+            if source == 'duplicate_app':
+                pub.connect(properties=[
+                    ('app', 'PhoenixFPV?pw=wrong'),
+                    ('app', 'PhoenixFPV'),
+                    ('tcUrl', 'rtmp://127.0.0.1/PhoenixFPV'),
+                ])
+                assert s.proxy.wait_for(r'duplicate connect property',
+                                        timeout=15), s.proxy.log
+            else:
+                pub.connect()
+                pub.fcpublish('FPV?pw=wrong')
+                pub.publish()
+                assert s.proxy.wait_for(r'wrong publish password',
+                                        timeout=15), s.proxy.log
             assert 'RTMP publishing' not in s.proxy.log
         finally:
             if pub:

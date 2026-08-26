@@ -29,7 +29,8 @@ def _amf_null():
 
 def _amf_obj(d):
     out = b'\x03'
-    for k, v in d.items():
+    items = d.items() if hasattr(d, 'items') else d
+    for k, v in items:
         kb = k.encode()
         out += struct.pack('>H', len(kb)) + kb
         out += _amf_str(v) if isinstance(v, str) else _amf_num(v)
@@ -117,7 +118,7 @@ class RtmpPublisher:
         self.s.sendall(got[1:1537])                 # C2 echoes S1
         return got
 
-    def connect(self, password=None):
+    def connect(self, password=None, properties=None):
         stream = self.stream
         if password:
             stream = '%s?pw=%s' % (stream, password)
@@ -127,9 +128,11 @@ class RtmpPublisher:
         # told otherwise.
         self.s.sendall(self._chunk(2, 1, 0, 0,
                                    self.out_chunk.to_bytes(4, 'big')))
+        if properties is None:
+            properties = {'app': self.app, 'tcUrl': tc,
+                          'flashVer': 'test'}
         self.s.sendall(self._command(
-            _amf_str('connect') + _amf_num(1) +
-            _amf_obj({'app': self.app, 'tcUrl': tc, 'flashVer': 'test'})))
+            _amf_str('connect') + _amf_num(1) + _amf_obj(properties)))
         self._drain()
         self.s.sendall(self._command(
             _amf_str('createStream') + _amf_num(2) + _amf_null()))
@@ -137,6 +140,12 @@ class RtmpPublisher:
         self._publish_cmd = (self._command(
             _amf_str('publish') + _amf_num(3) + _amf_null() +
             _amf_str(stream) + _amf_str('live')))
+
+    def fcpublish(self, stream):
+        self.s.sendall(self._command(
+            _amf_str('FCPublish') + _amf_num(0) + _amf_null() +
+            _amf_str(stream)))
+        self._drain()
 
     def publish(self, first_tags=(), pipeline=False):
         """Send publish. With pipeline, media rides the same write.

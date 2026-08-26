@@ -32,6 +32,10 @@ public:
     // Header lookup, case-insensitive. Empty string when absent.
     std::string header(const char *name) const;
 
+    // Number of occurrences of a header, case-insensitive. Security
+    // parsers use this to reject ambiguous framing fields.
+    size_t header_count(const char *name) const;
+
     // Query parameter from the request target. Empty when absent.
     std::string query(const char *name) const;
 

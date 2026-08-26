@@ -9,6 +9,7 @@
  */
 #include "video.h"
 
+#include <algorithm>
 #include <initializer_list>
 #include <memory>
 #include <vector>
@@ -117,6 +118,19 @@ struct SpliceQueue {
 #define SPLICE_QUEUE_MAX (1u * 1024 * 1024)
 
 /*
+  RTSP is relayed byte-for-byte, but admission credentials can occur on
+  any request URI in the session. Hold only the current request header
+  long enough to inspect its request line. Bodies and interleaved RTP are
+  counted and streamed without interpretation.
+ */
+struct RtspRequestGuard {
+    std::vector<uint8_t> buffered;
+    size_t opaque_left = 0;
+
+    void clear(void) { buffered.clear(); opaque_left = 0; }
+};
+
+/*
   One RTMP handshake that has not published yet.
 
   It owns nothing but its socket: no slot, no backend, no ring. Only
@@ -155,6 +169,7 @@ struct Slot {
     int rtsp_client_fd = -1;
     SpliceQueue to_backend;   // bytes read from the client, owed to ffmpeg
     SpliceQueue to_client;    // and the other way
+    RtspRequestGuard rtsp_guard;
     /*
       The RTMP session that owns the slot, once one has published and
       been admitted. Null until then.
@@ -227,6 +242,8 @@ private:
                      splice_proto_t proto);
     void close_rtsp(Slot &s, int idx, const char *why);
     bool pump_rtsp(Slot &s, int idx, int fd, time_t now);
+    bool guard_rtsp_requests(Slot &s, int idx, const uint8_t *buf, size_t n,
+                             time_t now);
     bool pump_rtmp(Slot &s, int idx, int fd, time_t now);
     bool rtmp_start_backend(Slot &s, int idx);
     bool rtmp_drain_owner(Slot &s, int idx, bool alive);
@@ -691,6 +708,7 @@ void VideoChild::handle_rtsp(Slot &s, int idx, int fd,
     }
     fcntl(fd, F_SETFL, fcntl(fd, F_GETFL, 0) | O_NONBLOCK);
     s.rtsp_client_fd = fd;
+    s.rtsp_guard.clear();
     s.pub_ip_be = uint32_t(from.sin_addr.s_addr);
     s.pub_port_be = from.sin_port;
     latch_publisher(s, idx, now);
@@ -734,6 +752,7 @@ void VideoChild::close_rtsp(Slot &s, int idx, const char *why)
     s.rtmp.reset();
     s.to_backend.clear();
     s.to_client.clear();
+    s.rtsp_guard.clear();
     s.rtsp.stop();
     s.rec.close_segment();
     s.recording = false;
@@ -775,6 +794,119 @@ bool VideoChild::splice_flush(int to_fd, SpliceQueue &q)
         return false;
     }
     q.compact();
+    return true;
+}
+
+/*
+  Filter the client-to-backend half of an RTSP splice. The first request
+  was already checked before the backend started, but a client can put a
+  credential on a later ANNOUNCE. Without continued inspection an absent
+  OPTIONS could take session fallback and a later wrong password would be
+  silently ignored.
+ */
+bool VideoChild::guard_rtsp_requests(Slot &s, int idx, const uint8_t *buf,
+                                     size_t n, time_t now)
+{
+    RtspRequestGuard &g = s.rtsp_guard;
+    g.buffered.insert(g.buffered.end(), buf, buf + n);
+
+    while (!g.buffered.empty()) {
+        if (g.opaque_left > 0) {
+            const size_t take = std::min(g.opaque_left, g.buffered.size());
+            s.to_backend.buf.insert(s.to_backend.buf.end(),
+                                    g.buffered.begin(),
+                                    g.buffered.begin() + long(take));
+            g.buffered.erase(g.buffered.begin(),
+                             g.buffered.begin() + long(take));
+            g.opaque_left -= take;
+            continue;
+        }
+
+        // Interleaved RTP/RTCP: '$', channel, 16-bit big-endian length.
+        if (g.buffered[0] == '$') {
+            if (g.buffered.size() < 4) {
+                return true;
+            }
+            g.opaque_left = (size_t(g.buffered[2]) << 8) | g.buffered[3];
+            s.to_backend.buf.insert(s.to_backend.buf.end(),
+                                    g.buffered.begin(),
+                                    g.buffered.begin() + 4);
+            g.buffered.erase(g.buffered.begin(), g.buffered.begin() + 4);
+            continue;
+        }
+
+        size_t header_len = 0;
+        for (size_t i = 0; i + 1 < g.buffered.size(); i++) {
+            if (g.buffered[i] == '\n' && g.buffered[i + 1] == '\n') {
+                header_len = i + 2;
+                break;
+            }
+            if (i + 3 < g.buffered.size()
+                && g.buffered[i] == '\r' && g.buffered[i + 1] == '\n'
+                && g.buffered[i + 2] == '\r'
+                && g.buffered[i + 3] == '\n') {
+                header_len = i + 4;
+                break;
+            }
+        }
+        if (header_len == 0) {
+            return g.buffered.size() <= HTTP_MAX_REQUEST;
+        }
+
+        HttpRequest req;
+        if (req.feed(g.buffered.data(), header_len) != 1) {
+            return false;
+        }
+        std::string pw;
+        if (http_query_value(req.target(), "pw", pw)) {
+            bool have_pw = false;
+            for (uint8_t b : ke_.video_publish_key) {
+                have_pw |= b != 0;
+            }
+            bool matches = video_password_matches(ke_.video_publish_key, pw);
+            /*
+              ffmpeg resolves an SDP control path after the whole source
+              URI, producing e.g. ?pw=secret/streamid=0. URI syntax makes
+              that suffix part of the query value. Accept it only when a
+              slash-delimited prefix is itself the exact password; the
+              peer still has to know the configured credential.
+             */
+            const size_t slash = pw.rfind('/');
+            if (!matches && slash != std::string::npos) {
+                matches = video_password_matches(
+                    ke_.video_publish_key, pw.substr(0, slash));
+            }
+            if (have_pw && !matches) {
+                log_reject(s, idx, s.pub_ip_be, VIDEO_ADMIT_BAD_PASSWORD,
+                           now);
+                return false;
+            }
+        }
+
+        const size_t content_length_count =
+            req.header_count("Content-Length");
+        const std::string content_length = req.header("Content-Length");
+        if (content_length_count > 1
+            || (content_length_count == 1 && content_length.empty())) {
+            return false;
+        }
+        if (!content_length.empty()) {
+            char *end = nullptr;
+            errno = 0;
+            const unsigned long long body =
+                strtoull(content_length.c_str(), &end, 10);
+            if (errno != 0 || end == content_length.c_str() || *end != '\0'
+                || body > 16u * 1024u * 1024u) {
+                return false;
+            }
+            g.opaque_left = size_t(body);
+        }
+        s.to_backend.buf.insert(s.to_backend.buf.end(),
+                                g.buffered.begin(),
+                                g.buffered.begin() + long(header_len));
+        g.buffered.erase(g.buffered.begin(),
+                         g.buffered.begin() + long(header_len));
+    }
     return true;
 }
 
@@ -1156,7 +1288,13 @@ bool VideoChild::pump_rtsp(Slot &s, int idx, int fd, time_t now)
                 return false;
             }
             if (n > 0) {
-                out.buf.insert(out.buf.end(), buf, buf + n);
+                if (fd == s.rtsp_client_fd) {
+                    if (!guard_rtsp_requests(s, idx, buf, size_t(n), now)) {
+                        return false;
+                    }
+                } else {
+                    out.buf.insert(out.buf.end(), buf, buf + n);
+                }
                 if (!splice_flush(to_fd, out)) {
                     return false;
                 }
