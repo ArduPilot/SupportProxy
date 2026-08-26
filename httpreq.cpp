@@ -110,6 +110,36 @@ std::string HttpRequest::header(const char *name) const
     return "";
 }
 
+size_t HttpRequest::header_count(const char *name) const
+{
+    const std::string want = lower(name);
+    size_t count = 0;
+    size_t pos = 0;
+    while (pos < headers_.size()) {
+        size_t eol = headers_.find('\n', pos);
+        if (eol == std::string::npos) {
+            eol = headers_.size();
+        }
+        std::string line = headers_.substr(pos, eol - pos);
+        if (!line.empty() && line.back() == '\r') {
+            line.pop_back();
+        }
+        const size_t colon = line.find(':');
+        if (colon != std::string::npos) {
+            std::string field = line.substr(0, colon);
+            const size_t end = field.find_last_not_of(" \t");
+            if (end != std::string::npos) {
+                field.resize(end + 1);
+            }
+            if (lower(field) == want) {
+                count++;
+            }
+        }
+        pos = eol + 1;
+    }
+    return count;
+}
+
 std::string HttpRequest::query(const char *name) const
 {
     std::string value;

@@ -225,6 +225,8 @@ bool amf_object_strings(const uint8_t *p, size_t n, size_t &i,
                         const char *k1, std::string &v1,
                         const char *k2, std::string &v2)
 {
+    bool have_v1 = false;
+    bool have_v2 = false;
     if (i >= n) {
         return false;
     }
@@ -253,12 +255,22 @@ bool amf_object_strings(const uint8_t *p, size_t n, size_t &i,
         }
         const std::string key(reinterpret_cast<const char *>(p + i), klen);
         i += klen;
+        const bool is_v1 = key == k1;
+        const bool is_v2 = key == k2;
+        if ((is_v1 && have_v1) || (is_v2 && have_v2)) {
+            // AMF objects are maps. Reject duplicate security-relevant
+            // properties rather than letting a later value erase a
+            // credential carried by the first one.
+            return false;
+        }
+        have_v1 |= is_v1;
+        have_v2 |= is_v2;
         std::string sv;
         const size_t save = i;
         if (i < n && p[i] == AMF_STRING && amf_read_string(p, n, i, sv)) {
-            if (key == k1) {
+            if (is_v1) {
                 v1 = sv;
-            } else if (key == k2) {
+            } else if (is_v2) {
                 v2 = sv;
             }
             continue;
@@ -736,7 +748,9 @@ bool RtmpSession::on_command(ChunkStream &c, const uint8_t *p, size_t n)
         }
         connected_ = true;
         std::string tc_url;
-        amf_object_strings(p, n, i, "app", app_, "tcUrl", tc_url);
+        if (!amf_object_strings(p, n, i, "app", app_, "tcUrl", tc_url)) {
+            return fail("malformed or duplicate connect property");
+        }
         password_present_ = split_credential(app_, password_);
         if (!password_present_ && !tc_url.empty()) {
             std::string ignored = tc_url;
@@ -813,6 +827,13 @@ bool RtmpSession::on_command(ChunkStream &c, const uint8_t *p, size_t n)
         size_t j = i;
         amf_skip(p, n, j);              // command object, usually null
         amf_read_string(p, n, j, name);
+        std::string pw;
+        if (split_credential(name, pw) && !password_present_) {
+            // The first credential offered anywhere in the RTMP setup wins.
+            // A later command without one cannot turn it back into "absent".
+            password_ = pw;
+            password_present_ = true;
+        }
         /*
           The response ffmpeg gets wrong: it writes the command name and
           stops. A camera that waits for the status object here simply
@@ -859,7 +880,7 @@ bool RtmpSession::on_command(ChunkStream &c, const uint8_t *p, size_t n)
         }
         stream_ = name;
         std::string pw;
-        if (split_credential(stream_, pw)) {
+        if (split_credential(stream_, pw) && !password_present_) {
             password_ = pw;
             password_present_ = true;
         }
