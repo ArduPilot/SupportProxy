@@ -2,8 +2,10 @@
   Shared timestamp-naming + mkdir-p helpers for TlogWriter / BinlogWriter.
  */
 #include "session.h"
+#include "keydb.h"
 
 #include <dirent.h>
+#include <initializer_list>
 #include <errno.h>
 #include <math.h>
 #include <stdio.h>
@@ -68,21 +70,23 @@ void session_time_strings(time_t utc, bool use_offset, double tz_offset_hours,
              tm.tm_hour, tm.tm_min, tm.tm_sec);
 }
 
-// Every extension a session can produce. A basename is only free if
-// none of them is taken: the files of one session share a name, so
-// handing back a name that any of them already occupies would append
-// into (or truncate) another session's log.
-static const char *SESSION_EXTS[] = {
-    ".tlog", ".bin", ".v1.ts", ".v2.ts", ".v3.ts",
-};
-
-// True if no session file of any kind exists under this basename.
+// Every extension a session can produce: the telemetry pair plus one
+// .vN.ts per video slot (videorec.cpp). A basename is only free if none
+// of them is taken: the files of one session share a name, so handing
+// back a name that any of them already occupies would append into (or
+// truncate) another session's log.
 static bool basename_free(const char *dir, const char *candidate)
 {
-    for (const char *ext : SESSION_EXTS) {
-        char p[2048];
+    char p[2048];
+    struct stat st;
+    for (const char *ext : { ".tlog", ".bin" }) {
         snprintf(p, sizeof(p), "%s/%s%s", dir, candidate, ext);
-        struct stat st;
+        if (stat(p, &st) == 0) {
+            return false;
+        }
+    }
+    for (int slot = 1; slot <= KEY_MAX_VIDEO_PORTS; slot++) {
+        snprintf(p, sizeof(p), "%s/%s.v%d.ts", dir, candidate, slot);
         if (stat(p, &st) == 0) {
             return false;
         }
