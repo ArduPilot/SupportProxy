@@ -43,6 +43,7 @@ class TestOwnerVideo:
         login_as(client, ALICE_PORT1, ALICE_PASS)
         resp = _owner_post(client, video_enabled='y', video_record_1='y',
                            video_srt_2='y', video_rawtcp_3='y',
+                           video_openpub_4='y',
                            video_audio='y', video_grace_s='120')
         assert resp.status_code == 302
 
@@ -51,6 +52,7 @@ class TestOwnerVideo:
         assert ke.slot_opt_names(0) == ['record']
         assert ke.slot_opt_names(1) == ['srt']
         assert ke.slot_opt_names(2) == ['raw_tcp']
+        assert ke.slot_opt_names(3) == ['open_publish']
         assert ke.entry_opt_names() == ['audio']
         assert ke.mav_grace_seconds() == 120
 

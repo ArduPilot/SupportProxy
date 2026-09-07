@@ -34,7 +34,7 @@ def _documented(form_cls):
         name = field.name
         if name in _NO_DESCRIPTION_NEEDED:
             continue
-        if re.match(r'^video_(srt|record|rawtcp|sessok)_\d$', name):
+        if re.match(r'^video_(srt|record|rawtcp|sessok|openpub)_\d$', name):
             continue
         need.add(name)
         if field.description:

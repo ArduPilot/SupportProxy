@@ -12,6 +12,7 @@ _SLOT_FIELDS = (
     ('video_record_%d', keydb_lib.VIDEO_SLOT_RECORD),
     ('video_rawtcp_%d', keydb_lib.VIDEO_SLOT_RAW_TCP),
     ('video_sessok_%d', keydb_lib.VIDEO_SLOT_SESSION_OK),
+    ('video_openpub_%d', keydb_lib.VIDEO_SLOT_OPEN_PUB),
 )
 
 
