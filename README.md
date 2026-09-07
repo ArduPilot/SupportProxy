@@ -101,8 +101,8 @@ credential with no check at all:
 ```
 
 Anyone who can reach the port can then publish to that slot, so it is
-off by default. A password that *is* supplied and is wrong is still
-refused.
+off by default. If the entry has a publish password, one that *is*
+supplied and is wrong is still refused.
 
 **Watching.** In the browser from the web UI, or outside it with the
 `ffplay`/`vlc` command the page offers. The browser player needs H.264:

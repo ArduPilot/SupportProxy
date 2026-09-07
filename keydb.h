@@ -96,8 +96,9 @@
 /*
   Admit a publisher that offers no credential without any check at all:
   no MAVLink session, no publish password. Anyone who can reach the port
-  can publish, so this is off by default and per slot. A password that
-  is offered and wrong is still refused.
+  can publish, so this is off by default and per slot. When the entry
+  has a publish password, one that is offered and wrong is still
+  refused; with none set there is nothing to judge it against.
  */
 #define VIDEO_SLOT_OPEN_PUB (1u << 4)
 
