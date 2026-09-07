@@ -313,7 +313,9 @@ bool RtspBackend::start(int port2, int slot, bool want_audio,
           produced a frame here, while ffmpeg publishing the same video
           worked, because its own FLV carries no such stream.
 
-          "0:a?" is optional: no audio track is not an error.
+          "0:a?" is optional: no audio track is not an error. No video
+          track is: an audio-only publish fails here with "matches no
+          streams", and the slot logs the backend exiting.
          */
         argv[n++] = "-map";
         argv[n++] = "0:v:0";
