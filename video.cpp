@@ -519,9 +519,15 @@ void VideoChild::handle_udp(Slot &s, int idx)
     uint8_t buf[2048];
     struct sockaddr_in from {};
     socklen_t fromlen = sizeof(from);
-    ssize_t n = recvfrom(s.udp_fd, buf, sizeof(buf), 0,
+    ssize_t n = recvfrom(s.udp_fd, buf, sizeof(buf), MSG_TRUNC,
                          (struct sockaddr *)&from, &fromlen);
     if (n <= 0) {
+        return;
+    }
+    if (size_t(n) > sizeof(buf)) {
+        // MSG_TRUNC reports the real length: a truncated RTP packet
+        // would be forwarded as a whole one, so drop it instead.
+        s.bad_datagrams++;
         return;
     }
     const time_t now = time(nullptr);
@@ -588,7 +594,11 @@ void VideoChild::ingest_udp(Slot &s, int idx, const uint8_t *buf, size_t n,
         }
         return;
     }
-    if (s.rtp_seen > 0 || rtp_payload_offset(buf, n) >= 0) {
+    // Only a stream that has not yet delivered any TS can be RTP: once
+    // packets have been scanned, an RTP-shaped datagram is a stray, not
+    // a reason to abandon the stream.
+    if (s.rtp_seen > 0 || (s.scanner.stats().packets == 0
+                           && rtp_payload_offset(buf, n) >= 0)) {
         ingest_rtp(s, idx, buf, n, now);
         return;
     }
@@ -859,7 +869,11 @@ void VideoChild::handle_rtsp(Slot &s, int idx, int fd,
 
 void VideoChild::close_rtsp(Slot &s, int idx, const char *why)
 {
-    if (!s.rtsp.running() && s.rtsp_client_fd < 0 && !s.rtmp) {
+    // media_fd() covers a backend that reap() has already marked gone:
+    // an RTP publisher has no client fd and no RTMP session, so without
+    // it the orphaned fd stayed in epoll and spun on EPOLLHUP forever.
+    if (!s.rtsp.running() && s.rtsp.media_fd() < 0
+        && s.rtsp_client_fd < 0 && !s.rtmp) {
         return;
     }
     // The backend's proto is only meaningful once it started, and an
