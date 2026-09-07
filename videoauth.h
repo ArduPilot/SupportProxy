@@ -79,7 +79,8 @@ public:
 
       `open_publish` is the slot's VIDEO_SLOT_OPEN_PUB bit: a publisher
       that offered no credential is admitted with no check at all. A
-      credential that was offered is still judged.
+      credential that was offered is still judged when the entry has a
+      publish password to judge it against.
      */
     video_admit_t admit(const struct KeyEntry &ke, uint32_t peer_ip_be,
                         const std::string *password, bool credential_capable,
