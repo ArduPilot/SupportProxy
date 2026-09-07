@@ -98,12 +98,16 @@ VIDEO_SLOT_RAW_TCP = 1 << 2   # allow raw-TCP viewers (no credential)
 # entry has a publish password. For streams that cannot carry one -- a
 # camera's own RTMP, plain MPEG-TS over UDP. Opt-in, per slot.
 VIDEO_SLOT_SESSION_OK = 1 << 3
+# Admit a publisher that offers no credential with no check at all --
+# neither a MAVLink session nor a password. Off by default, per slot.
+VIDEO_SLOT_OPEN_PUB = 1 << 4
 
 VIDEO_SLOT_FLAG_NAMES = {
     "srt":     VIDEO_SLOT_SRT,
     "record":  VIDEO_SLOT_RECORD,
     "raw_tcp": VIDEO_SLOT_RAW_TCP,
     "session_ok": VIDEO_SLOT_SESSION_OK,
+    "open_publish": VIDEO_SLOT_OPEN_PUB,
 }
 
 VIDEO_OPT_SHIFT = 24
@@ -865,7 +869,7 @@ def set_video_rtmp_path(db, port2, slot, path):
 
 
 def set_video_slot_flag(db, port2, slot, flag_name, on=True):
-    """Set or clear one per-slot video option (srt / record / raw_tcp)."""
+    """Set or clear one per-slot video option (see VIDEO_SLOT_FLAG_NAMES)."""
     ke = KeyEntry(port2)
     if not ke.fetch(db):
         raise CLIError("No entry for port2 %d" % port2)

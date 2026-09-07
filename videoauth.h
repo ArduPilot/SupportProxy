@@ -15,6 +15,9 @@
        revoked by a link flap. On a bidi entry the session must also have
        been signature-validated.
 
+    C. open slot          -- VIDEO_SLOT_OPEN_PUB admits a publisher that
+       offered no credential with no check at all. Off by default.
+
   Path B reads connections.tdb, which makes that file an authorisation
   input. It sits alongside keys.tdb in the proxy's working directory and
   both are 0600, so anyone who can forge one can forge the other; but
@@ -73,10 +76,14 @@ public:
       publisher that offered no credential falls back to path B even
       though the entry has a publish password. A credential that was
       offered and is wrong is still refused.
+
+      `open_publish` is the slot's VIDEO_SLOT_OPEN_PUB bit: a publisher
+      that offered no credential is admitted with no check at all. A
+      credential that was offered is still judged.
      */
     video_admit_t admit(const struct KeyEntry &ke, uint32_t peer_ip_be,
                         const std::string *password, bool credential_capable,
-                        bool session_ok, time_t now);
+                        bool session_ok, bool open_publish, time_t now);
 
     // Force the next lookup to re-read, e.g. after a config change.
     void invalidate(void) { fetched_at_ = 0; }
