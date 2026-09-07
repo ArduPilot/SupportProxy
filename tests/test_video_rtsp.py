@@ -733,6 +733,38 @@ def _fake_ffmpeg_path(tmp_path, script):
     return str(d)
 
 
+def _cpu_ticks(pid):
+    with open('/proc/%d/stat' % pid) as f:
+        fields = f.read().rsplit(')', 1)[1].split()
+    return int(fields[11]) + int(fields[12])      # utime + stime
+
+
+@pytest.mark.integration
+class TestDetectDoesNotSpin:
+    """A connection whose request line is still incomplete is left
+    unconsumed on purpose (the credential may be in the next segment).
+    Level-triggered EPOLLIN re-fires on those bytes forever, which
+    measured as most of a core until the 2 s detect timeout."""
+
+    @pytest.mark.parametrize('prefix', [b'OPTIONS rtsp://127.0.0.1/cam',
+                                        b'GET /v1?t=abc'])
+    def test_partial_request_line_costs_no_cpu(self, session, prefix):
+        s = session(with_mav=False)
+        child = int(re.search(r'video child (\d+) ready', s.proxy.log)
+                    .group(1))
+        sock = socket.create_connection(('127.0.0.1', VPORT), 5)
+        try:
+            sock.sendall(prefix)
+            time.sleep(0.2)
+            before = _cpu_ticks(child)
+            time.sleep(1.5)
+            used = _cpu_ticks(child) - before
+        finally:
+            sock.close()
+        assert used < 10, 'video child used %d ticks holding a partial line' \
+            % used
+
+
 @pytest.mark.integration
 class TestRtpBackendDeath:
     """The backend is a child that can die at any time. An RTP publisher
@@ -755,9 +787,23 @@ class TestRtpBackendDeath:
         # gets a fresh backend.
         assert s.proxy.wait_for(r'RTP publisher gone', timeout=15), \
             s.proxy.log
+        child = int(re.search(r'video child (\d+) ready', s.proxy.log)
+                    .group(1))
+        # Each backend that dies must take its fds with it: after three
+        # cycles the child holds no more than it did after the first.
+        backend = re.compile(r'RTP/H264 backend pid')
         assert s.proxy.wait_for(
             r'RTP/H264 backend pid.*\n(.*\n)*.*RTP/H264 backend pid',
             timeout=15), s.proxy.log
+        time.sleep(0.3)
+        after_two = len(os.listdir('/proc/%d/fd' % child))
+        deadline = time.time() + 20
+        while len(backend.findall(s.proxy.log)) < 4 and time.time() < deadline:
+            time.sleep(0.2)
+        assert len(backend.findall(s.proxy.log)) >= 4, s.proxy.log
+        time.sleep(0.3)
+        after_four = len(os.listdir('/proc/%d/fd' % child))
+        assert after_four <= after_two, (after_two, after_four, s.proxy.log)
 
     def test_backend_that_dies_before_binding_is_a_failed_start(
             self, session, clip, tmp_path, monkeypatch):
