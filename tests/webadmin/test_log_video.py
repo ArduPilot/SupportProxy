@@ -391,3 +391,59 @@ class TestRemuxToMp4:
         time.sleep(0.5)
         after = _our_ffmpeg_count()
         assert after <= before
+
+
+def _set_log_access(keydb_path, port2, access):
+    db = keydb_lib.open_db(keydb_path)
+    db.transaction_start()
+    ke = keydb_lib.KeyEntry(port2)
+    assert ke.fetch(db)
+    ke.set_log_access(access)
+    ke.store(db)
+    db.transaction_prepare_commit()
+    db.transaction_commit()
+    db.close()
+
+
+class TestAnonymousRemuxCap:
+    """A public-logs entry lets anyone stream play.mp4, and each stream
+    holds a web thread and an ffmpeg. Anonymous readers are capped so
+    they cannot take every worker; logged-in readers are not."""
+
+    def _skip_without_ffmpeg(self):
+        import shutil
+        if shutil.which('ffmpeg') is None:
+            pytest.skip('ffmpeg not installed')
+
+    def test_anonymous_over_the_cap_gets_503_admin_does_not(
+            self, client, app, keydb_path, monkeypatch):
+        import threading
+        from webadmin import logs as logs_mod
+        self._skip_without_ffmpeg()
+        _seed_real_ts(app, ALICE_PORT2)
+        _set_log_access(keydb_path, ALICE_PORT2, keydb_lib.LOG_ACCESS_PUBLIC)
+        # The cap already taken, as by readers mid-stream.
+        taken = threading.BoundedSemaphore(1)
+        taken.acquire()
+        monkeypatch.setattr(logs_mod, '_remux_anon_slots', taken)
+        url = '/admin/logs/%d/%s/%s/play.mp4' % (ALICE_PORT2, DATE, VIDEO)
+        r = client.get(url)
+        assert r.status_code == 503
+        assert r.headers.get('Retry-After')
+        login_as(client, BOB_PORT1, BOB_PASS)
+        r = client.get(url)
+        assert r.status_code == 200
+        assert r.get_data()[4:8] == b'ftyp'
+
+    def test_anonymous_under_the_cap_plays_and_releases(
+            self, client, app, keydb_path):
+        from webadmin import logs as logs_mod
+        self._skip_without_ffmpeg()
+        _seed_real_ts(app, ALICE_PORT2)
+        _set_log_access(keydb_path, ALICE_PORT2, keydb_lib.LOG_ACCESS_PUBLIC)
+        url = '/admin/logs/%d/%s/%s/play.mp4' % (ALICE_PORT2, DATE, VIDEO)
+        r = client.get(url)
+        assert r.status_code == 200
+        assert r.get_data()[4:8] == b'ftyp'
+        r.close()
+        assert logs_mod._remux_anon_slots._value == logs_mod._REMUX_ANON_MAX
