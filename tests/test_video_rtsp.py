@@ -750,6 +750,9 @@ class TestDetectDoesNotSpin:
                                         b'GET /v1?t=abc'])
     def test_partial_request_line_costs_no_cpu(self, session, prefix):
         s = session(with_mav=False)
+        # The fixture waits for "listening", which is logged before the
+        # child's "ready" line; under load the pid may not be there yet.
+        assert s.proxy.wait_for(r'video child \d+ ready'), s.proxy.log
         child = int(re.search(r'video child (\d+) ready', s.proxy.log)
                     .group(1))
         sock = socket.create_connection(('127.0.0.1', VPORT), 5)
@@ -787,6 +790,7 @@ class TestRtpBackendDeath:
         # gets a fresh backend.
         assert s.proxy.wait_for(r'RTP publisher gone', timeout=15), \
             s.proxy.log
+        assert s.proxy.wait_for(r'video child \d+ ready'), s.proxy.log
         child = int(re.search(r'video child (\d+) ready', s.proxy.log)
                     .group(1))
         # Each backend that dies must take its fds with it: after three
