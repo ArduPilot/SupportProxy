@@ -426,6 +426,29 @@ def _remux_response(port2, date, session_name):
             slot.release()
         raise
 
+    done = []
+
+    def cleanup():
+        # Idempotent: reached from the generator's finally on a normal
+        # or abandoned read, and from call_on_close for a HEAD, where
+        # Werkzeug never starts the generator at all -- closing a
+        # never-started generator runs no finally, which used to leak
+        # the ffmpeg and the anonymous permit.
+        if done:
+            return
+        done.append(True)
+        try:
+            try:
+                proc.stdout.close()
+            except OSError:
+                pass
+            if proc.poll() is None:
+                proc.kill()
+            proc.wait()
+        finally:
+            if slot is not None:
+                slot.release()
+
     def generate():
         try:
             while True:
@@ -434,20 +457,10 @@ def _remux_response(port2, date, session_name):
                     break
                 yield chunk
         finally:
-            # The client closing the tab must not leave an ffmpeg
-            # behind: the generator is closed either way, so the kill
-            # belongs here rather than after the loop.
-            try:
-                proc.stdout.close()
-            except OSError:
-                pass
-            if proc.poll() is None:
-                proc.kill()
-            proc.wait()
-            if slot is not None:
-                slot.release()
+            cleanup()
 
     resp = Response(generate(), mimetype='video/mp4')
+    resp.call_on_close(cleanup)
     resp.headers['Cache-Control'] = 'private, no-store'
     resp.headers['Content-Disposition'] = 'inline'
     return resp

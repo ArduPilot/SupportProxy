@@ -435,6 +435,31 @@ class TestAnonymousRemuxCap:
         assert r.status_code == 200
         assert r.get_data()[4:8] == b'ftyp'
 
+    def test_head_requests_release_the_permit_and_the_ffmpeg(
+            self, client, app, keydb_path):
+        """HEAD is accepted by a GET route, and Werkzeug never starts the
+        body generator for it -- so cleanup that lived only in the
+        generator's finally never ran, leaking one permit and one ffmpeg
+        per HEAD. Two curl -I's used to disable anonymous playback until
+        restart."""
+        from webadmin import logs as logs_mod
+        self._skip_without_ffmpeg()
+        _seed_real_ts(app, ALICE_PORT2)
+        _set_log_access(keydb_path, ALICE_PORT2, keydb_lib.LOG_ACCESS_PUBLIC)
+        url = '/admin/logs/%d/%s/%s/play.mp4' % (ALICE_PORT2, DATE, VIDEO)
+        before = _our_ffmpeg_count()
+        for _ in range(logs_mod._REMUX_ANON_MAX):
+            r = client.head(url)
+            assert r.status_code == 200
+            r.close()
+        assert logs_mod._remux_anon_slots._value == logs_mod._REMUX_ANON_MAX
+        r = client.get(url)
+        assert r.status_code == 200
+        assert r.get_data()[4:8] == b'ftyp'
+        r.close()
+        time.sleep(0.5)
+        assert _our_ffmpeg_count() <= before
+
     def test_anonymous_under_the_cap_plays_and_releases(
             self, client, app, keydb_path):
         from webadmin import logs as logs_mod
