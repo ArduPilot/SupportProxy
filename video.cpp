@@ -232,6 +232,12 @@ private:
         return (video_slot_opts_of(ke_, unsigned(idx))
                 & VIDEO_SLOT_SESSION_OK) != 0;
     }
+    // Does this slot admit a publisher that offered no credential with
+    // no MAVLink-session check either?
+    bool open_publish(int idx) const {
+        return (video_slot_opts_of(ke_, unsigned(idx))
+                & VIDEO_SLOT_OPEN_PUB) != 0;
+    }
 
     void log_reject(Slot &s, int idx, uint32_t ip_be, video_admit_t r,
                     time_t now);
@@ -457,7 +463,8 @@ void VideoChild::handle_udp(Slot &s, int idx)
     // session_ok, in which case UDP can't satisfy it and the datagram
     // is refused.
     video_admit_t r = auth_.admit(ke_, uint32_t(from.sin_addr.s_addr),
-                                  nullptr, false, session_ok(idx), now);
+                                  nullptr, false, session_ok(idx),
+                                  open_publish(idx), now);
     if (r != VIDEO_ADMIT_OK) {
         log_reject(s, idx, uint32_t(from.sin_addr.s_addr), r, now);
         return;
@@ -686,7 +693,8 @@ void VideoChild::handle_rtsp(Slot &s, int idx, int fd,
     // them apart -- see videortsp.h).
     const video_admit_t r = auth_.admit(ke_, uint32_t(from.sin_addr.s_addr),
                                         pw_present ? &pw : nullptr, true,
-                                        session_ok(idx), now);
+                                        session_ok(idx), open_publish(idx),
+                                        now);
     if (r != VIDEO_ADMIT_OK) {
         log_reject(s, idx, uint32_t(from.sin_addr.s_addr), r, now);
         close(fd);
@@ -964,7 +972,7 @@ bool VideoChild::promote_pending(Slot &s, int idx, PendingRtmp &p,
 
     const video_admit_t a = auth_.admit(
         ke_, p.ip_be, r.password_present() ? &r.password() : nullptr, true,
-        session_ok(idx), now);
+        session_ok(idx), open_publish(idx), now);
     if (a != VIDEO_ADMIT_OK) {
         log_reject(s, idx, p.ip_be, a, now);
         r.reject_publish("NetStream.Publish.Denied", video_admit_str(a));

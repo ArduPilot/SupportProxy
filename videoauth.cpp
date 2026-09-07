@@ -108,7 +108,7 @@ video_admit_t VideoAuth::check_session(const struct KeyEntry &ke,
 video_admit_t VideoAuth::admit(const struct KeyEntry &ke, uint32_t peer_ip_be,
                                const std::string *password,
                                bool credential_capable, bool session_ok,
-                               time_t now)
+                               bool open_publish, time_t now)
 {
     // Path A: a publish password, when set, is sufficient on its own.
     bool have_pw = false;
@@ -137,10 +137,15 @@ video_admit_t VideoAuth::admit(const struct KeyEntry &ke, uint32_t peer_ip_be,
           password" is true but useless to someone whose udpsink never
           sent one.
          */
-        if (!session_ok) {
+        if (!session_ok && !open_publish) {
             return credential_capable ? VIDEO_ADMIT_MISSING_PASSWORD
                                       : VIDEO_ADMIT_NO_CREDENTIAL;
         }
+    }
+
+    // No credential offered and the slot is open: nothing else to check.
+    if (open_publish) {
+        return VIDEO_ADMIT_OK;
     }
 
     // Path B: match a recent MAVLink session.

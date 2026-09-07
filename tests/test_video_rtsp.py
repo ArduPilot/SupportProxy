@@ -57,7 +57,7 @@ def clip(tmp_path_factory):
 
 
 def _workdir(tmp_path, record=True, publish_pass=None,
-             rtmp_path=None, session_ok=False):
+             rtmp_path=None, session_ok=False, open_publish=False):
     p = tmp_path / 'work'
     p.mkdir()
     db = keydb_lib.init_db(str(p / 'keys.tdb'))
@@ -73,6 +73,8 @@ def _workdir(tmp_path, record=True, publish_pass=None,
         keydb_lib.set_video_rtmp_path(db, PORT_ENG, 0, rtmp_path)
     if session_ok:
         keydb_lib.set_video_slot_flag(db, PORT_ENG, 0, 'session_ok')
+    if open_publish:
+        keydb_lib.set_video_slot_flag(db, PORT_ENG, 0, 'open_publish')
     db.transaction_prepare_commit()
     db.transaction_commit()
     db.close()
@@ -229,7 +231,8 @@ def session(tmp_path):
     def _start(**kw):
         made['s'] = RtspSession(_workdir(tmp_path, **{
             k: v for k, v in kw.items()
-            if k in ('record', 'publish_pass', 'session_ok')}),
+            if k in ('record', 'publish_pass', 'session_ok',
+                     'open_publish')}),
             with_mav=kw.get('with_mav', True))
         return made['s']
 
@@ -591,6 +594,60 @@ class TestSessionOkSlot:
             sock.close()
         assert s.proxy.wait_for(r'no MAVLink session', timeout=20), s.proxy.log
         assert 'join=ready' not in s.proxy.log
+
+
+@pytest.mark.integration
+class TestOpenPublishSlot:
+    """VIDEO_SLOT_OPEN_PUB: a slot that admits a credential-less publisher
+    with no check at all. Off by default; a wrong password still fails.
+    """
+
+    def _send_udp(self, seconds=30):
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import tsgen
+        g = tsgen.TSGen()
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            for dg in g.datagrams(g.stream(seconds, gop=10, psi_every=20)):
+                sock.sendto(dg, ('127.0.0.1', VPORT))
+                time.sleep(0.003)
+        finally:
+            sock.close()
+
+    def test_udp_with_no_session_and_no_password_is_admitted(self, session):
+        s = session(with_mav=False, open_publish=True)
+        self._send_udp(60)
+        assert s.proxy.wait_for(r'join=ready', timeout=25), s.proxy.log
+        assert 'rejected' not in s.proxy.log
+
+    def test_udp_is_admitted_even_with_a_publish_password_set(self, session):
+        s = session(with_mav=False, publish_pass='pubsecret',
+                    open_publish=True)
+        self._send_udp(60)
+        assert s.proxy.wait_for(r'join=ready', timeout=25), s.proxy.log
+        assert 'cannot carry one' not in s.proxy.log
+
+    def test_default_off_refuses_without_a_session(self, session):
+        s = session(with_mav=False, open_publish=False)
+        self._send_udp(30)
+        assert s.proxy.wait_for(r'no MAVLink session', timeout=20), \
+            s.proxy.log
+        assert 'join=ready' not in s.proxy.log
+
+    def test_rtsp_offering_nothing_is_admitted(self, session, clip):
+        s = session(with_mav=False, publish_pass='pubsecret',
+                    open_publish=True)
+        s.pub = _publish_with('', clip)
+        assert s.proxy.wait_for(r'RTSP publisher', timeout=25), s.proxy.log
+        assert 'none was supplied' not in s.proxy.log
+
+    def test_a_wrong_password_is_still_refused(self, session, clip):
+        s = session(with_mav=False, publish_pass='pubsecret',
+                    open_publish=True)
+        s.pub = _publish_with('?pw=wrong', clip)
+        assert s.proxy.wait_for(r'wrong publish password', timeout=25), \
+            s.proxy.log
+        assert 'RTSP publisher' not in s.proxy.log
 
 
 class TestRtspPublisherRestart:

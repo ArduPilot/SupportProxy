@@ -82,6 +82,19 @@ weaken the others. A password that *is* supplied and is wrong is still
 refused — the fallback applies only when none was offered, so a typo
 cannot quietly succeed on the strength of the address.
 
+Some publishers have neither: no password and no MAVLink session through
+this proxy, e.g. a camera on its own link while telemetry goes elsewhere.
+The per-slot **open publish** option admits a publisher that offers no
+credential with no check at all:
+
+```bash
+./keydb.py videoflag 11024 0 open_publish
+```
+
+Anyone who can reach the port can then publish to that slot, so it is
+off by default. A password that *is* supplied and is wrong is still
+refused.
+
 **Watching.** In the browser from the web UI, or outside it with the
 `ffplay`/`vlc` command the page offers. The browser player needs H.264:
 Chrome and Firefox will not decode HEVC in Media Source Extensions on

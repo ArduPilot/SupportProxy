@@ -93,6 +93,13 @@
   quietly succeed on the strength of the address.
  */
 #define VIDEO_SLOT_SESSION_OK (1u << 3)
+/*
+  Admit a publisher that offers no credential without any check at all:
+  no MAVLink session, no publish password. Anyone who can reach the port
+  can publish, so this is off by default and per slot. A password that
+  is offered and wrong is still refused.
+ */
+#define VIDEO_SLOT_OPEN_PUB (1u << 4)
 
 // entry-wide bits, stored in the top byte
 #define VIDEO_OPT_SHIFT 24

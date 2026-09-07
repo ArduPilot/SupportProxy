@@ -56,6 +56,8 @@ def _make_workdir(tmp_path, flags=('video',), vports=(VPORT,), **kw):
         keydb_lib.set_video_publish_pass(db, PORT_ENG, kw['publish_pass'])
     if kw.get('session_ok'):
         keydb_lib.set_video_slot_flag(db, PORT_ENG, 0, 'session_ok')
+    if kw.get('open_publish'):
+        keydb_lib.set_video_slot_flag(db, PORT_ENG, 0, 'open_publish')
     if kw.get('grace') is not None:
         keydb_lib.set_video_grace(db, PORT_ENG, kw['grace'])
     db.transaction_prepare_commit()
