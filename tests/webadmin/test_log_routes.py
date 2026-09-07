@@ -592,6 +592,29 @@ class TestSharedLogAccess:
         assert '/login' in r.location
         assert 'next=' in r.location
 
+    def test_login_required_link_lands_on_the_logs_after_login(
+            self, client, keydb_path):
+        """The share link's whole point: log in, arrive at the logs. The
+        login form's action has to carry next, or the POST loses it."""
+        import re
+        from urllib.parse import urlsplit
+        set_log_access(keydb_path, BOB_PORT2,
+                       keydb_lib.LOG_ACCESS_LOGIN_REQUIRED)
+        url = '/admin/logs/%d/' % BOB_PORT2
+        r = client.get(url, follow_redirects=False)
+        login_url = urlsplit(r.location)
+        page = client.get(login_url.path + '?' + login_url.query)
+        m = re.search(r'<form[^>]*action="([^"]+)"',
+                      page.get_data(as_text=True))
+        assert m, page.get_data(as_text=True)
+        action = m.group(1).replace('&amp;', '&')
+        assert 'next=' in action
+        r = client.post(action, data={'port': ALICE_PORT1,
+                                      'passphrase': ALICE_PASS},
+                        follow_redirects=False)
+        assert r.status_code == 302
+        assert urlsplit(r.location).path == url
+
     def test_login_required_accepts_any_valid_login_read_only(self, client,
                                                                keydb_path,
                                                                logs_dir):

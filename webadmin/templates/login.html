@@ -6,7 +6,7 @@
 <p>Enter the user-side port (port1) <em>or</em> the engineer-side port (port2)
    for your entry, plus the shared MAVLink passphrase you set with
    <code>keydb.py</code> — not a separate web login.</p>
-<form method="post" action="{{ url_for('auth.login') }}">
+<form method="post" action="{{ url_for('auth.login', next=request.args.get('next')) }}">
   {{ form.csrf_token }}
   {{ row(form.port, autofocus=True) }}
   {{ row(form.passphrase) }}
