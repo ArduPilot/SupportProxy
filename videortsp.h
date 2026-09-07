@@ -28,11 +28,19 @@
   SupportProxy speaks RTMP itself and hands the backend FLV on stdin.
   The backend is still an ffmpeg child with the same sandbox; only the
   input side differs, and RTMP needs no loopback port at all.
+
+  Bare RTP over UDP (rtph264pay/rtph265pay ! udpsink, ffmpeg -f rtp)
+  is the same backend again: a one-line SDP on its stdin names the
+  codec and a loopback UDP port, and the datagrams are forwarded there
+  as they arrive. Parameter sets must be in-band (there is no SDP from
+  the sender to carry sprop), which is what those payloaders do by
+  default with config-interval set.
  */
 #pragma once
 
 #include <stddef.h>
 #include <stdint.h>
+#include <netinet/in.h>
 #include <sys/types.h>
 #include <time.h>
 
@@ -52,6 +60,7 @@
 enum splice_proto_t {
     SPLICE_RTSP = 0,
     SPLICE_RTMP,
+    SPLICE_RTP,     // bare RTP over UDP, forwarded to an SDP-fed backend
 };
 
 const char *splice_proto_name(splice_proto_t p);
@@ -73,9 +82,17 @@ public:
       conversion emits for some cameras. It is codec-specific, so the
       caller must know the codec before passing it.
      */
+    /*
+      `rtp_codec` and `rtp_pt` are for SPLICE_RTP only: the SDP codec
+      name ("H264" or "H265") and the payload type the sender uses.
+     */
     bool start(int port2, int slot, bool want_audio,
                splice_proto_t proto = SPLICE_RTSP,
-               const char *vbsf = nullptr);
+               const char *vbsf = nullptr,
+               const char *rtp_codec = nullptr, int rtp_pt = 96);
+
+    // SPLICE_RTP: hand one datagram to the backend. Never blocks.
+    bool send_rtp(const uint8_t *buf, size_t n);
 
     splice_proto_t proto(void) const { return proto_; }
 
@@ -100,9 +117,16 @@ private:
     pid_t pid_ = -1;
     int backend_fd_ = -1;   // RTSP control/data, spliced with the client
     int media_fd_ = -1;     // ffmpeg stdout: MPEG-TS
+    int rtp_fd_ = -1;       // SPLICE_RTP: unconnected UDP socket to the
+                            // backend's loopback port. Deliberately not
+                            // backend_fd_: nothing polls it, and an
+                            // unconnected socket surfaces no ICMP errors
+                            // from the moment before ffmpeg has bound.
+    struct sockaddr_in rtp_dst_ {};
     int port2_ = 0;
     int slot_ = 0;
     splice_proto_t proto_ = SPLICE_RTSP;
 
-    static int pick_loopback_port(void);
+    static int pick_loopback_port(int socktype);
+    static bool loopback_udp_bound(int port);
 };

@@ -58,6 +58,10 @@
   unauthenticated peer can start is bounded.
  */
 #define VIDEO_MAX_PENDING_RTMP 4
+// RTP datagrams to inspect for a decisive NAL type before assuming H.264
+#define VIDEO_RTP_SNIFF_MAX 64
+// wait this long after a failed backend start before trying again
+#define VIDEO_RTP_RETRY_S 5
 
 // How often the child re-reads its own keys.tdb record and re-writes
 // its connections.tdb rows. Matches the MAVLink child's cadence.
@@ -201,7 +205,77 @@ struct Slot {
     bool had_anchor = false;
     uint64_t bad_datagrams = 0;
     bool warned_204 = false;
+
+    // bare RTP over UDP: datagrams seen while deciding the codec
+    uint32_t rtp_seen = 0;
+    time_t rtp_retry_after = 0;
+    void reset_rtp(void) {
+        rtp_seen = 0;
+        rtp_retry_after = 0;
+    }
 };
+
+enum rtp_codec_t {
+    RTP_CODEC_UNKNOWN = 0,
+    RTP_CODEC_H264,
+    RTP_CODEC_HEVC,
+};
+
+/*
+  Offset of the RTP payload, or -1 if this is not an RTP datagram we
+  would forward: version 2, a dynamic payload type (which also excludes
+  RTCP, whose types land at 72..76 after the marker bit is masked).
+ */
+static int rtp_payload_offset(const uint8_t *buf, size_t n)
+{
+    if (n < 13 || (buf[0] & 0xC0) != 0x80) {
+        return -1;
+    }
+    const int pt = buf[1] & 0x7f;
+    if (pt < 96 || pt > 127) {
+        return -1;
+    }
+    size_t off = 12 + 4u * (buf[0] & 0x0f);
+    if (buf[0] & 0x10) {                     // extension header
+        if (off + 4 > n) {
+            return -1;
+        }
+        off += 4 + 4u * ((size_t(buf[off + 2]) << 8) | buf[off + 3]);
+    }
+    return off < n ? int(off) : -1;
+}
+
+/*
+  Decide the codec from the NAL header. Only values that separate the
+  two layouts count: H.264 FU-A, STAP-A, IDR and nri=3 SPS/PPS map to
+  reserved HEVC types; HEVC FU, AP and parameter sets with a layer id
+  of 0 map to H.264 types 0/2/4, which are unspecified or the
+  Extended-profile data partitions no camera emits. Everything else is
+  a single slice that could be either, so the caller keeps looking.
+ */
+static rtp_codec_t rtp_codec_hint(const uint8_t *p, size_t n)
+{
+    if (n < 2 || (p[0] & 0x80) != 0) {
+        return RTP_CODEC_UNKNOWN;
+    }
+    switch (p[0]) {
+    case 0x40: case 0x42: case 0x44:     // VPS, SPS, PPS
+    case 0x60: case 0x62:                // AP, FU
+        // second byte: layer id low bits (must be 0) and TID+1 (>= 1)
+        return (p[1] & 0xF8) == 0 && (p[1] & 0x07) != 0
+            ? RTP_CODEC_HEVC : RTP_CODEC_UNKNOWN;
+    default:
+        break;
+    }
+    switch (p[0] & 0x1f) {
+    case 28: case 24:                    // FU-A, STAP-A
+        return RTP_CODEC_H264;
+    case 5: case 7: case 8:              // IDR, SPS, PPS
+        return (p[0] & 0x60) == 0x60 ? RTP_CODEC_H264 : RTP_CODEC_UNKNOWN;
+    default:
+        return RTP_CODEC_UNKNOWN;
+    }
+}
 
 class VideoChild {
 public:
@@ -240,6 +314,10 @@ private:
     }
 
     void log_reject(Slot &s, int idx, uint32_t ip_be, video_admit_t r,
+                    time_t now);
+    void ingest_udp(Slot &s, int idx, const uint8_t *buf, size_t n,
+                    time_t now);
+    void ingest_rtp(Slot &s, int idx, const uint8_t *buf, size_t n,
                     time_t now);
     void ingest(Slot &s, int idx, const uint8_t *buf, size_t n);
     void ingest_stream(Slot &s, int idx, const uint8_t *buf, size_t n);
@@ -453,7 +531,7 @@ void VideoChild::handle_udp(Slot &s, int idx)
     if (s.has_pub && s.pub_ip_be == uint32_t(from.sin_addr.s_addr)
         && s.pub_port_be == from.sin_port) {
         s.pub_last = now;
-        ingest(s, idx, buf, size_t(n));
+        ingest_udp(s, idx, buf, size_t(n), now);
         return;
     }
 
@@ -488,26 +566,68 @@ void VideoChild::handle_udp(Slot &s, int idx)
                    VIDEO_ADMIT_SLOT_BUSY, now);
         return;
     }
-    s.has_pub = true;
     s.pub_ip_be = uint32_t(from.sin_addr.s_addr);
     s.pub_port_be = from.sin_port;
-    s.pub_since = now;
-    s.pub_last = now;
-    s.pub_bytes = 0;
-    s.ring.init(video_ring_bytes());
-    s.scanner = TSScanner();
-    s.had_anchor = false;
-    s.recording = (video_slot_opts_of(ke_, unsigned(idx))
-                   & VIDEO_SLOT_RECORD) != 0;
-    if (s.recording) {
-        s.rec.configure(uint32_t(port2_), idx,
-                        (ke_.flags & KEY_FLAG_USE_TZ) != 0,
-                        ke_.tz_offset_hours, "logs", ke_.video_quota_mb);
-    }
+    latch_publisher(s, idx, now);
     printf("[%d] video slot %d publisher %s\n",
            port2_, idx, addr_to_str(from));
-    ingest(s, idx, buf, size_t(n));
-    last_tick_ = 0;   // snapshot connections.tdb promptly
+    ingest_udp(s, idx, buf, size_t(n), now);
+}
+
+/*
+  A datagram from the latched UDP publisher: MPEG-TS goes straight to
+  the scanner; bare RTP goes to a backend that muxes it, started once
+  the codec is known.
+ */
+void VideoChild::ingest_udp(Slot &s, int idx, const uint8_t *buf, size_t n,
+                            time_t now)
+{
+    if (s.rtsp.running()) {
+        if (s.rtsp.proto() == SPLICE_RTP) {
+            s.rtsp.send_rtp(buf, n);
+        }
+        return;
+    }
+    if (s.rtp_seen > 0 || rtp_payload_offset(buf, n) >= 0) {
+        ingest_rtp(s, idx, buf, n, now);
+        return;
+    }
+    ingest(s, idx, buf, n);
+}
+
+void VideoChild::ingest_rtp(Slot &s, int idx, const uint8_t *buf, size_t n,
+                            time_t now)
+{
+    const int off = rtp_payload_offset(buf, n);
+    if (off < 0) {
+        return;
+    }
+    if (s.rtp_seen < UINT32_MAX) {
+        s.rtp_seen++;
+    }
+    if (now < s.rtp_retry_after) {
+        return;
+    }
+    rtp_codec_t codec = rtp_codec_hint(buf + off, n - size_t(off));
+    if (codec == RTP_CODEC_UNKNOWN) {
+        if (s.rtp_seen < VIDEO_RTP_SNIFF_MAX) {
+            return;
+        }
+        codec = RTP_CODEC_H264;
+    }
+    const char *name = codec == RTP_CODEC_HEVC ? "H265" : "H264";
+    if (!s.rtsp.start(port2_, idx, false, SPLICE_RTP, nullptr, name,
+                      buf[1] & 0x7f)) {
+        s.rtp_retry_after = now + VIDEO_RTP_RETRY_S;
+        return;
+    }
+    if (s.rtsp.media_fd() >= 0) {
+        struct epoll_event ev {};
+        ev.events = EPOLLIN | EPOLLRDHUP;
+        ev.data.fd = s.rtsp.media_fd();
+        epoll_ctl(epfd_, EPOLL_CTL_ADD, s.rtsp.media_fd(), &ev);
+    }
+    s.rtsp.send_rtp(buf, n);
 }
 
 void VideoChild::handle_tcp(Slot &s, int idx)
@@ -589,6 +709,7 @@ void VideoChild::latch_publisher(Slot &s, int idx, time_t now)
     s.ring.init(video_ring_bytes());
     s.scanner = TSScanner();
     s.had_anchor = false;
+    s.reset_rtp();
     s.recording = (video_slot_opts_of(ke_, unsigned(idx))
                    & VIDEO_SLOT_RECORD) != 0;
     if (s.recording) {
@@ -596,7 +717,7 @@ void VideoChild::latch_publisher(Slot &s, int idx, time_t now)
                         (ke_.flags & KEY_FLAG_USE_TZ) != 0,
                         ke_.tz_offset_hours, "logs", ke_.video_quota_mb);
     }
-    last_tick_ = 0;
+    last_tick_ = 0;   // snapshot connections.tdb promptly
 }
 
 void VideoChild::handle_rtsp(Slot &s, int idx, int fd,
@@ -765,6 +886,7 @@ void VideoChild::close_rtsp(Slot &s, int idx, const char *why)
     s.rec.close_segment();
     s.recording = false;
     s.has_pub = false;
+    s.reset_rtp();
     // Same reasoning as the UDP idle-release path: the next publisher
     // is a different stream, so viewers have to be ended rather than
     // spliced onto it. Missing it here left RTSP -- the transport a
@@ -1483,14 +1605,17 @@ void VideoChild::write_conn_rows(time_t now)
           operator looking at a stuck RTSP or RTMP publisher was told it
           was something it was not.
          */
-        const bool tcp_pub = s.rtmp || s.rtsp.running() ||
-                             s.rtsp_client_fd >= 0;
+        const bool rtp_pub = s.rtsp.running()
+                             && s.rtsp.proto() == SPLICE_RTP;
+        const bool tcp_pub = !rtp_pub && (s.rtmp || s.rtsp.running()
+                                          || s.rtsp_client_fd >= 0);
         e.transport = tcp_pub ? CONN_TRANSPORT_TCP : CONN_TRANSPORT_UDP;
         e.is_user = 0;
         e.role = CONN_ROLE_VIDEO_PUB;
         e.stream_idx = uint8_t(i);
         e.app_proto = s.rtmp ? CONN_APP_RTMP
-                    : (tcp_pub ? CONN_APP_RTSP : CONN_APP_MPEGTS);
+                    : rtp_pub ? CONN_APP_RTP
+                    : tcp_pub ? CONN_APP_RTSP : CONN_APP_MPEGTS;
         conn_write(db, e);
     }
     conn_db_close_commit(db);
@@ -1555,6 +1680,7 @@ void VideoChild::tick(time_t now)
                              // end_stream and the recorder
             }
             s.has_pub = false;
+            s.reset_rtp();
             // Close the segment on disconnect rather than leaving it
             // open: the file is complete, and an open file is not
             // evictable by the quota pass.

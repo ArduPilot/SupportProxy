@@ -54,8 +54,17 @@ all.
 | Transport | Credential |
 |---|---|
 | MPEG-TS over UDP | none possible — see below |
+| RTP/H.264 or RTP/HEVC over UDP | none possible — see below |
 | RTSP | `?pw=` on the request URI |
 | RTMP | `?pw=` on the stream key, e.g. `FPV?pw=secret` |
+
+Bare RTP over UDP (`rtph264pay ! udpsink`, `rtph265pay ! udpsink`,
+`ffmpeg -f rtp`) is accepted on the same port as MPEG-TS: the proxy
+recognises the RTP header, works out the codec from the first NAL
+units, and muxes the stream to MPEG-TS through the same ffmpeg backend
+RTSP uses. Parameter sets have to be in-band, since there is no SDP
+from the sender to carry them — `config-interval=1` on the GStreamer
+payloaders, `-bsf:v h264_mp4toannexb` or `dump_extra` with ffmpeg.
 
 Plain MPEG-TS over UDP has nowhere to carry a password, so it is
 admitted on the MAVLink-session path only: a publisher is accepted when

@@ -58,6 +58,7 @@
 #define CONN_APP_HTTP    3
 #define CONN_APP_SRT     4
 #define CONN_APP_RTMP    5
+#define CONN_APP_RTP     6   // bare RTP over UDP
 
 /*
   Video rows live in a conn_index range disjoint from the MAVLink ones

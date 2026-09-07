@@ -24,9 +24,9 @@ RtspBackend::~RtspBackend(void)
     stop();
 }
 
-int RtspBackend::pick_loopback_port(void)
+int RtspBackend::pick_loopback_port(int socktype)
 {
-    const int s = socket(AF_INET, SOCK_STREAM, 0);
+    const int s = socket(AF_INET, socktype, 0);
     if (s < 0) {
         return -1;
     }
@@ -48,27 +48,63 @@ int RtspBackend::pick_loopback_port(void)
     return port;
 }
 
+// Is 127.0.0.1:port bound by a UDP socket? Linux-only, like the rest.
+bool RtspBackend::loopback_udp_bound(int port)
+{
+    FILE *f = fopen("/proc/net/udp", "r");
+    if (f == nullptr) {
+        return false;
+    }
+    char want[32];
+    snprintf(want, sizeof(want), " 0100007F:%04X ", port);
+    char line[512];
+    bool found = false;
+    while (!found && fgets(line, sizeof(line), f) != nullptr) {
+        found = strstr(line, want) != nullptr;
+    }
+    fclose(f);
+    return found;
+}
+
 const char *splice_proto_name(splice_proto_t p)
 {
-    return p == SPLICE_RTMP ? "RTMP" : "RTSP";
+    switch (p) {
+    case SPLICE_RTMP: return "RTMP";
+    case SPLICE_RTP:  return "RTP";
+    default:          return "RTSP";
+    }
 }
 
 bool RtspBackend::start(int port2, int slot, bool want_audio,
-                        splice_proto_t proto, const char *vbsf)
+                        splice_proto_t proto, const char *vbsf,
+                        const char *rtp_codec, int rtp_pt)
 {
     port2_ = port2;
     slot_ = slot;
     proto_ = proto;
 
-    // RTSP splices into a loopback listener; RTMP is fed FLV on stdin.
+    // RTSP splices into a loopback listener; RTMP is fed FLV on stdin;
+    // RTP is forwarded to a loopback UDP port named in an SDP on stdin.
     int lport = 0;
-    if (proto == SPLICE_RTSP) {
-        lport = pick_loopback_port();
+    if (proto == SPLICE_RTSP || proto == SPLICE_RTP) {
+        lport = pick_loopback_port(proto == SPLICE_RTP ? SOCK_DGRAM
+                                                       : SOCK_STREAM);
         if (lport <= 0) {
-            printf("[%d] video slot %d: no loopback port for the RTSP "
-                   "backend\n", port2_, slot_);
+            printf("[%d] video slot %d: no loopback port for the %s "
+                   "backend\n", port2_, slot_, splice_proto_name(proto));
             return false;
         }
+    }
+    char sdp[256] = "";
+    if (proto == SPLICE_RTP) {
+        if (rtp_codec == nullptr) {
+            return false;
+        }
+        snprintf(sdp, sizeof(sdp),
+                 "v=0\r\no=- 0 0 IN IP4 127.0.0.1\r\ns=SupportProxy\r\n"
+                 "c=IN IP4 127.0.0.1\r\nt=0 0\r\n"
+                 "m=video %d RTP/AVP %d\r\na=rtpmap:%d %s/90000\r\n",
+                 lport, rtp_pt, rtp_pt, rtp_codec);
     }
 
     int media[2] = { -1, -1 };
@@ -92,9 +128,18 @@ bool RtspBackend::start(int port2, int slot, bool want_audio,
                port2_, slot_, strerror(errno));
         return false;
     }
+    // The SDP is a few lines: a pipe holds it whole, and closing our
+    // end after writing is the EOF the sdp demuxer reads up to.
+    if (proto == SPLICE_RTP && pipe(feed) != 0) {
+        ::close(media[0]);
+        ::close(media[1]);
+        printf("[%d] video slot %d: pipe failed - %s\n",
+               port2_, slot_, strerror(errno));
+        return false;
+    }
 
     char url[128];
-    if (proto == SPLICE_RTMP) {
+    if (proto == SPLICE_RTMP || proto == SPLICE_RTP) {
         snprintf(url, sizeof(url), "pipe:0");
     } else {
         snprintf(url, sizeof(url), "rtsp://127.0.0.1:%d/", lport);
@@ -147,7 +192,7 @@ bool RtspBackend::start(int port2, int slot, bool want_audio,
             _exit(126);
         }
         ::close(media[1]);
-        if (proto == SPLICE_RTMP) {
+        if (proto == SPLICE_RTMP || proto == SPLICE_RTP) {
             ::close(feed[1]);
             if (dup2(feed[0], STDIN_FILENO) == -1) {
                 _exit(126);
@@ -223,6 +268,24 @@ bool RtspBackend::start(int port2, int slot, bool want_audio,
             argv[n++] = "file,pipe";
             argv[n++] = "-f";
             argv[n++] = "live_flv";
+        } else if (proto == SPLICE_RTP) {
+            /*
+              max_delay bounds how long the RTP demuxer holds later
+              packets waiting for a lost one before giving up on it;
+              the default is 0.5 s of stall per loss. We forward in
+              arrival order, so there is nothing to wait for.
+             */
+            argv[n++] = "-protocol_whitelist";
+            argv[n++] = "file,pipe,rtp,udp";
+            argv[n++] = "-max_delay";
+            argv[n++] = "100000";
+            // Without this the sdp demuxer binds 0.0.0.0, and the
+            // ephemeral port is then reachable from the internet with
+            // no admission check at all.
+            argv[n++] = "-localaddr";
+            argv[n++] = "127.0.0.1";
+            argv[n++] = "-f";
+            argv[n++] = "sdp";
         } else {
             argv[n++] = "-protocol_whitelist";
             argv[n++] = "file,rtp,udp,tcp";
@@ -305,6 +368,44 @@ bool RtspBackend::start(int port2, int slot, bool want_audio,
                (vbsf != nullptr && vbsf[0] != '\0') ? vbsf : "none");
         return true;
     }
+    if (proto == SPLICE_RTP) {
+        ::close(feed[0]);
+        const size_t len = strlen(sdp);
+        const ssize_t w = ::write(feed[1], sdp, len);
+        ::close(feed[1]);
+        rtp_fd_ = socket(AF_INET, SOCK_DGRAM, 0);
+        if (w != ssize_t(len) || rtp_fd_ < 0) {
+            printf("[%d] video slot %d: RTP backend setup failed - %s\n",
+                   port2_, slot_, strerror(errno));
+            stop();
+            return false;
+        }
+        fcntl(rtp_fd_, F_SETFL, fcntl(rtp_fd_, F_GETFL, 0) | O_NONBLOCK);
+        rtp_dst_ = {};
+        rtp_dst_.sin_family = AF_INET;
+        rtp_dst_.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        rtp_dst_.sin_port = htons(uint16_t(lport));
+        /*
+          Wait for the bind, as the RTSP path waits for its listener:
+          datagrams sent before it are lost, and a sender that puts its
+          parameter sets only at the start would never decode. The
+          public socket queues what arrives meanwhile.
+         */
+        const int step_ms = 20;
+        int waited = 0;
+        for (; waited < RTSP_BACKEND_READY_MS; waited += step_ms) {
+            if (loopback_udp_bound(lport)) {
+                break;
+            }
+            struct timespec ts { 0, step_ms * 1000000L };
+            nanosleep(&ts, nullptr);
+        }
+        printf("[%d] video slot %d RTP/%s backend pid %d on "
+               "127.0.0.1:%d (pt %d)%s\n", port2_, slot_, rtp_codec,
+               int(pid_), lport, rtp_pt,
+               waited >= RTSP_BACKEND_READY_MS ? " -- not bound yet" : "");
+        return true;
+    }
 
     // Retry-connect until the backend's listener is up. It bound the
     // port after we picked it, so a short race is expected.
@@ -365,11 +466,28 @@ bool RtspBackend::reap(void)
     return false;
 }
 
+bool RtspBackend::send_rtp(const uint8_t *buf, size_t n)
+{
+    if (rtp_fd_ < 0) {
+        return false;
+    }
+    // Datagrams before ffmpeg has bound its port are simply lost, as
+    // they would be on any UDP path; the sender's next IDR recovers.
+    const ssize_t w = ::sendto(rtp_fd_, buf, n, MSG_DONTWAIT,
+                               (const struct sockaddr *)&rtp_dst_,
+                               sizeof(rtp_dst_));
+    return w == ssize_t(n);
+}
+
 void RtspBackend::stop(void)
 {
     if (backend_fd_ >= 0) {
         ::close(backend_fd_);
         backend_fd_ = -1;
+    }
+    if (rtp_fd_ >= 0) {
+        ::close(rtp_fd_);
+        rtp_fd_ = -1;
     }
     if (media_fd_ >= 0) {
         ::close(media_fd_);
