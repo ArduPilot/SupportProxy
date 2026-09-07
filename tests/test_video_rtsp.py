@@ -598,11 +598,11 @@ class TestSessionOkSlot:
         assert 'join=ready' not in s.proxy.log
 
 
-def _publish_rtp(clip, seconds=None):
+def _publish_rtp(clip, seconds=None, ffmpeg='ffmpeg'):
     """Bare RTP/H.264 to the video port, the way rtph264pay ! udpsink
     does. mp4toannexb puts SPS/PPS in-band, which the proxy needs since
     there is no SDP from the sender to carry them."""
-    argv = ['ffmpeg', '-hide_banner', '-loglevel', 'error', '-re',
+    argv = [ffmpeg, '-hide_banner', '-loglevel', 'error', '-re',
             '-stream_loop', '-1', '-i', clip, '-c:v', 'copy', '-an',
             '-bsf:v', 'h264_mp4toannexb']
     if seconds:
@@ -706,6 +706,70 @@ class TestRtpOverUdp:
         finally:
             other.terminate()
             other.wait(timeout=5)
+
+
+_FAKE_FFMPEG_BIND_THEN_DIE = """#!/usr/bin/python3
+# Stand-in backend: bind the SDP's port like ffmpeg would, then die.
+import re, socket, sys, time
+sdp = sys.stdin.read()
+port = int(re.search(r'm=video (\\d+)', sdp).group(1))
+s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+s.bind(('127.0.0.1', port))
+time.sleep(1.0)
+sys.exit(1)
+"""
+
+_FAKE_FFMPEG_DIE_AT_ONCE = """#!/bin/sh
+exit 1
+"""
+
+
+def _fake_ffmpeg_path(tmp_path, script):
+    d = tmp_path / 'fakebin'
+    d.mkdir()
+    p = d / 'ffmpeg'
+    p.write_text(script)
+    p.chmod(0o755)
+    return str(d)
+
+
+@pytest.mark.integration
+class TestRtpBackendDeath:
+    """The backend is a child that can die at any time. An RTP publisher
+    is the first kind with no client socket and no RTMP session, so the
+    teardown paths have to key on the backend's own fds."""
+
+    def test_backend_that_dies_after_binding_is_torn_down_and_slot_reused(
+            self, session, clip, tmp_path, monkeypatch):
+        real = shutil.which('ffmpeg')
+        monkeypatch.setenv('PATH', _fake_ffmpeg_path(
+            tmp_path, _FAKE_FFMPEG_BIND_THEN_DIE) + os.pathsep
+            + os.environ['PATH'])
+        s = session(with_mav=True)
+        s.pub = _publish_rtp(clip, ffmpeg=real)
+        assert s.proxy.wait_for(r'RTP/H264 backend pid', timeout=15), \
+            s.proxy.log
+        # Whichever notices first -- the hangup on the media pipe, or
+        # reap() in tick() -- close_rtsp() must release the slot and
+        # close the media fd, and the publisher, still sending, then
+        # gets a fresh backend.
+        assert s.proxy.wait_for(r'RTP publisher gone', timeout=15), \
+            s.proxy.log
+        assert s.proxy.wait_for(
+            r'RTP/H264 backend pid.*\n(.*\n)*.*RTP/H264 backend pid',
+            timeout=15), s.proxy.log
+
+    def test_backend_that_dies_before_binding_is_a_failed_start(
+            self, session, clip, tmp_path, monkeypatch):
+        real = shutil.which('ffmpeg')
+        monkeypatch.setenv('PATH', _fake_ffmpeg_path(
+            tmp_path, _FAKE_FFMPEG_DIE_AT_ONCE) + os.pathsep
+            + os.environ['PATH'])
+        s = session(with_mav=True)
+        s.pub = _publish_rtp(clip, ffmpeg=real)
+        assert s.proxy.wait_for(r'RTP backend exited before it bound',
+                                timeout=15), s.proxy.log
+        assert 'backend pid' not in s.proxy.log
 
 
 @pytest.mark.integration

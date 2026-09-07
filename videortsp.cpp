@@ -394,19 +394,27 @@ bool RtspBackend::start(int port2, int slot, bool want_audio,
           public socket queues what arrives meanwhile.
          */
         const int step_ms = 20;
-        int waited = 0;
-        for (; waited < RTSP_BACKEND_READY_MS; waited += step_ms) {
+        for (int waited = 0; waited < RTSP_BACKEND_READY_MS;
+             waited += step_ms) {
             if (loopback_udp_bound(lport)) {
-                break;
+                printf("[%d] video slot %d RTP/%s backend pid %d on "
+                       "127.0.0.1:%d (pt %d)\n", port2_, slot_, rtp_codec,
+                       int(pid_), lport, rtp_pt);
+                return true;
+            }
+            if (reap()) {
+                printf("[%d] video slot %d: RTP backend exited before it "
+                       "bound (is ffmpeg installed?)\n", port2_, slot_);
+                stop();
+                return false;
             }
             struct timespec ts { 0, step_ms * 1000000L };
             nanosleep(&ts, nullptr);
         }
-        printf("[%d] video slot %d RTP/%s backend pid %d on "
-               "127.0.0.1:%d (pt %d)%s\n", port2_, slot_, rtp_codec,
-               int(pid_), lport, rtp_pt,
-               waited >= RTSP_BACKEND_READY_MS ? " -- not bound yet" : "");
-        return true;
+        printf("[%d] video slot %d: RTP backend never bound its port\n",
+               port2_, slot_);
+        stop();
+        return false;
     }
 
     // Retry-connect until the backend's listener is up. It bound the
