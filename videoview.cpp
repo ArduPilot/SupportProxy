@@ -175,6 +175,7 @@ bool VideoViewer::on_readable(const struct KeyEntry &ke, int slot,
       is what it is.
      */
     uint8_t buf[2048];
+    holding_bytes_ = false;
     const ssize_t n = ::recv(fd_, buf, sizeof(buf), MSG_PEEK);
     if (n == 0) {
         drop_reason_ = "peer closed";
@@ -213,6 +214,7 @@ bool VideoViewer::on_readable(const struct KeyEntry &ke, int slot,
                     drop_reason_ = "RTSP request line too long";
                     return false;
                 }
+                holding_bytes_ = true;
                 return true;
             }
             kind_ = VVK_RTSP;
@@ -248,6 +250,7 @@ bool VideoViewer::on_readable(const struct KeyEntry &ke, int slot,
         return true;
     }
     if (r == 0) {
+        holding_bytes_ = true;
         return true;   // wait for the rest, still unconsumed
     }
 

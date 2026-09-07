@@ -197,7 +197,7 @@ struct Slot {
     TSScanner scanner;
     VideoWriter rec;
     VideoViewer viewers[VIDEO_MAX_VIEWERS];
-    bool viewer_out_armed[VIDEO_MAX_VIEWERS] {};
+    uint32_t viewer_events[VIDEO_MAX_VIEWERS] {};   // last epoll mask armed
     uint32_t viewers_seen = 0;
     uint32_t viewers_dropped = 0;
     bool recording = false;
@@ -337,8 +337,8 @@ private:
     void latch_publisher(Slot &s, int idx, time_t now);
     bool splice_flush(int to_fd, SpliceQueue &q);
     void splice_arm(int to_fd, SpliceQueue &q);
-    void epoll_add_viewer(VideoViewer &v);
-    void epoll_sync_viewer(VideoViewer &v, bool &armed);
+    void epoll_add_viewer(VideoViewer &v, uint32_t &events);
+    void epoll_sync_viewer(VideoViewer &v, uint32_t &events);
     void drop_viewer(Slot &s, int idx, VideoViewer &v);
     void end_stream(Slot &s, int idx, const char *why);
     void pump_viewers(Slot &s, int idx, time_t now);
@@ -516,7 +516,7 @@ void VideoChild::ingest_stream(Slot &s, int idx, const uint8_t *buf, size_t n)
 
 void VideoChild::handle_udp(Slot &s, int idx)
 {
-    uint8_t buf[2048];
+    uint8_t buf[65536];    // the largest IPv4 datagram fits
     struct sockaddr_in from {};
     socklen_t fromlen = sizeof(from);
     ssize_t n = recvfrom(s.udp_fd, buf, sizeof(buf), MSG_TRUNC,
@@ -698,9 +698,9 @@ void VideoChild::handle_tcp(Slot &s, int idx)
     }
     s.viewers[free_slot].start(fd, port2_, uint32_t(from.sin_addr.s_addr),
                                from.sin_port, now);
-    s.viewer_out_armed[free_slot] = false;
+    s.viewer_events[free_slot] = 0;
     s.viewers_seen++;
-    epoll_add_viewer(s.viewers[free_slot]);
+    epoll_add_viewer(s.viewers[free_slot], s.viewer_events[free_slot]);
     printf("[%d] video slot %d viewer from %s connected\n",
            port2_, idx, addr_to_str(from));
 }
@@ -1467,29 +1467,37 @@ bool VideoChild::pump_rtsp(Slot &s, int idx, int fd, time_t now)
     return true;
 }
 
-void VideoChild::epoll_add_viewer(VideoViewer &v)
+void VideoChild::epoll_add_viewer(VideoViewer &v, uint32_t &events)
 {
     struct epoll_event ev {};
     ev.events = EPOLLIN | EPOLLRDHUP;
     ev.data.fd = v.fd();
-    epoll_ctl(epfd_, EPOLL_CTL_ADD, v.fd(), &ev);
+    if (epoll_ctl(epfd_, EPOLL_CTL_ADD, v.fd(), &ev) == 0) {
+        events = ev.events;
+    }
 }
 
-// Arm or disarm EPOLLOUT to match whether this viewer is blocked.
-// Leaving it armed permanently makes epoll_wait return immediately for
-// any writable socket, which burns a core per idle viewer.
-void VideoChild::epoll_sync_viewer(VideoViewer &v, bool &armed)
+/*
+  Keep the epoll mask matched to what the viewer needs. EPOLLOUT only
+  while it is blocked: armed permanently it makes epoll_wait return
+  immediately for any writable socket, a core per idle viewer. EPOLLET
+  only while it is holding unconsumed bytes waiting for more: level
+  triggered, those bytes re-fire EPOLLIN on every wait, a core per
+  split request line until the detect timeout.
+ */
+void VideoChild::epoll_sync_viewer(VideoViewer &v, uint32_t &events)
 {
-    const bool want = v.wants_write();
-    if (want == armed) {
+    const uint32_t want = uint32_t(EPOLLIN | EPOLLRDHUP)
+        | (v.wants_write() ? uint32_t(EPOLLOUT) : 0u)
+        | (v.holding_bytes() ? uint32_t(EPOLLET) : 0u);
+    if (want == events) {
         return;
     }
     struct epoll_event ev {};
-    ev.events = uint32_t(EPOLLIN | EPOLLRDHUP)
-        | (want ? uint32_t(EPOLLOUT) : 0u);
+    ev.events = want;
     ev.data.fd = v.fd();
     if (epoll_ctl(epfd_, EPOLL_CTL_MOD, v.fd(), &ev) == 0) {
-        armed = want;
+        events = want;
     }
 }
 
@@ -1561,7 +1569,7 @@ void VideoChild::pump_viewers(Slot &s, int idx, time_t now)
                 ? SPLICE_RTMP : SPLICE_RTSP;
             const int fd = vw.release_fd();
             epoll_ctl(epfd_, EPOLL_CTL_DEL, fd, nullptr);
-            s.viewer_out_armed[v] = false;
+            s.viewer_events[v] = 0;
             handle_rtsp(s, idx, fd, from, now, proto);
             continue;
         }
@@ -1585,7 +1593,7 @@ void VideoChild::pump_viewers(Slot &s, int idx, time_t now)
             drop_viewer(s, idx, vw);
             continue;
         }
-        epoll_sync_viewer(vw, s.viewer_out_armed[v]);
+        epoll_sync_viewer(vw, s.viewer_events[v]);
     }
 }
 
@@ -1851,6 +1859,11 @@ void VideoChild::run(void)
                     }
                     if (!ok) {
                         drop_viewer(s, i, vw);
+                    } else {
+                        // The push loop below skips connections still
+                        // in detect, so this is where a held partial
+                        // line switches the fd to edge-triggered.
+                        epoll_sync_viewer(vw, s.viewer_events[v]);
                     }
                     break;
                 }

@@ -115,6 +115,10 @@ public:
 
     bool wants_write(void) const;
     viewer_state state(void) const { return state_; }
+    // Bytes deliberately left in the socket until more arrive (a split
+    // request line). Level-triggered EPOLLIN would re-fire on them
+    // continuously, so the child arms edge-triggered while this holds.
+    bool holding_bytes(void) const { return holding_bytes_; }
     viewer_kind kind(void) const { return kind_; }
     uint32_t peer_ip_be(void) const { return peer_ip_be_; }
     uint16_t peer_port_be(void) const { return peer_port_be_; }
@@ -131,6 +135,7 @@ private:
     int port2_ = 0;
     viewer_state state_ = VV_DETECT;
     viewer_kind kind_ = VVK_UNKNOWN;
+    bool holding_bytes_ = false;
     uint32_t peer_ip_be_ = 0;
     uint16_t peer_port_be_ = 0;
     time_t connected_at_ = 0;
