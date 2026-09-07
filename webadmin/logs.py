@@ -24,6 +24,7 @@ import re
 import shutil
 import stat
 import subprocess
+import threading
 import time
 
 from flask import (Blueprint, Response, abort, current_app, flash, g, redirect,
@@ -373,6 +374,14 @@ def _ffmpeg_bin():
     return shutil.which('ffmpeg')
 
 
+# Concurrent remuxes allowed for readers who are not logged in. Each one
+# holds a web worker thread and an ffmpeg for as long as the client
+# reads, and the shipped gunicorn runs 4 threads: without a cap, a
+# public-logs entry lets anonymous readers take all of them.
+_REMUX_ANON_MAX = 2
+_remux_anon_slots = threading.BoundedSemaphore(_REMUX_ANON_MAX)
+
+
 def _remux_response(port2, date, session_name):
     """Serve a recording as fragmented MP4 for a plain <video> element.
 
@@ -396,12 +405,26 @@ def _remux_response(port2, date, session_name):
     if not os.path.isfile(path):
         abort(404)
 
-    proc = subprocess.Popen(
-        [ff, '-hide_banner', '-loglevel', 'error', '-nostdin',
-         '-i', path, '-c', 'copy',
-         '-movflags', 'frag_keyframe+empty_moov+default_base_moof',
-         '-f', 'mp4', 'pipe:1'],
-        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    slot = None
+    if current_entry() is None:
+        if not _remux_anon_slots.acquire(blocking=False):
+            resp = Response('Too many concurrent playbacks; try again '
+                            'shortly.\n', status=503, mimetype='text/plain')
+            resp.headers['Retry-After'] = '5'
+            return resp
+        slot = _remux_anon_slots
+
+    try:
+        proc = subprocess.Popen(
+            [ff, '-hide_banner', '-loglevel', 'error', '-nostdin',
+             '-i', path, '-c', 'copy',
+             '-movflags', 'frag_keyframe+empty_moov+default_base_moof',
+             '-f', 'mp4', 'pipe:1'],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    except OSError:
+        if slot is not None:
+            slot.release()
+        raise
 
     def generate():
         try:
@@ -421,6 +444,8 @@ def _remux_response(port2, date, session_name):
             if proc.poll() is None:
                 proc.kill()
             proc.wait()
+            if slot is not None:
+                slot.release()
 
     resp = Response(generate(), mimetype='video/mp4')
     resp.headers['Cache-Control'] = 'private, no-store'
