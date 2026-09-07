@@ -24,6 +24,7 @@ if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import conntdb_lib  # noqa: E402
 import keydb_lib  # noqa: E402
 import rtmp_client  # noqa: E402
 from test_video_child import (Proxy, _Mav, PORT_ENG, PORT_USER,  # noqa: E402
@@ -164,7 +165,8 @@ def _no_stray_ffmpeg():
     """
     out = subprocess.run(['pgrep', '-a', '-x', 'ffmpeg'],
                          capture_output=True, text=True).stdout
-    return not any(':%d/' % VPORT in ln for ln in out.splitlines())
+    return not any(re.search(r':%d(/|\s|$)' % VPORT, ln)
+                   for ln in out.splitlines())
 
 
 def _settle(timeout=45):
@@ -594,6 +596,116 @@ class TestSessionOkSlot:
             sock.close()
         assert s.proxy.wait_for(r'no MAVLink session', timeout=20), s.proxy.log
         assert 'join=ready' not in s.proxy.log
+
+
+def _publish_rtp(clip, seconds=None):
+    """Bare RTP/H.264 to the video port, the way rtph264pay ! udpsink
+    does. mp4toannexb puts SPS/PPS in-band, which the proxy needs since
+    there is no SDP from the sender to carry them."""
+    argv = ['ffmpeg', '-hide_banner', '-loglevel', 'error', '-re',
+            '-stream_loop', '-1', '-i', clip, '-c:v', 'copy', '-an',
+            '-bsf:v', 'h264_mp4toannexb']
+    if seconds:
+        argv += ['-t', str(seconds)]
+    argv += ['-f', 'rtp', 'rtp://127.0.0.1:%d' % VPORT]
+    return subprocess.Popen(argv, stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL)
+
+
+def _recorded_segments(workdir):
+    d = workdir / 'logs' / str(PORT_ENG)
+    if not d.is_dir():
+        return []
+    return sorted(p for p in d.rglob('*.ts'))
+
+
+def _probe_codec(path):
+    out = subprocess.run(
+        ['ffprobe', '-v', 'error', '-select_streams', 'v:0',
+         '-show_entries', 'stream=codec_name', '-of', 'csv=p=0', str(path)],
+        capture_output=True, text=True).stdout
+    lines = [ln for ln in out.splitlines() if ln.strip()]
+    return lines[0].strip() if lines else ''
+
+
+@pytest.mark.integration
+class TestRtpOverUdp:
+    """Bare RTP over UDP (rtph264pay/rtph265pay ! udpsink, ffmpeg -f rtp).
+
+    Admission is the plain UDP path -- the datagrams carry no credential
+    -- and once latched they are forwarded to an SDP-fed ffmpeg that
+    muxes them to MPEG-TS, so viewers and the recorder see the same
+    stream they would from an MPEG-TS sender.
+    """
+
+    def test_h264_is_muxed_recorded_and_joinable(self, session, clip):
+        s = session(with_mav=True)
+        s.pub = _publish_rtp(clip)
+        assert s.proxy.wait_for(r'RTP/H264 backend pid', timeout=15), \
+            s.proxy.log
+        assert s.proxy.wait_for(r'join=ready', timeout=25), s.proxy.log
+        assert 'bad_dgram=0 ' in s.proxy.log.split('join=ready')[0][-400:], \
+            s.proxy.log
+        time.sleep(3)
+        segs = _recorded_segments(s.workdir)
+        assert segs, s.proxy.log
+        assert _probe_codec(segs[0]) == 'h264'
+        rows = conntdb_lib.list_active(
+            conntdb_lib.conn_path_for(str(s.workdir / 'keys.tdb')),
+            max_age_s=60)
+        pub = [r for r in rows if r.role == conntdb_lib.CONN_ROLE_VIDEO_PUB]
+        assert pub, rows
+        assert pub[0].app_proto == conntdb_lib.CONN_APP_RTP
+        assert pub[0].transport_name == 'udp'
+
+    @pytest.mark.skipif(shutil.which('gst-launch-1.0') is None,
+                        reason='needs gst-launch-1.0 for an RTP/HEVC sender')
+    def test_hevc_is_detected_and_muxed(self, session):
+        s = session(with_mav=True)
+        s.pub = subprocess.Popen(
+            ['gst-launch-1.0', '-q', 'videotestsrc', 'is-live=true',
+             '!', 'video/x-raw,width=320,height=240,framerate=15/1',
+             '!', 'x265enc', 'tune=zerolatency', 'key-int-max=15',
+             '!', 'rtph265pay', 'config-interval=1', 'pt=96',
+             '!', 'udpsink', 'host=127.0.0.1', 'port=%d' % VPORT],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        assert s.proxy.wait_for(r'RTP/H265 backend pid', timeout=15), \
+            s.proxy.log
+        assert s.proxy.wait_for(r'join=ready', timeout=25), s.proxy.log
+        time.sleep(3)
+        segs = _recorded_segments(s.workdir)
+        assert segs, s.proxy.log
+        assert _probe_codec(segs[0]) == 'hevc'
+
+    def test_idle_sender_releases_the_slot_and_a_new_one_is_taken(
+            self, session, clip):
+        s = session(with_mav=True)
+        s.pub = _publish_rtp(clip, seconds=4)
+        assert s.proxy.wait_for(r'join=ready', timeout=25), s.proxy.log
+        s.pub.wait(timeout=15)
+        # Whichever notices first: the backend's own UDP read timeout
+        # (it exits, "connection closed") or our idle release.
+        assert s.proxy.wait_for(r'RTP publisher gone', timeout=30), \
+            s.proxy.log
+        s.pub = _publish_rtp(clip)
+        assert s.proxy.wait_for(
+            r'RTP/H264 backend pid.*\n(.*\n)*.*RTP/H264 backend pid',
+            timeout=15), s.proxy.log
+        assert s.proxy.wait_for(
+            r'publisher gone(.*\n)*.*join=ready', timeout=25), s.proxy.log
+
+    def test_a_second_sender_is_refused_while_the_first_holds_the_slot(
+            self, session, clip):
+        s = session(with_mav=True)
+        s.pub = _publish_rtp(clip)
+        assert s.proxy.wait_for(r'join=ready', timeout=25), s.proxy.log
+        other = _publish_rtp(clip, seconds=3)
+        try:
+            assert s.proxy.wait_for(r'another publisher holds this slot',
+                                    timeout=10), s.proxy.log
+        finally:
+            other.terminate()
+            other.wait(timeout=5)
 
 
 @pytest.mark.integration
