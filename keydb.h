@@ -211,11 +211,6 @@ static inline const char *video_rtmp_path_of(const struct KeyEntry &ke,
     return "";
 }
 
-static inline size_t video_rtmp_path_size(void)
-{
-    return sizeof(((struct KeyEntry *)nullptr)->video_rtmp_path[0]);
-}
-
 static inline uint32_t video_slot_opts_of(const struct KeyEntry &ke,
                                           unsigned slot)
 {
