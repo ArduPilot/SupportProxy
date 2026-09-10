@@ -514,7 +514,13 @@ bool WebSocket::flush(void)
         const size_t remain = tx.size() - tx_sent;
         ssize_t wret;
         if (_is_SSL && ssl) {
-            wret = SSL_write(ssl, &tx[tx_sent], int(remain));
+            if (tls_tx.empty()) {
+                // Keep one TLS record stable until SSL_write succeeds. The
+                // main output queue can grow while a nonblocking write waits.
+                const size_t chunk = remain < 16384U ? remain : 16384U;
+                tls_tx.assign(tx.begin() + tx_sent, tx.begin() + tx_sent + chunk);
+            }
+            wret = SSL_write(ssl, tls_tx.data(), int(tls_tx.size()));
             if (wret <= 0) {
                 int err = SSL_get_error(ssl, wret);
                 if (err == SSL_ERROR_WANT_WRITE || err == SSL_ERROR_WANT_READ) {
@@ -534,6 +540,7 @@ bool WebSocket::flush(void)
                 return false;
             }
         }
+        tls_tx.clear();
         tx_sent += size_t(wret);
     }
     tx.clear();

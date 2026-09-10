@@ -71,6 +71,9 @@ private:
 
     std::vector<uint8_t> tx;        // framed output
     size_t tx_sent = 0;             // how much of tx has reached the socket
+    // SSL_write retries must use the same bytes, address and length even if
+    // queue_frame() appends more output and reallocates tx in the meantime.
+    std::vector<uint8_t> tls_tx;
 
     std::string req_target;
 
