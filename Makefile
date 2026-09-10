@@ -71,6 +71,10 @@ mavlink.o: mavlink.cpp mavlink.h $(MAVLINK_DIR)/protocol.h
 	@echo "Compiling $<..."
 	$(CXX) $(CXXFLAGS) -Wno-stringop-truncation -c $< -o $@
 
+# WebSocket is allocated in both MAVLink and video code. Rebuild all users
+# when its layout or inline accessors change, including transitive includes.
+supportproxy.o mavlink.o binlog.o video.o videoview.o websocket.o: websocket.h
+
 # Dependencies. mavlink.h includes keydb.h, so any object that pulls in
 # mavlink.h transitively depends on keydb.h too.
 supportproxy.o: supportproxy.cpp mavlink.h util.h keydb.h conntdb.h tlog.h binlog.h session.h cleanup.h websocket.h video.h videots.h
