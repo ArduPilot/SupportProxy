@@ -37,6 +37,7 @@ PHASES = [
                               'tests/test_websocket_decode.py',
                               'tests/test_ws_handshake_ordering.py',
                               'tests/test_websocket_framing.py',
+                              'tests/test_websocket_tls_retry.py',
                               'tests/test_bidi_video_preauth.py',
                               'tests/test_video_schema.py',
                               'tests/test_video_ports.py',
