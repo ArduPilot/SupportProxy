@@ -123,7 +123,7 @@ bool VideoWriter::open_segment(time_t now)
         session_unique_basename(base_dir_.c_str(), port2_, datedir,
                                 base, sizeof(base));
         char path[1200];
-        snprintf(path, sizeof(path), "%s/%s.v%d.ts", dir, base, slot_ + 1);
+        snprintf(path, sizeof(path), "%s/%s.v%d.%s", dir, base, slot_ + 1, matroska_ ? "mkv" : "ts");
         const int fd = open(path, O_WRONLY | O_CREAT | O_EXCL, 0600);
         if (fd >= 0) {
             fd_ = fd;

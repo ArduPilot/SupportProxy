@@ -33,7 +33,7 @@
 #include "videoauth.h"
 #include "videostream.h"
 #include "videorec.h"
-#include "videots.h"
+#include "videomkv.h"
 #include "videortmp.h"
 #include "videortsp.h"
 #include "videoview.h"
@@ -192,9 +192,12 @@ struct Slot {
      */
     PendingRtmp pending[VIDEO_MAX_PENDING_RTMP];
 
+    int mkv_fd = -1;
+    VideoChunks chunks;
+
     // media
     VideoRing ring;
-    TSScanner scanner;
+    VideoScanner scanner;
     VideoWriter rec;
     VideoViewer viewers[VIDEO_MAX_VIEWERS];
     uint32_t viewer_events[VIDEO_MAX_VIEWERS] {};   // last epoll mask armed
@@ -296,6 +299,9 @@ private:
     bool load_entry(void);
     int bind_slots(void);
     void signal_ready(int err);
+    void handle_mkv(Slot &s, int idx, int fd, struct sockaddr_in &from, time_t now);
+    bool pump_mkv(Slot &s, int idx, time_t now);
+    void close_mkv(Slot &s, int idx, const char *why);
     void handle_udp(Slot &s, int idx);
     void handle_tcp(Slot &s, int idx);
     void tick(time_t now);
@@ -524,6 +530,7 @@ void VideoChild::handle_udp(Slot &s, int idx)
     if (n <= 0) {
         return;
     }
+    if (s.mkv_fd >= 0) return; // this slot belongs to the authenticated TCP publisher
     if (size_t(n) > sizeof(buf)) {
         // MSG_TRUNC reports the real length: a truncated RTP packet
         // would be forwarded as a whole one, so drop it instead.
@@ -717,7 +724,8 @@ void VideoChild::latch_publisher(Slot &s, int idx, time_t now)
     s.pub_last = now;
     s.pub_bytes = 0;
     s.ring.init(video_ring_bytes());
-    s.scanner = TSScanner();
+    s.scanner = VideoScanner();
+    s.rec.set_matroska(false);
     s.had_anchor = false;
     s.reset_rtp();
     s.recording = (video_slot_opts_of(ke_, unsigned(idx))
@@ -728,6 +736,77 @@ void VideoChild::latch_publisher(Slot &s, int idx, time_t now)
                         ke_.tz_offset_hours, "logs", ke_.video_quota_mb);
     }
     last_tick_ = 0;   // snapshot connections.tdb promptly
+}
+
+void VideoChild::handle_mkv(Slot &s, int idx, int fd,
+                            struct sockaddr_in &from, time_t now)
+{
+    uint8_t buf[2048];
+    ssize_t n = recv(fd, buf, sizeof(buf), MSG_PEEK);
+    HttpRequest req;
+    if (n <= 0 || req.feed(buf, size_t(n)) != 1) { close(fd); return; }
+    char path[32]; snprintf(path, sizeof(path), "/v%d.mkv", idx+1);
+    int code = 400;
+    std::string pw;
+    bool offered = http_query_value(req.target(), "pw", pw);
+    auto admission = auth_.admit(ke_, uint32_t(from.sin_addr.s_addr), offered ? &pw : nullptr,
+                                 true, session_ok(idx), open_publish(idx), now);
+    bool valid = req.path() == path && req.header_count("Content-Type") == 1 &&
+        req.header("Content-Type") == "video/x-matroska" &&
+        req.header_count("Transfer-Encoding") == 1 && req.header("Transfer-Encoding") == "chunked" &&
+        req.header_count("Content-Length") == 0 && req.header("Expect") == "100-continue";
+    if (admission != VIDEO_ADMIT_OK) code = 403;
+    else if (s.has_pub || s.rtsp.running() || s.mkv_fd >= 0) code = 409;
+    else if (valid) code = 100;
+    if (code != 100) {
+        const auto response = http_simple_response(code, "publish rejected", "text/plain", "Cannot publish this stream.\n");
+        (void)send(fd, response.data(), response.size(), MSG_NOSIGNAL);
+        close(fd); return;
+    }
+    const size_t header_size = size_t(n)-req.leftover().size();
+    if (recv(fd, buf, header_size, 0) != ssize_t(header_size)) { close(fd); return; }
+    const char response[] = "HTTP/1.1 100 Continue\r\n\r\n";
+    if (send(fd, response, sizeof(response)-1, MSG_NOSIGNAL) != sizeof(response)-1) { close(fd); return; }
+    s.pub_ip_be = from.sin_addr.s_addr; s.pub_port_be = from.sin_port;
+    latch_publisher(s, idx, now);
+    s.mkv_fd = fd; s.chunks = VideoChunks(); s.scanner.matroska = true;
+    s.rec.set_matroska(true);
+    s.scanner.cluster = [&s](const uint8_t *data, size_t length) {
+        if (!s.recording || s.rec.stopped()) return;
+        const time_t t = time(nullptr);
+        if (s.rec.rotation_due(t)) s.rec.rotate(t, true);
+        if (!s.rec.is_open()) {
+            const auto &header = s.scanner.prefix;
+            if (!s.rec.write(reinterpret_cast<const uint8_t *>(header.data()), header.size(), t)) return;
+        }
+        s.rec.write(data, length, t);
+    };
+    struct epoll_event ev {}; ev.events = EPOLLIN | EPOLLRDHUP; ev.data.fd = fd;
+    epoll_ctl(epfd_, EPOLL_CTL_ADD, fd, &ev);
+    printf("[%d] video slot %d Matroska publisher connected\n", port2_, idx);
+}
+
+bool VideoChild::pump_mkv(Slot &s, int idx, time_t now)
+{
+    uint8_t buf[65536];
+    const ssize_t n = recv(s.mkv_fd, buf, sizeof(buf), 0);
+    if (n < 0) return errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR;
+    if (!n) return false;
+    s.pub_last = now;
+    bool ok = s.chunks.feed(buf, size_t(n), [&s](const uint8_t *data, size_t length) {
+        s.scanner.feed(data, length, s.ring.write_pos());
+        s.ring.write(data, length); s.pub_bytes += length;
+    });
+    (void)idx;
+    return ok && !s.scanner.failed;
+}
+
+void VideoChild::close_mkv(Slot &s, int idx, const char *why)
+{
+    epoll_ctl(epfd_, EPOLL_CTL_DEL, s.mkv_fd, nullptr);
+    close(s.mkv_fd); s.mkv_fd = -1; s.has_pub = false;
+    s.rec.close_segment(); s.recording = false;
+    end_stream(s, idx, why);
 }
 
 void VideoChild::handle_rtsp(Slot &s, int idx, int fd,
@@ -831,7 +910,7 @@ void VideoChild::handle_rtsp(Slot &s, int idx, int fd,
         close(fd);
         return;
     }
-    if (s.rtsp.running() || s.rtsp_client_fd >= 0
+    if (s.mkv_fd >= 0 || s.rtsp.running() || s.rtsp_client_fd >= 0
         || (s.has_pub && now - s.pub_last <= VIDEO_PUB_IDLE_S)) {
         log_reject(s, idx, uint32_t(from.sin_addr.s_addr),
                    VIDEO_ADMIT_SLOT_BUSY, now);
@@ -1134,7 +1213,7 @@ bool VideoChild::promote_pending(Slot &s, int idx, PendingRtmp &p,
 
     // Authorised -- but the slot may have been taken while this one was
     // still negotiating.
-    if (s.rtsp.running() || s.rtsp_client_fd >= 0
+    if (s.mkv_fd >= 0 || s.rtsp.running() || s.rtsp_client_fd >= 0
         || (s.has_pub && now - s.pub_last <= VIDEO_PUB_IDLE_S)) {
         log_reject(s, idx, p.ip_be, VIDEO_ADMIT_SLOT_BUSY, now);
         r.reject_publish("NetStream.Publish.Denied",
@@ -1558,7 +1637,7 @@ void VideoChild::pump_viewers(Slot &s, int idx, time_t now)
         if (!vw.active()) {
             continue;
         }
-        if (vw.kind() == VVK_RTSP || vw.kind() == VVK_RTMP) {
+        if (vw.kind() == VVK_RTSP || vw.kind() == VVK_RTMP || vw.kind() == VVK_MKV) {
             // A publisher, not a viewer. Take the socket -- untouched,
             // since the detect phase only ever peeked -- and splice it.
             struct sockaddr_in from {};
@@ -1567,10 +1646,12 @@ void VideoChild::pump_viewers(Slot &s, int idx, time_t now)
             from.sin_port = vw.peer_port_be();
             const splice_proto_t proto = vw.kind() == VVK_RTMP
                 ? SPLICE_RTMP : SPLICE_RTSP;
+            const bool mkv = vw.kind() == VVK_MKV;
             const int fd = vw.release_fd();
             epoll_ctl(epfd_, EPOLL_CTL_DEL, fd, nullptr);
             s.viewer_events[v] = 0;
-            handle_rtsp(s, idx, fd, from, now, proto);
+            if (mkv) handle_mkv(s, idx, fd, from, now);
+            else handle_rtsp(s, idx, fd, from, now, proto);
             continue;
         }
         if (vw.state() == VV_DETECT && vw.kind() == VVK_WS) {
@@ -1629,13 +1710,13 @@ void VideoChild::write_conn_rows(time_t now)
          */
         const bool rtp_pub = s.rtsp.running()
                              && s.rtsp.proto() == SPLICE_RTP;
-        const bool tcp_pub = !rtp_pub && (s.rtmp || s.rtsp.running()
+        const bool tcp_pub = !rtp_pub && (s.mkv_fd >= 0 || s.rtmp || s.rtsp.running()
                                           || s.rtsp_client_fd >= 0);
         e.transport = tcp_pub ? CONN_TRANSPORT_TCP : CONN_TRANSPORT_UDP;
         e.is_user = 0;
         e.role = CONN_ROLE_VIDEO_PUB;
         e.stream_idx = uint8_t(i);
-        e.app_proto = s.rtmp ? CONN_APP_RTMP
+        e.app_proto = s.mkv_fd >= 0 ? CONN_APP_MATROSKA : s.rtmp ? CONN_APP_RTMP
                     : rtp_pub ? CONN_APP_RTP
                     : tcp_pub ? CONN_APP_RTSP : CONN_APP_MPEGTS;
         conn_write(db, e);
@@ -1658,6 +1739,7 @@ void VideoChild::tick(time_t now)
     auth_.observe(now);
     for (int i = 0; i < KEY_MAX_VIDEO_PORTS; i++) {
         Slot &s = slots_[i];
+        if (s.mkv_fd >= 0 && now-s.pub_last > VIDEO_PUB_IDLE_S) close_mkv(s, i, "publisher idle");
         if (s.rtsp.running() && s.rtsp.reap()) {
             close_rtsp(s, i, "backend exited");
         }
@@ -1820,6 +1902,14 @@ void VideoChild::run(void)
             if (matched) {
                 continue;
             }
+            for (int i=0; i<KEY_MAX_VIDEO_PORTS && !matched; i++) {
+                Slot &s = slots_[i];
+                if (s.mkv_fd != fd) continue;
+                matched = true;
+                if ((events[e].events & EPOLLERR) || !pump_mkv(s, i, evnow))
+                    close_mkv(s, i, "Matroska publisher disconnected or malformed");
+            }
+            if (matched) continue;
             // an RTSP splice fd
             for (int i = 0; i < KEY_MAX_VIDEO_PORTS && !matched; i++) {
                 Slot &s = slots_[i];
