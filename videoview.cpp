@@ -40,6 +40,7 @@ void VideoViewer::start(int fd, int port2, uint32_t peer_ip_be,
     last_progress_ = now;
     behind_since_ = 0;
     out_.clear();
+    prefix_.clear(); prefix_sent_ = 0;
     out_sent_ = 0;
     read_pos_ = 0;
     streaming_ = false;
@@ -84,7 +85,7 @@ void VideoViewer::fail(int code, const char *reason, const char *text)
 }
 
 bool VideoViewer::begin_stream(const struct KeyEntry &ke, int slot,
-                               const VideoRing &ring, const TSScanner &scanner,
+                               const VideoRing &ring, const VideoScanner &scanner,
                                bool http, time_t now)
 {
     uint64_t anchor = 0;
@@ -99,8 +100,10 @@ bool VideoViewer::begin_stream(const struct KeyEntry &ke, int slot,
         return true;
     }
     if (!ring.resident(anchor)) {
-        anchor = ring.oldest();
+        fail(503, "stream not ready", "Join point is no longer buffered.");
+        return true;
     }
+    prefix_ = scanner.prefix; prefix_sent_ = 0;
     read_pos_ = anchor;
     streaming_ = true;
     last_progress_ = now;
@@ -114,6 +117,10 @@ bool VideoViewer::begin_stream(const struct KeyEntry &ke, int slot,
                "Cache-Control: no-store\r\n"
                "Connection: close\r\n"
                "\r\n";
+        if (scanner.matroska) {
+            const auto pos = out_.find("video/mp2t");
+            out_.replace(pos, strlen("video/mp2t"), "video/x-matroska");
+        }
         out_sent_ = 0;
         state_ = VV_RESPONDING;
     } else {
@@ -127,7 +134,7 @@ bool VideoViewer::begin_stream(const struct KeyEntry &ke, int slot,
 }
 
 bool VideoViewer::on_readable(const struct KeyEntry &ke, int slot,
-                              const VideoRing &ring, const TSScanner &scanner,
+                              const VideoRing &ring, const VideoScanner &scanner,
                               time_t now)
 {
     if (state_ != VV_DETECT) {
@@ -254,6 +261,11 @@ bool VideoViewer::on_readable(const struct KeyEntry &ke, int slot,
         return true;   // wait for the rest, still unconsumed
     }
 
+    if (peek.method() == "PUT") {
+        kind_ = VVK_MKV;
+        return true; // parent consumes only the header after authenticating
+    }
+
     // A WebSocket upgrade: hand the untouched socket to WebSocket.
     if (!peek.header("Upgrade").empty()
         && peek.header("Upgrade").find("ebsocket") != std::string::npos) {
@@ -281,7 +293,7 @@ bool VideoViewer::on_readable(const struct KeyEntry &ke, int slot,
     // Path selects the slot: /v1.ts .. /v3.ts. The connection already
     // arrived on this slot's port, so the path only has to agree.
     char want[32];
-    snprintf(want, sizeof(want), "/v%d.ts", slot + 1);
+    snprintf(want, sizeof(want), "/v%d.%s", slot + 1, scanner.matroska ? "mkv" : "ts");
     if (req_.path() != want && req_.path() != "/" && req_.path() != "/stream.ts") {
         fail(404, "not found", "Try /v1.ts on this port.");
         return true;
@@ -291,7 +303,7 @@ bool VideoViewer::on_readable(const struct KeyEntry &ke, int slot,
     if (pw.empty()) {
         pw = http_basic_password(req_.header("Authorization"));
     }
-    if (!video_viewer_authorised(ke, pw)) {
+    if (!ws_authorise(ke, slot, req_)) {
         fail(401, "unauthorized", "A viewer password is required.");
         return true;
     }
@@ -300,7 +312,7 @@ bool VideoViewer::on_readable(const struct KeyEntry &ke, int slot,
 
 bool VideoViewer::detect_timeout(const struct KeyEntry &ke, int slot,
                                  const VideoRing &ring,
-                                 const TSScanner &scanner, time_t now)
+                                 const VideoScanner &scanner, time_t now)
 {
     if (state_ != VV_DETECT) {
         return true;
@@ -381,6 +393,20 @@ bool VideoViewer::on_writable(const VideoRing &ring, time_t now)
         return false;
     }
 
+    // Send codec setup before any ring bytes, through the same framing as
+    // the viewer. A slow joiner is subject to the same bounded buffering.
+    while (prefix_sent_ < prefix_.size()) {
+        const size_t n = std::min(size_t(16384), prefix_.size()-prefix_sent_);
+        const uint8_t *p = reinterpret_cast<const uint8_t *>(prefix_.data()+prefix_sent_);
+        ssize_t w = ws_ ? ws_->send(p, n) : ::send(fd_, p, n, MSG_NOSIGNAL);
+        if (w < 0 && errno == EINTR) continue;
+        if ((w < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) || (w == 0 && ws_)) {
+            blocked_ = true;
+            return now-last_progress_ <= VIDEO_VIEWER_STUCK_S;
+        }
+        if (w <= 0) return false;
+        prefix_sent_ += size_t(w); last_progress_ = now;
+    }
     size_t budget = VIDEO_VIEWER_WRITE_CHUNK;
     while (budget > 0 && read_pos_ < ring.write_pos()) {
         uint8_t chunk[16384];
@@ -464,7 +490,7 @@ bool VideoViewer::ws_authorise(const struct KeyEntry &ke, int slot,
 }
 
 bool VideoViewer::begin_ws(const struct KeyEntry &ke, int slot,
-                           const VideoRing &ring, const TSScanner &scanner,
+                           const VideoRing &ring, const VideoScanner &scanner,
                            time_t now)
 {
     if (ws_ == nullptr) {
@@ -497,8 +523,10 @@ bool VideoViewer::begin_ws(const struct KeyEntry &ke, int slot,
         return true;    // wait for a decodable start point
     }
     if (!ring.resident(anchor)) {
-        anchor = ring.oldest();
+        fail(503, "stream not ready", "Join point is no longer buffered.");
+        return true;
     }
+    prefix_ = scanner.prefix; prefix_sent_ = 0;
     read_pos_ = anchor;
     streaming_ = true;
     state_ = VV_STREAMING;

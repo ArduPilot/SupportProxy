@@ -74,6 +74,7 @@ CONN_APP_HTTP = 3
 CONN_APP_SRT = 4
 CONN_APP_RTMP = 5
 CONN_APP_RTP = 6
+CONN_APP_MATROSKA = 7
 
 APP_NAMES = {
     CONN_APP_MAVLINK: 'mavlink',
@@ -83,6 +84,7 @@ APP_NAMES = {
     CONN_APP_SRT: 'srt',
     CONN_APP_RTMP: 'rtmp',
     CONN_APP_RTP: 'rtp',
+    CONN_APP_MATROSKA: 'matroska',
 }
 
 # Video rows occupy a conn_index range disjoint from the MAVLink ones so

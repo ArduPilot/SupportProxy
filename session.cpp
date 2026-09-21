@@ -86,9 +86,9 @@ static bool basename_free(const char *dir, const char *candidate)
         }
     }
     for (int slot = 1; slot <= KEY_MAX_VIDEO_PORTS; slot++) {
-        snprintf(p, sizeof(p), "%s/%s.v%d.ts", dir, candidate, slot);
-        if (stat(p, &st) == 0) {
-            return false;
+        for (const char *ext : {"ts", "mkv"}) {
+            snprintf(p, sizeof(p), "%s/%s.v%d.%s", dir, candidate, slot, ext);
+            if (stat(p, &st) == 0) return false;
         }
     }
     return true;

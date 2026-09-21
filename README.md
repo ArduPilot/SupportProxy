@@ -677,3 +677,66 @@ runs one pytest invocation against exactly what you passed.
 SupportProxy is licensed under the GNU General Public License version 3 or later.
 
 See `COPYING.txt` for full license terms.
+
+### Lossless raw thermal (FFV1/Matroska)
+
+Updated MT11/SITL-MT11 firmware can publish its third stream to an allocated
+video port using `[support_proxy] video3_port` (MAVLink `PROXY_VID3_PORT`).
+Enable video and allocate three distinct ports on the proxy entry; no database
+migration or additional slot flag is required. The raw stream uses the same
+publish password or permitted MAVLink-session admission as ordinary video.
+The camera's `RAW_STREAM_FPS` controls transmission rate. This requires both
+the camera firmware and SupportProxy Matroska updates.
+
+Publishers use `PUT /vN.mkv?pw=...`, `Content-Type: video/x-matroska`,
+`Transfer-Encoding: chunked` and `Expect: 100-continue`. An accepted publisher
+receives `100 Continue` before sending the EBML header and Clusters. A wrong
+or explicitly empty password fails even when session fallback is enabled.
+The bounded parser accepts the APCG live profile: EBML header, unknown-sized
+Segment, Info, Tracks and finite independent FFV1 Clusters (maximum 4 MiB).
+HTTP chunk boundaries need not align with EBML elements. It is not a generic
+upload endpoint for arbitrary Matroska layouts or inter-frame codecs.
+
+Viewers use `http://HOST:PORT/v3.mkv` for the camera's third stream. Existing
+viewer-password (`?pw=...` or HTTP Basic), short-lived viewer tokens (`?t=...`),
+WebSocket and enabled raw-TCP access policies apply. Late viewers receive the
+cached Matroska header followed by the newest complete Cluster and subsequent
+publisher bytes. Pixels and BlockAdditional telemetry are never transcoded.
+Slow viewers are disconnected independently; a publisher disconnect closes its
+viewers, who must reconnect to the next session.
+
+The slot's **record** option saves `.v3.mkv` files. Segments rotate on complete
+Cluster boundaries with a repeated header, and participate in the existing
+video quota and log-download listing. They do not use the MPEG-TS browser log
+player. The live web page identifies active Matroska publishers and offers a
+desktop viewer instead of its MPEG-TS player (reload after changing formats).
+
+MAVProxy connected to this proxy discovers the correct URL automatically:
+
+```text
+module load camera
+camera discover
+camera view rawthermal
+```
+
+For standalone viewing, install a MAVProxy version with the raw thermal
+reader, PyAV >= 18.1, numpy and OpenCV with GUI support, then run:
+
+```sh
+python3 scripts/view_raw_thermal.py http://HOST:PORT/v3.mkv
+# Or use a MAVProxy checkout:
+python3 scripts/view_raw_thermal.py --mavproxy /path/to/MAVProxy http://HOST:PORT/v3.mkv
+```
+
+Greyscale is the default. Hover for pixel temperature; Space pauses, C selects
+optional palettes, S saves native little-endian uint16 pixels and frame JSON,
+and Q/Escape exits. The window readout is separate from the image. A display
+palette never changes the saved samples. `--headless --frames 10` validates
+reception without a display. ffplay can also display the stream, but lacks the
+temperature and capture-metadata handling of the thermal viewers. The existing
+browser MPEG-TS player cannot decode this FFV1/16-bit stream.
+
+Tests: `python3 -m pytest tests/test_video_matroska.py` covers authentication,
+fragmentation, late joining, restart, slow viewers, malformed lengths and
+recording rotation. The camera repository's `sitl/test_support_proxy.py
+--raw-thermal --reconnect` additionally checks actual FFV1 pixels and telemetry.

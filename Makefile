@@ -95,10 +95,14 @@ session.o: session.cpp session.h keydb.h
 binlog.o: binlog.cpp binlog.h session.h mavlink.h util.h cleanup.h $(MAVLINK_DIR)/protocol.h
 cleanup.o: cleanup.cpp cleanup.h keydb.h
 websocket.o: websocket.cpp websocket.h util.h
+video.o videoview.o: videomkv.h
+
 video.o: video.cpp video.h videoauth.h videots.h videostream.h videorec.h videoview.h httpreq.h videortsp.h videortmp.h conntdb.h keydb.h util.h
 videoauth.o: videoauth.cpp videoauth.h conntdb.h keydb.h
 videots.o: videots.cpp videots.h
 videostream.o: videostream.cpp videostream.h
+video.o: videorec.h
+
 videorec.o: videorec.cpp videorec.h session.h cleanup.h
 videoview.o: videoview.cpp videoview.h httpreq.h videostream.h videots.h videoauth.h keydb.h
 httpreq.o: httpreq.cpp httpreq.h
