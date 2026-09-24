@@ -188,7 +188,7 @@ bool MAVLink::receive_message(uint8_t *&buf, ssize_t &len, mavlink_message_t &ms
 bool MAVLink::send_message(const mavlink_message_t &msg)
 {
     mavlink_message_t msg2 = msg;
-    uint8_t buf[300];
+    uint8_t buf[MAVLINK_MAX_PACKET_LEN];
     if (is_tcp) {
 	if (socket_is_dead(fd)) {
 	    return false;
@@ -235,7 +235,19 @@ bool MAVLink::send_message(const mavlink_message_t &msg)
     // packet loss information
     status->current_tx_seq = msg.seq;
 
-    mavlink_finalize_message_buffer(&msg2, msg2.sysid, msg2.compid, status, min_len, max_len, crc_extra);
+    // Re-sign only the received payload bytes, retaining wide target IDs.
+    uint16_t finalized_len;
+    if (msg.incompat_flags & MAVLINK_IFLAG_TARGET32) {
+        finalized_len = mavlink_finalize_message_buffer_target(
+            &msg2, msg.sysid, msg.compid, status, min_len, msg.len, crc_extra,
+            msg.target_sysid);
+    } else {
+        finalized_len = mavlink_finalize_message_buffer(
+            &msg2, msg.sysid, msg.compid, status, min_len, msg.len, crc_extra);
+    }
+    if (finalized_len == 0) {
+        return false;
+    }
 
     uint16_t len = mavlink_msg_to_send_buffer(buf, &msg2);
     if (len > 0) {
@@ -470,7 +482,7 @@ void MAVLink::mav_printf(uint8_t severity, const char *fmt, ...)
                                      severity,
                                      text,
                                      0, 0);
-    uint8_t buf[300];
+    uint8_t buf[MAVLINK_MAX_PACKET_LEN];
     uint16_t len = mavlink_msg_to_send_buffer(buf, &msg);
     if (len > 0) {
         ::printf("[%d]: %s\n", key_id, text);

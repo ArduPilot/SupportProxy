@@ -11,6 +11,8 @@ For more information on using the support proxy see https://support.ardupilot.or
 - Both support engineer and user can be on private networks
 - Supports many users running in parallel
 - Uses MAVLink2 signed connections from the support engineer
+- Preserves 32-bit source system IDs and explicit header targets across
+  forwarding, signing and telemetry logs
 - Uses normal UDP/TCP forwarding in users GCS
 - Supports both TCP and UDP, including mixed connections
 - Supports WebSocket and WebSocket+SSL TCP connections for both user
@@ -157,8 +159,9 @@ python3 -m venv --system-site-packages venv
 # Activate the virtual environment
 source venv/bin/activate
 
-# Install pymavlink in the virtual environment
-pip install pymavlink
+# Install the pinned pymavlink with 32-bit system ID support
+git submodule update --init --recursive
+pip install ./modules/mavlink/pymavlink
 ```
 
 ## Building SupportProxy
@@ -306,6 +309,7 @@ SupportProxy can also be run using Docker for easier deployment and management.
 ## Building the Docker Image
 
 ```bash
+git submodule update --init --recursive
 docker build -f docker/Dockerfile -t ap-supportproxy .
 ```
 
@@ -390,6 +394,7 @@ The `keydb.py` script provides comprehensive database management:
 ./keydb.py setname PORT2 NewName           # Change name
 ./keydb.py setpass PORT2 NewPassPhrase     # Change passphrase
 ./keydb.py setport1 PORT2 NewPORT1         # Change user port
+./keydb.py setsysid PORT2 SYSID            # FC reboot filter: 1..4294967295; 0 clears
 
 # Reset signing replay-protection timestamp (e.g. after clock skew)
 ./keydb.py resettimestamp PORT2

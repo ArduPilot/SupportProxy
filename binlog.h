@@ -112,7 +112,7 @@ public:
       to packets with msg.sysid == sysid. Sourced from
       KeyEntry.fc_sysid at fork start.
      */
-    void set_fc_sysid_filter(uint8_t sysid) { fc_sysid_filter_ = sysid; }
+    void set_fc_sysid_filter(uint32_t sysid) { fc_sysid_filter_ = sysid; }
 
     /*
       Periodic pump. Called once per main_loop iteration whenever
@@ -230,7 +230,7 @@ private:
 
     // First-seen sysid/compid of the vehicle on this log session,
     // used as target_{system,component} when we send ACK/NACK back.
-    uint8_t target_system = 0;
+    uint32_t target_system = 0;
     uint8_t target_component = 0;
 
     // Pending ACK queue (seqnos to ACK, FIFO).
@@ -302,7 +302,7 @@ private:
     // Per-entry MAVLink sysid filter for SYSTEM_TIME-based reboot
     // detection. 0 = match any (default). Set from KeyEntry.fc_sysid
     // by the per-port-pair child at fork.
-    uint8_t fc_sysid_filter_ = 0;
+    uint32_t fc_sysid_filter_ = 0;
 
     // Most-recently-seen SYSTEM_TIME.time_boot_ms from the autopilot.
     // 0 = nothing seen yet (used as a guard so the very first

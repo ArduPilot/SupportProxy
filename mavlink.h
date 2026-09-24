@@ -76,7 +76,8 @@ private:
     double last_signing_warning_s = 0;
 
     // last source sysid and compid from a HEARTBEAT from user
-    uint8_t last_sysid, last_compid;
+    uint32_t last_sysid;
+    uint8_t last_compid;
 
     // count of signature errors for triggering message
     uint32_t bad_sig_count = 0;

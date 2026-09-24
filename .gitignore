@@ -3,6 +3,7 @@
 set_key
 supportproxy
 libraries/
+git-version.h
 venv/
 __pycache__/
 *.pyc

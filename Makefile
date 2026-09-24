@@ -42,16 +42,21 @@ help:
 	@echo "  CXX       - C++ compiler (default: g++)"
 
 # Git submodules
-modules: modules/mavlink/message_definitions/v1.0/all.xml
+modules: modules/mavlink/message_definitions/v1.0/all.xml modules/mavlink/pymavlink/generator/mavgen.py
 
 modules/mavlink/message_definitions/v1.0/all.xml:
 	@echo "Initializing git submodules..."
 	@git submodule update --init --recursive
 
+modules/mavlink/pymavlink/generator/mavgen.py: | modules/mavlink/message_definitions/v1.0/all.xml
+	@git submodule update --init --recursive
+
 # MAVLink headers generation
 headers: $(MAVLINK_DIR)/protocol.h
 
-$(MAVLINK_DIR)/protocol.h: modules/mavlink/message_definitions/v1.0/all.xml
+MAVLINK_INPUTS := $(wildcard modules/mavlink/message_definitions/v1.0/*.xml modules/mavlink/pymavlink/generator/*.py modules/mavlink/pymavlink/generator/C/include_v2.0/*.h)
+
+$(MAVLINK_DIR)/protocol.h: modules/mavlink/message_definitions/v1.0/all.xml regen_headers.sh $(MAVLINK_INPUTS) | modules
 	@echo "Generating MAVLink headers..."
 	@./regen_headers.sh
 
@@ -59,6 +64,9 @@ $(MAVLINK_DIR)/protocol.h: modules/mavlink/message_definitions/v1.0/all.xml
 $(TARGET): $(OBJECTS)
 	@echo "Linking $(TARGET)..."
 	$(CXX) $(CXXFLAGS) -o $@ $^ $(LIBS)
+
+# All users of generated types must rebuild together after a protocol update.
+$(OBJECTS): $(MAVLINK_DIR)/protocol.h
 
 # Object file compilation
 %.o: %.cpp

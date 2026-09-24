@@ -260,16 +260,17 @@ def test_fc_sysid_default_is_zero(tmp_path):
     assert ke.fc_sysid == 0
 
 
-def test_set_fc_sysid_round_trip(tmp_path):
+@pytest.mark.parametrize('sysid', [0, 42, 255, 256, 0x7FFFFFFF, 0x80000000, 0xFFFFFFFF])
+def test_set_fc_sysid_round_trip(tmp_path, sysid):
     p = str(tmp_path / 'keys.tdb')
     db = keydb_lib.init_db(p)
     db.transaction_start()
     keydb_lib.add_entry(db, 17101, 17102, 'sysid', 'pw')
-    keydb_lib.set_fc_sysid(db, 17102, 42)
+    keydb_lib.set_fc_sysid(db, 17102, sysid)
     ke = keydb_lib.KeyEntry(17102)
     ke.fetch(db)
     db.transaction_cancel()
-    assert ke.fc_sysid == 42
+    assert ke.fc_sysid == sysid
 
 
 def test_set_fc_sysid_rejects_out_of_range(tmp_path):
@@ -280,7 +281,7 @@ def test_set_fc_sysid_rejects_out_of_range(tmp_path):
     with pytest.raises(keydb_lib.CLIError):
         keydb_lib.set_fc_sysid(db, 17202, -1)
     with pytest.raises(keydb_lib.CLIError):
-        keydb_lib.set_fc_sysid(db, 17202, 256)
+        keydb_lib.set_fc_sysid(db, 17202, 0x100000000)
     db.transaction_cancel()
 
 
@@ -288,11 +289,11 @@ def test_cli_setsysid_then_list_shows_sysid(tmp_path):
     p = str(tmp_path / 'keys.tdb')
     _run_cli(p, 'initialise')
     _run_cli(p, 'add', '17301', '17302', 'CliSysid', 'pw')
-    r = _run_cli(p, 'setsysid', '17302', '7')
+    r = _run_cli(p, 'setsysid', '17302', '4294967295')
     assert r.returncode == 0, r.stderr
-    assert 'fc_sysid=7' in r.stdout
+    assert 'fc_sysid=4294967295' in r.stdout
     r = _run_cli(p, 'list')
-    assert 'fc_sysid=7' in r.stdout
+    assert 'fc_sysid=4294967295' in r.stdout
     # Clearing back to 0 hides it from list output again.
     r = _run_cli(p, 'setsysid', '17302', '0')
     assert r.returncode == 0

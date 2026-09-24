@@ -41,7 +41,9 @@ source venv/bin/activate
 
 echo "Installing Python dependencies..."
 pip install --upgrade pip
-pip install pytest pytest-xdist pymavlink wsproto Flask Flask-WTF
+git submodule update --init --recursive
+pip install pytest pytest-xdist wsproto Flask Flask-WTF
+pip install ./modules/mavlink/pymavlink
 
 echo "Verifying tdb module accessibility..."
 python3 -c "import tdb; print('tdb module is available')"

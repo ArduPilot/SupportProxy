@@ -796,8 +796,8 @@ def set_fc_sysid(db, port2, sysid):
     ke = KeyEntry(port2)
     if not ke.fetch(db):
         raise CLIError("No entry for port2 %d" % port2)
-    if sysid < 0 or sysid > 255:
-        raise CLIError("fc_sysid must be in 0..255 (got %r)" % sysid)
+    if sysid < 0 or sysid > 0xFFFFFFFF:
+        raise CLIError("fc_sysid must be in 0..4294967295 (got %r)" % sysid)
     ke.fc_sysid = int(sysid)
     ke.store(db)
     return ke

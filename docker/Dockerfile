@@ -25,14 +25,14 @@ WORKDIR /app
 # Copy source code (from parent directory)
 COPY . .
 
+# The build context excludes Git metadata; initialize submodules on the host.
+RUN test -f modules/mavlink/pymavlink/tools/mavgen.py
+
 # Create virtual environment with system site packages and install pymavlink
 # --system-site-packages allows access to system python3-tdb package
 RUN python3 -m venv --system-site-packages venv && \
     . venv/bin/activate && \
-    pip install --no-cache-dir pymavlink
-
-# Initialize git submodules and build
-RUN git submodule update --init --recursive || true
+    pip install --no-cache-dir ./modules/mavlink/pymavlink
 
 # Build the supportproxy binary with venv activated
 RUN . venv/bin/activate && make clean && make

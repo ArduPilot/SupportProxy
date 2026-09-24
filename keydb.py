@@ -264,7 +264,7 @@ def main():
         elif args.action == "setsysid":
             _expect(args.args, 2,
                     "keydb.py setsysid PORT2 SYSID  "
-                    "(0 = match any, 1..255 = filter to that MAVLink sysid)")
+                    "(0 = match any, 1..4294967295 = filter to that MAVLink sysid)")
             try:
                 sysid = int(args.args[1])
             except ValueError:

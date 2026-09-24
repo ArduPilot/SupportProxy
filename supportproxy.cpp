@@ -92,7 +92,7 @@ struct listen_port {
     uint32_t video_flags;
     uint32_t video_flags_hi;   // slots past KEY_VIDEO_PORTS_INLINE
     uint32_t flags;
-    uint8_t  fc_sysid;     // 0 = match any; otherwise the FC's MAVLink
+    uint32_t fc_sysid;     // 0 = match any; otherwise the FC's MAVLink
                            // sysid for binlog reboot detection
     float    tz_offset_hours;  // log-naming timezone (GMT offset in hours)
     bool seen;     // set true by handle_record() during reload_ports()
@@ -182,7 +182,7 @@ static void video_stop_child(struct listen_port *p, const char *why)
     kill(p->video_pid, SIGTERM);
 }
 
-static void upsert_port(int port1, int port2, uint32_t flags, uint8_t fc_sysid,
+static void upsert_port(int port1, int port2, uint32_t flags, uint32_t fc_sysid,
                         float tz_offset_hours, const uint32_t *video_ports,
                         uint32_t video_flags, uint32_t video_flags_hi)
 {
@@ -270,16 +270,13 @@ static int handle_record(struct tdb_context *db, TDB_DATA key, TDB_DATA data, vo
     memcpy(&port2, key.dptr, sizeof(int));
     size_t copy = data.dsize < sizeof(KeyEntry) ? data.dsize : sizeof(KeyEntry);
     memcpy(&k, data.dptr, copy);
-    // KeyEntry.fc_sysid is uint32 for forward compat; the wire value is
-    // a MAVLink sysid (0..255), so truncate to uint8 once it crosses the
-    // C++/binlog boundary. The CLI / web UI already cap at 255.
     // The slots are split across two field groups on disk; hand
     // upsert_port one flat array so nothing downstream has to know.
     uint32_t vports[KEY_MAX_VIDEO_PORTS];
     for (unsigned i = 0; i < KEY_MAX_VIDEO_PORTS; i++) {
         vports[i] = video_port_of(k, i);
     }
-    upsert_port(k.port1, port2, k.flags, uint8_t(k.fc_sysid),
+    upsert_port(k.port1, port2, k.flags, k.fc_sysid,
                 k.tz_offset_hours, vports, k.video_flags, k.video_flags_hi);
     return 0;
 }

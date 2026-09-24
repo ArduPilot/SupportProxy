@@ -300,7 +300,7 @@ class OwnerEditForm(FlaskForm, _VideoOwnerFields):
     log_access = _log_access_field()
     fc_sysid = IntegerField(
         'Flight-controller MAVLink sysid (0 = any)', description=_D_SYSID,
-        validators=[Optional(), NumberRange(min=0, max=255)])
+        validators=[Optional(), NumberRange(min=0, max=0xFFFFFFFF)])
     use_tz = BooleanField('Name logs in a fixed timezone',
                           description=_D_USE_TZ)
     tz_offset_hours = FloatField(
@@ -354,7 +354,7 @@ class AdminEditForm(FlaskForm, _VideoAdminFields):
     log_access = _log_access_field()
     fc_sysid = IntegerField(
         'Flight-controller MAVLink sysid (0 = any)', description=_D_SYSID,
-        validators=[Optional(), NumberRange(min=0, max=255)])
+        validators=[Optional(), NumberRange(min=0, max=0xFFFFFFFF)])
     use_tz = BooleanField('Name logs in a fixed timezone',
                           description=_D_USE_TZ)
     tz_offset_hours = FloatField(
