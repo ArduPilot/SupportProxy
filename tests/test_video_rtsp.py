@@ -84,6 +84,7 @@ def _workdir(tmp_path, record=True, publish_pass=None,
 
 class RtspSession:
     def __init__(self, workdir, with_mav=True):
+        assert _settle(), 'previous session still active: %s' % _settle_state()
         self.workdir = workdir
         self.proxy = Proxy(workdir)
         assert self.proxy.wait_for(r'video slot 0 listening'), self.proxy.log
@@ -226,8 +227,6 @@ def session(tmp_path):
     to be released before yielding keeps a slow teardown from failing
     the next test rather than its own.
     """
-    _settle()
-
     made = {}
 
     def _start(**kw):
@@ -246,9 +245,34 @@ def session(tmp_path):
 
 def _ffmpeg_children(proxy):
     """ffmpeg processes descended from this proxy."""
-    out = subprocess.run(['pgrep', '-a', '-x', 'ffmpeg'],
+    out = subprocess.run(['ps', '-eo', 'pid=,ppid=,comm='],
                          capture_output=True, text=True).stdout
-    return [ln for ln in out.splitlines() if 'rtsp://127.0.0.1' in ln]
+    processes = {}
+    for line in out.splitlines():
+        pid, parent, name = line.split(maxsplit=2)
+        processes[int(pid)] = (int(parent), name)
+    children = []
+    for pid, (_, name) in processes.items():
+        if name != 'ffmpeg':
+            continue
+        parent = processes[pid][0]
+        seen = set()
+        while parent in processes and parent not in seen:
+            if parent == proxy.proc.pid:
+                children.append(pid)
+                break
+            seen.add(parent)
+            parent = processes[parent][0]
+    return children
+
+
+def test_ffmpeg_children_excludes_other_workers(monkeypatch):
+    from types import SimpleNamespace
+    monkeypatch.setattr(subprocess, 'run', lambda *a, **kw: SimpleNamespace(stdout=(
+        '100 1 supportproxy\n101 100 supportproxy\n102 101 ffmpeg\n'
+        '200 1 supportproxy\n201 200 ffmpeg\n202 1 ffmpeg\n')))
+    proxy = SimpleNamespace(proc=SimpleNamespace(pid=100))
+    assert _ffmpeg_children(proxy) == [102]
 
 
 @pytest.mark.integration
@@ -344,28 +368,30 @@ class TestRtspIngest:
         s = session()
         s.publish(clip)
         assert s.proxy.wait_for(r'RTSP backend pid \d+', timeout=20), s.proxy.log
-        assert _ffmpeg_children(s.proxy), 'no backend running while publishing'
+        backends = _ffmpeg_children(s.proxy)
+        assert backends, 'no backend running while publishing'
 
         s.stop_publisher()
         assert s.proxy.wait_for(r'RTSP publisher gone', timeout=25), s.proxy.log
         deadline = time.time() + 15
-        while time.time() < deadline and _ffmpeg_children(s.proxy):
+        while time.time() < deadline and any(os.path.exists('/proc/%d' % pid) for pid in backends):
             time.sleep(0.5)
-        assert not _ffmpeg_children(s.proxy), \
-            'backend outlived the publisher: %r' % _ffmpeg_children(s.proxy)
+        assert not any(os.path.exists('/proc/%d' % pid) for pid in backends), \
+            'backend outlived the publisher: %r' % backends
 
     def test_backend_dies_with_the_proxy(self, session, clip):
         s = session()
         s.publish(clip)
         assert s.proxy.wait_for(r'RTSP backend pid \d+', timeout=20), s.proxy.log
-        assert _ffmpeg_children(s.proxy)
+        backends = _ffmpeg_children(s.proxy)
+        assert backends
         s.stop_publisher()
         s.proxy.stop()
         deadline = time.time() + 15
-        while time.time() < deadline and _ffmpeg_children(s.proxy):
+        while time.time() < deadline and any(os.path.exists('/proc/%d' % pid) for pid in backends):
             time.sleep(0.5)
-        assert not _ffmpeg_children(s.proxy), \
-            'backend outlived the proxy: %r' % _ffmpeg_children(s.proxy)
+        assert not any(os.path.exists('/proc/%d' % pid) for pid in backends), \
+            'backend outlived the proxy: %r' % backends
 
 
 def _publish_with(url_suffix, clip, seconds=6):
@@ -1448,7 +1474,7 @@ class TestRtmpIngest:
         s = RtspSession(_workdir(tmp_path, rtmp_path='PhoenixFPV/FPV'))
         try:
             s.publish_rtmp(clip)
-            assert s.proxy.wait_for(r'RTMP publisher', timeout=25), s.proxy.log
+            assert s.proxy.wait_for(r'join=ready', timeout=40), s.proxy.log
             s.stop_publisher()
             assert s.proxy.wait_for(r'publisher gone', timeout=30), s.proxy.log
         finally:

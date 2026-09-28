@@ -32,6 +32,8 @@ import time
 
 import pytest
 
+from conftest import _wait_listening
+
 _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
@@ -111,6 +113,13 @@ def _start_proxy(workdir, port_eng, quota_bytes=None, cleanup_interval=None):
         raise RuntimeError(
             'proxy did not load test port pair; stdout: '
             + ''.join(proc._lines))
+    # The configuration log precedes binding the sockets. Losing block zero
+    # here leaves the strict-start gate closed for all later log blocks.
+    try:
+        _wait_listening([port_eng])
+    except RuntimeError:
+        _terminate(proc)
+        raise
     return proc
 
 
