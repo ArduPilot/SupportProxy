@@ -166,8 +166,7 @@ def test_forward_wide_ids_and_targets(wide_proxy, transport, request):
     assert logs
     recorded = set()
     for path in logs:
-        # The mmap indexer still assumes fixed-size MAVLink2 headers.
-        reader = mavutil.mavlogfile(str(path))
+        reader = mavutil.mavlink_connection(str(path))
         try:
             while (msg := reader.recv_match(type=['HEARTBEAT', 'COMMAND_LONG'])) is not None:
                 tag = msg.custom_mode if msg.get_type() == "HEARTBEAT" else int(msg.param1)
