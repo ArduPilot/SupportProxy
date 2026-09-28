@@ -58,7 +58,7 @@ def _start_proxy(workdir):
     proc = subprocess.Popen(
         [SUPPORTPROXY_BIN], cwd=str(workdir),
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-        bufsize=1, text=True,
+        bufsize=1, text=True, start_new_session=True,
     )
     proc._lines = []
     proc._ready = threading.Event()
@@ -73,18 +73,28 @@ def _start_proxy(workdir):
     proc._thread = threading.Thread(target=_drain, daemon=True)
     proc._thread.start()
     if not proc._ready.wait(timeout=10):
-        proc.kill()
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
         proc.wait(timeout=2)
         raise RuntimeError('proxy did not load test port pair')
     return proc
 
 
 def _terminate(proc):
-    proc.send_signal(signal.SIGTERM)
+    # End the whole test session so children cannot keep the next test's ports.
+    try:
+        os.killpg(proc.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
     try:
         proc.wait(timeout=5)
     except subprocess.TimeoutExpired:
-        proc.kill()
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
         proc.wait(timeout=2)
 
 

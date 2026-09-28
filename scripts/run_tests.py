@@ -2,8 +2,8 @@
 """
 Test runner for SupportProxy.
 
-Default behaviour: build supportproxy, then run three pytest invocations
-(connection, authentication, webadmin tests) — each phase has different
+Default behaviour: build supportproxy, then run four pytest invocations
+(connection, authentication, robustness, webadmin tests) — each phase has different
 cwd / keys.tdb / process expectations, so they stay isolated.
 
 Pass -j N for parallel test execution via pytest-xdist; each worker gets
@@ -11,12 +11,12 @@ its own tmpdir and port pair. -j 0 picks one worker per test (so every
 test gets its own worker), useful for the connection phase where the
 slowest worker pins wall-clock time.
 
-Pass --list to enumerate tests across all three phases without running.
+Pass --list to enumerate tests across all four phases without running.
 
 Pass test selectors as positional args (any pytest selector works:
 file path, dir, NodeID, -k expression). When selectors are present the
 runner does ONE pytest invocation against exactly what you asked for,
-skipping the three-phase split.
+skipping the four-phase split.
 """
 import argparse
 import os
@@ -32,6 +32,14 @@ PHASES = [
     ('Connection Tests',     ['tests/test_connections.py']),
     ('Authentication Tests', ['tests/test_authentication.py']),
     ('Robustness Tests',     ['tests/test_sysid32.py',
+                              'tests/test_binlog_capture.py',
+                              'tests/test_engineer_preauth_pool.py',
+                              'tests/test_engineer_udp_churn.py',
+                              'tests/test_kill_drop.py',
+                              'tests/test_log_cleanup.py',
+                              'tests/test_setup_signing_guard.py',
+                              'tests/test_tlog_capture.py',
+                              'tests/test_run_tests.py',
                               'tests/test_keydb_log.py',
                               'tests/test_parent_housekeeping.py',
                               'tests/test_conn2_slot_orphan.py',
@@ -159,7 +167,7 @@ def build_pytest_cmd(j, extra_args, target_args, timing=False):
 
 
 def cmd_list():
-    """Run pytest --collect-only -q across the three phases."""
+    """Run pytest --collect-only -q across the four phases."""
     for label, targets in PHASES:
         print('\n=== %s ===' % label, flush=True)
         subprocess.call([sys.executable, '-m', 'pytest', '--collect-only',
@@ -177,7 +185,7 @@ def main():
     ap.add_argument('--no-build', action='store_true',
                     help='skip the make step (use existing supportproxy binary)')
     ap.add_argument('--list', action='store_true',
-                    help='list all tests across the three phases and exit')
+                    help='list all tests across the four phases and exit')
     ap.add_argument('--timing', action='store_true',
                     help='print per-test timing at the end, sorted ascending '
                          '(slowest test last)')
@@ -188,7 +196,7 @@ def main():
                          'filter via pytest -k (multiple bare words OR\'d '
                          'together). Mixing both is fine. With selectors '
                          'the runner does one pytest invocation instead '
-                         'of the three default phases.')
+                         'of the four default phases.')
     args = ap.parse_args()
 
     os.chdir(REPO_ROOT)
@@ -208,6 +216,7 @@ def main():
         sys.exit('ERROR: supportproxy binary not found')
 
     all_timings = []
+    failed_phases = []
 
     def run_one(extra_args, target_args):
         cmd = build_pytest_cmd(args.j, extra_args, target_args, args.timing)
@@ -232,19 +241,27 @@ def main():
         extra = ['-k', ' or '.join(keywords)] if keywords else []
         if not paths:
             # No path given: search the whole tests/ tree so the keyword
-            # filter applies across all three phases.
+            # filter applies across all four phases.
             paths = ['tests/']
         print('\n=== Running selected tests ===')
         run_one(extra, paths)
     else:
-        # Default: three separate phases (kept apart so phase 2 can wipe
+        # Default: four separate phases (kept apart so phase 2 can wipe
         # keys.tdb without disturbing phase 1's live supportproxy fixture).
         for label, targets in PHASES:
             print('\n=== Running %s ===' % label)
-            run_one([], targets)
+            try:
+                run_one([], targets)
+            except subprocess.CalledProcessError as exc:
+                failed_phases.append(label)
+                print("Phase %s failed with exit code %s" % (label, exc.returncode), flush=True)
 
     if args.timing:
         print_combined_timings(all_timings)
+
+    if failed_phases:
+        print('\nFailed phases: ' + ', '.join(failed_phases))
+        return 1
 
     print('\nAll tests completed.')
     return 0
