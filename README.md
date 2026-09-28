@@ -11,7 +11,7 @@ For more information on using the support proxy see https://support.ardupilot.or
 - Both support engineer and user can be on private networks
 - Supports many users running in parallel
 - Uses MAVLink2 signed connections from the support engineer
-- Preserves 32-bit source system IDs and explicit header targets across
+- Preserves 32-bit source and destination system IDs across
   forwarding, signing and telemetry logs
 - Uses normal UDP/TCP forwarding in users GCS
 - Supports both TCP and UDP, including mixed connections
@@ -19,6 +19,12 @@ For more information on using the support proxy see https://support.ardupilot.or
   and support engineer
 - supports up to 8 simultaneous connections by support engineer
 - Optional video proxying alongside the MAVLink link, with recording
+
+System IDs above 255 require peers that understand the MAVLink system-ID
+extensions. Older peers cannot read these frames, including proxy diagnostics
+sent with a wide vehicle ID. Before rolling back to an older proxy binary,
+restore configured flight-controller system IDs to the 8-bit range; older
+binaries truncate the binlog source filter, and 256 becomes the match-any value 0.
 
 ## How It Works
 
