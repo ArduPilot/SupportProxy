@@ -14,7 +14,8 @@ import keydb_lib
 
 from .auth import current_owner, is_admin, require_login
 from .db import tdb_readonly
-from . import videotoken
+from . import videotoken, connections
+import conntdb_lib
 
 bp = Blueprint('video', __name__, url_prefix='/video')
 
@@ -89,10 +90,14 @@ def index():
         if not ke.fetch(db):
             abort(404)
 
+        raw_slots = {c.stream_idx for c in connections.list_for_port2(port2)
+                     if c.role == conntdb_lib.CONN_ROLE_VIDEO_PUB and
+                     c.app_proto == conntdb_lib.CONN_APP_MATROSKA}
         slots = []
         for slot, port in ke.active_video_ports():
             slots.append({
                 'slot': slot,
+                'raw_thermal': slot in raw_slots,
                 'number': slot + 1,
                 'port': port,
                 'opts': ke.slot_opt_names(slot),

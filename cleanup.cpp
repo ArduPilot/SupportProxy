@@ -128,6 +128,9 @@ static session_kind session_file_kind(const char *name)
         && name[n - 4] >= '1' && name[n - 4] <= '9') {
         return SESSION_VIDEO;
     }
+    if (n > 7 && strcmp(name+n-4, ".mkv") == 0 &&
+        name[n-7] == '.' && name[n-6] == 'v' && name[n-5] >= '1' && name[n-5] <= '9')
+        return SESSION_VIDEO;
     return SESSION_NONE;
 }
 

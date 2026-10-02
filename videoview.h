@@ -24,7 +24,7 @@
 #include "websocket.h"
 #include "keydb.h"
 #include "videostream.h"
-#include "videots.h"
+#include "videomkv.h"
 
 // Per-slot viewer cap. The limit that bites first is egress bandwidth,
 // not CPU: 32 viewers of an 8 Mbit/s stream is 256 Mbit/s.
@@ -55,6 +55,7 @@ enum viewer_kind {
     VVK_RAW,            // raw TCP, no framing
     VVK_WS,             // WebSocket (or WSS), binary frames
     VVK_RTSP,           // RTSP: handed to the ingest splice, not served
+    VVK_MKV,            // HTTP chunked Matroska publisher
     VVK_RTMP,           // RTMP publish: same, a different backend
 };
 
@@ -83,7 +84,7 @@ public:
     // Readable: consume the request. Returns false if the viewer should
     // be dropped.
     bool on_readable(const struct KeyEntry &ke, int slot,
-                     const VideoRing &ring, const TSScanner &scanner,
+                     const VideoRing &ring, const VideoScanner &scanner,
                      time_t now);
 
     // Writable (or just a poll tick): push bytes. Returns false when the
@@ -92,7 +93,7 @@ public:
 
     // Called when the detect deadline passes with nothing received.
     bool detect_timeout(const struct KeyEntry &ke, int slot,
-                        const VideoRing &ring, const TSScanner &scanner,
+                        const VideoRing &ring, const VideoScanner &scanner,
                         time_t now);
 
     /*
@@ -107,7 +108,7 @@ public:
      */
     // Drive a WebSocket viewer's handshake and start of stream.
     bool begin_ws_pump(const struct KeyEntry &ke, int slot,
-                       const VideoRing &ring, const TSScanner &scanner,
+                       const VideoRing &ring, const VideoScanner &scanner,
                        time_t now)
     {
         return begin_ws(ke, slot, ring, scanner, now);
@@ -143,6 +144,8 @@ private:
     time_t behind_since_ = 0;
 
     HttpRequest req_;
+    std::string prefix_;       // codec header, also sent inside WebSocket framing
+    size_t prefix_sent_ = 0;
     std::string out_;          // pending response bytes
     size_t out_sent_ = 0;
 
@@ -161,7 +164,7 @@ private:
     const char *drop_reason_ = "";
 
     bool begin_stream(const struct KeyEntry &ke, int slot,
-                      const VideoRing &ring, const TSScanner &scanner,
+                      const VideoRing &ring, const VideoScanner &scanner,
                       bool http, time_t now);
     void fail(int code, const char *reason, const char *text);
     bool flush(time_t now);
@@ -170,7 +173,7 @@ private:
     bool ws_authorise(const struct KeyEntry &ke, int slot,
                       const HttpRequest &req);
     bool begin_ws(const struct KeyEntry &ke, int slot, const VideoRing &ring,
-                  const TSScanner &scanner, time_t now);
+                  const VideoScanner &scanner, time_t now);
 };
 
 /*

@@ -42,6 +42,7 @@ public:
     void configure(uint32_t port2, int slot, bool use_tz, float tz_offset,
                    const char *base_dir, uint32_t quota_mb);
 
+    void set_matroska(bool value) { matroska_ = value; }
     bool is_open(void) const { return fd_ >= 0; }
 
     // Append. Returns false if recording has stopped (disk full); the
@@ -78,6 +79,7 @@ private:
     std::string base_dir_ = "logs";
     uint32_t quota_mb_ = 0;
 
+    bool matroska_ = false;
     int fd_ = -1;
     std::string path_;
     std::string date_dir_;

@@ -18,6 +18,14 @@ to appear.</p>
   <div class="video-slot-panel" data-slot="{{ s.slot }}">
     <h3>Slot {{ s.number }} &mdash; port {{ s.port }}</h3>
 
+    {% if s.raw_thermal %}
+    <p>Lossless raw thermal (FFV1, 16-bit). This browser player cannot decode
+       the stream. Use <code>camera view rawthermal</code> in MAVProxy when
+       connected through this proxy, or the desktop thermal viewer:</p>
+    <pre><code>python3 scripts/view_raw_thermal.py http://{{ host }}:{{ s.port }}/v{{ s.number }}.mkv{% if s.needs_password %}?pw=YOUR_VIEWER_PASSWORD{% endif %}</code></pre>
+    <p>The desktop viewer defaults to greyscale, shows pixel temperatures,
+       and saves native samples with their capture metadata.</p>
+    {% else %}
     {# One element for the life of the page. Picture-in-Picture is bound
        to the element, so replacing it on reconnect tears PIP down --
        see the teardown note in the script. #}
@@ -45,6 +53,7 @@ to appear.</p>
       <pre><code>vlc --network-caching=200 --live-caching=200 \
     http://{{ host }}:{{ s.port }}/v{{ s.number }}.ts{% if s.needs_password %}?pw=YOUR_VIEWER_PASSWORD{% endif %}</code></pre>
     </details>
+    {% endif %}
   </div>
 {% endfor %}
 
@@ -52,7 +61,7 @@ to appear.</p>
 <script>
 (function () {
   var slots = [
-    {% for s in slots %}
+    {% for s in slots if not s.raw_thermal %}
     { n: {{ s.number }}, slot: {{ s.slot }}, port: {{ s.port }},
       token: {{ s.token|tojson }} }{{ "," if not loop.last }}
     {% endfor %}

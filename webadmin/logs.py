@@ -44,7 +44,7 @@ DATE_RE = re.compile(r'^\d{4}-\d{2}-\d{2}$')
 # and the legacy sessionN names so old logs stay browsable.
 SESSION_RE = re.compile(
     r'^(session\d+|\d{4}_\d{2}_\d{2}_\d{2}:\d{2}:\d{2}(-\d+)?)'
-    r'\.(tlog|bin|v[1-5]\.ts)$')
+    r'\.(tlog|bin|v[1-5]\.(?:ts|mkv))$')
 
 # Natural-sort key: treat embedded digit runs as numbers so that
 # session10.tlog sorts AFTER session2.tlog (not between session1 and

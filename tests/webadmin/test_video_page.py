@@ -467,3 +467,16 @@ class TestFallbackCommandsAreLowLatency:
     def test_vlc_command_caps_its_cache(self, client, keydb_path):
         html = self._page(client, keydb_path)
         assert 'network-caching' in html
+
+
+def test_raw_thermal_offers_desktop_viewer(client, keydb_path, monkeypatch):
+    from types import SimpleNamespace
+    from webadmin import connections
+    import conntdb_lib
+    _enable_video(keydb_path, ALICE_PORT2, ports=(VPORT, VPORT+1, VPORT+2))
+    monkeypatch.setattr(connections, 'list_for_port2', lambda port: [SimpleNamespace(
+        stream_idx=2, role=conntdb_lib.CONN_ROLE_VIDEO_PUB, app_proto=conntdb_lib.CONN_APP_MATROSKA)])
+    login_as(client, ALICE_PORT1, ALICE_PASS)
+    html = client.get('/video/').get_data(as_text=True)
+    assert 'view_raw_thermal.py' in html and '/v3.mkv' in html
+    assert 'id="player3"' not in html and 'id="player1"' in html
