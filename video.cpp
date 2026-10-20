@@ -898,9 +898,9 @@ void VideoChild::handle_rtsp(Slot &s, int idx, int fd,
     const std::string target = first.substr(sp1 + 1, sp2 - sp1 - 1);
     pw_present = http_query_value(target, "pw", pw);
 
-    // Publishers are authorised; viewers are not, and on this port an
-    // RTSP connection is a publisher (we do not parse enough to tell
-    // them apart -- see videortsp.h).
+    // The viewer classifier keeps /view/ RTSP playback connections.
+    // Everything reaching this splice is still a publisher and must
+    // pass publish admission before a backend is started.
     const video_admit_t r = auth_.admit(ke_, uint32_t(from.sin_addr.s_addr),
                                         pw_present ? &pw : nullptr, true,
                                         session_ok(idx), open_publish(idx),

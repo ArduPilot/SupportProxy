@@ -52,6 +52,14 @@ to appear.</p>
        http://{{ host }}:{{ s.port }}/v{{ s.number }}.ts{% if s.needs_password %}?pw=YOUR_VIEWER_PASSWORD{% endif %}</code></pre>
       <pre><code>vlc --network-caching=200 --live-caching=200 \
     http://{{ host }}:{{ s.port }}/v{{ s.number }}.ts{% if s.needs_password %}?pw=YOUR_VIEWER_PASSWORD{% endif %}</code></pre>
+      <p>RTSP playback (select TCP transport in your player):</p>
+      <pre><code>rtsp://{{ host }}:{{ s.port }}/view/v{{ s.number }}{% if s.needs_password %}?pw=YOUR_VIEWER_PASSWORD{% endif %}</code></pre>
+      <pre><code>ffplay -rtsp_transport tcp -fflags nobuffer -flags low_delay \
+       -probesize 500000 -analyzeduration 1000000 \
+       'rtsp://{{ host }}:{{ s.port }}/view/v{{ s.number }}{% if s.needs_password %}?pw=YOUR_VIEWER_PASSWORD{% endif %}'</code></pre>
+      <p>Mission Planner: right-click the HUD, select Video &rarr;
+         Set GStreamer Source, and paste:</p>
+      <pre><code>rtspsrc location="rtsp://{{ host }}:{{ s.port }}/view/v{{ s.number }}{% if s.needs_password %}?pw=YOUR_VIEWER_PASSWORD{% endif %}" protocols=tcp latency=100 ! application/x-rtp ! decodebin3 ! queue max-size-buffers=1 leaky=2 ! videoconvert ! video/x-raw,format=BGRA ! appsink name=outsink sync=false</code></pre>
     </details>
     {% endif %}
   </div>
