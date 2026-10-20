@@ -61,6 +61,8 @@ void VideoViewer::start(int fd, int port2, uint32_t peer_ip_be,
 
 void VideoViewer::close(void)
 {
+    delete rtsp_view_;
+    rtsp_view_ = nullptr;
     if (ws_ != nullptr) {
         delete ws_;          // frees SSL objects; the fd is ours to close
         ws_ = nullptr;
@@ -137,6 +139,7 @@ bool VideoViewer::on_readable(const struct KeyEntry &ke, int slot,
                               const VideoRing &ring, const VideoScanner &scanner,
                               time_t now)
 {
+    if (rtsp_view_) return rtsp_view_->on_readable(ke, slot, ring, scanner, now);
     if (state_ != VV_DETECT) {
         if (kind_ == VVK_WS) {
             // Let the WebSocket consume control frames (ping/close).
@@ -197,7 +200,8 @@ bool VideoViewer::on_readable(const struct KeyEntry &ke, int slot,
     }
 
     /*
-      An RTSP request line means this is a publisher, not a viewer.
+      RTSP playback uses the reserved /view/ namespace. Other targets
+      remain untouched for the publisher splice, including OPTIONS.
       It has to be recognised here rather than at accept(): a publisher
       connects and only then sends OPTIONS, so at accept there is
       usually nothing to look at, and classifying on an empty peek
@@ -206,7 +210,7 @@ bool VideoViewer::on_readable(const struct KeyEntry &ke, int slot,
      */
     static const char *rtsp_methods[] = {
         "OPTIONS ", "ANNOUNCE ", "DESCRIBE ", "SETUP ", "PLAY ",
-        "RECORD ", "TEARDOWN ", "GET_PARAMETER ", "SET_PARAMETER ",
+        "RECORD ", "PAUSE ", "TEARDOWN ", "GET_PARAMETER ", "SET_PARAMETER ",
     };
     for (const char *m : rtsp_methods) {
         const size_t len = strlen(m);
@@ -223,6 +227,15 @@ bool VideoViewer::on_readable(const struct KeyEntry &ke, int slot,
                 }
                 holding_bytes_ = true;
                 return true;
+            }
+            const std::string line(reinterpret_cast<const char *>(buf), size_t(n));
+            const size_t sp = line.find(' ', len);
+            if (sp != std::string::npos &&
+                RtspViewer::playback_target(line.substr(len, sp-len))) {
+                kind_ = VVK_RTSP_VIEW;
+                state_ = VV_STREAMING;
+                rtsp_view_ = new RtspViewer(fd_, port2_, now);
+                return rtsp_view_->on_readable(ke, slot, ring, scanner, now);
             }
             kind_ = VVK_RTSP;
             return true;   // the child takes the socket from here
@@ -365,6 +378,7 @@ bool VideoViewer::flush(time_t now)
 
 bool VideoViewer::on_writable(const VideoRing &ring, time_t now)
 {
+    if (rtsp_view_) return rtsp_view_->on_writable(ring, now);
     if (!flush(now)) {
         return false;
     }
@@ -469,6 +483,7 @@ bool VideoViewer::on_writable(const VideoRing &ring, time_t now)
 
 bool VideoViewer::wants_write(void) const
 {
+    if (rtsp_view_) return rtsp_view_->wants_write();
     return blocked_ || out_sent_ < out_.size();
 }
 

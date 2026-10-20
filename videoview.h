@@ -25,6 +25,7 @@
 #include "keydb.h"
 #include "videostream.h"
 #include "videomkv.h"
+#include "videortspview.h"
 
 // Per-slot viewer cap. The limit that bites first is egress bandwidth,
 // not CPU: 32 viewers of an 8 Mbit/s stream is 256 Mbit/s.
@@ -57,6 +58,7 @@ enum viewer_kind {
     VVK_RTSP,           // RTSP: handed to the ingest splice, not served
     VVK_MKV,            // HTTP chunked Matroska publisher
     VVK_RTMP,           // RTMP publish: same, a different backend
+    VVK_RTSP_VIEW,      // RTSP playback on /view/vN
 };
 
 class VideoViewer {
@@ -124,8 +126,10 @@ public:
     uint32_t peer_ip_be(void) const { return peer_ip_be_; }
     uint16_t peer_port_be(void) const { return peer_port_be_; }
     time_t connected_at(void) const { return connected_at_; }
-    uint64_t bytes_sent(void) const { return bytes_sent_; }
-    const char *drop_reason(void) const { return drop_reason_; }
+    uint64_t bytes_sent(void) const { return rtsp_view_ ? rtsp_view_->bytes_sent() : bytes_sent_; }
+    const char *drop_reason(void) const {
+        return drop_reason_[0] || !rtsp_view_ ? drop_reason_ : rtsp_view_->drop_reason();
+    }
 
     // Only ever a string literal: the field is a borrowed pointer and
     // outlives nothing.
@@ -160,6 +164,7 @@ private:
       only a plain-HTTP viewer's request is actually read off.
      */
     WebSocket *ws_ = nullptr;
+    RtspViewer *rtsp_view_ = nullptr;
     bool ws_ready_ = false;
     const char *drop_reason_ = "";
 

@@ -76,6 +76,9 @@ class TestVideoPage:
         assert 'ffplay' in html
         assert 'http://' in html
         assert '/v1.ts' in html
+        assert 'rtsp://localhost:' in html
+        assert '/view/v1' in html and '-rtsp_transport tcp' in html
+        assert 'Mission Planner' in html and 'appsink name=outsink' in html
 
     def test_fallback_mentions_the_password_when_one_is_set(self, client,
                                                             keydb_path):

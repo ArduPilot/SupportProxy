@@ -117,6 +117,39 @@ supplied and is wrong is still refused.
 Chrome and Firefox will not decode HEVC in Media Source Extensions on
 desktop Linux, and nothing here transcodes.
 
+RTSP playback is also available on each existing video port:
+
+```bash
+ffplay -rtsp_transport tcp 'rtsp://HOST:PORT/view/v1'
+vlc --rtsp-tcp 'rtsp://HOST:PORT/view/v1'
+```
+
+For Mission Planner, right-click the HUD, select **Video → Set GStreamer
+Source**, and paste this pipeline as one line:
+
+```text
+rtspsrc location="rtsp://HOST:PORT/view/v1" protocols=tcp latency=100 ! application/x-rtp ! decodebin3 ! queue max-size-buffers=1 leaky=2 ! videoconvert ! video/x-raw,format=BGRA ! appsink name=outsink sync=false
+```
+
+The video page offers this pipeline with the entry's host, port and slot
+already filled in. It follows Mission Planner's [live video setup](https://ardupilot.org/planner/docs/live-video.html)
+with TCP transport selected for the proxy.
+
+Use `/view/v2` on the second slot's port, and so on. If a viewer password
+is set, append `?pw=YOUR_VIEWER_PASSWORD` (URL-encode special characters),
+or use the player's HTTP Basic authentication support. Existing viewer
+tokens (`?t=...`) also work. These are viewer credentials, independent of
+the publish password or MAVLink admission.
+
+Playback carries MPEG-TS in RTP (MP2T) over the RTSP TCP connection, so
+it needs no extra firewall ports or transcoding and preserves the video
+codec and any audio already present in the stream. The player must
+support MP2T over RTSP and TCP transport; UDP playback is not offered.
+Matroska/raw thermal streams use their existing HTTP viewer instead.
+A viewer starts at a buffered keyframe, and reconnects after the
+publisher restarts. The `/view/` RTSP namespace is reserved for viewing;
+RTSP publishers should continue using a different path, such as `/cam`.
+
 **Disk.** Video has its own budget, separate from telemetry, so a busy
 camera can never evict a user's tlogs. Set it per entry in the web UI;
 a free-space floor stops recording before the disk fills.

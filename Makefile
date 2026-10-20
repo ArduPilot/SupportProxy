@@ -12,7 +12,7 @@ CXXFLAGS := $(CXXFLAGS) -DMAVLINK_SIGNING_TIMESTAMP_LIMIT=600
 LIBS := -ltdb -lssl -lcrypto
 
 # Source files
-SOURCES := supportproxy.cpp mavlink.cpp util.cpp keydb.cpp conntdb.cpp tlog.cpp session.cpp binlog.cpp cleanup.cpp websocket.cpp video.cpp videoauth.cpp videots.cpp videostream.cpp videorec.cpp videoview.cpp httpreq.cpp videortsp.cpp videortmp.cpp
+SOURCES := supportproxy.cpp mavlink.cpp util.cpp keydb.cpp conntdb.cpp tlog.cpp session.cpp binlog.cpp cleanup.cpp websocket.cpp video.cpp videoauth.cpp videots.cpp videostream.cpp videorec.cpp videoview.cpp httpreq.cpp videortsp.cpp videortmp.cpp videortspview.cpp
 OBJECTS := $(SOURCES:.cpp=.o)
 TARGET := supportproxy
 
@@ -107,6 +107,8 @@ videorec.o: videorec.cpp videorec.h session.h cleanup.h
 videoview.o: videoview.cpp videoview.h httpreq.h videostream.h videots.h videoauth.h keydb.h
 httpreq.o: httpreq.cpp httpreq.h
 videortsp.o: videortsp.cpp videortsp.h
+video.o videoview.o videortspview.o: videortspview.h
+videortspview.o: videortspview.cpp videoview.h videostream.h videomkv.h videots.h videoauth.h httpreq.h keydb.h
 videortmp.o: videortmp.cpp videortmp.h httpreq.h
 
 # Testing

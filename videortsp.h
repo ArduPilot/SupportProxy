@@ -14,9 +14,9 @@
   rejects an ANNOUNCE numbered 2. Splicing from byte zero sidesteps
   both: ffmpeg sees the whole exchange, starting at CSeq 1.
 
-  Consequence, and the reason RTSP *egress* is a separate phase: with no
-  RTSP parsing we cannot tell a publisher from a viewer, so an RTSP
-  connection to a video port is treated as a publisher.
+  Playback uses the reserved /view/ URL namespace and is handled by
+  RtspViewer. Other RTSP targets still enter this opaque publisher
+  splice from byte zero, preserving publishers' initial CSeq exchange.
 
   A native RTP depacketiser plus TS muxer was measured at ~2300-3000
   lines against ~150 for this, would still not carry the PCM audio the
