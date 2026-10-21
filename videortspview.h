@@ -31,6 +31,7 @@ private:
     std::string input_, out_, session_;
     size_t sent_ = 0;
     bool authorised_ = false, setup_ = false, playing_ = false;
+    bool played_ = false;
     bool closing_ = false, blocked_ = false;
     uint8_t channel_ = 0;
     uint16_t seq_ = 0;

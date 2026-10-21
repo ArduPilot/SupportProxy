@@ -252,11 +252,16 @@ bool RtspViewer::request(const std::string &head, const KeyEntry &ke, int slot,
                 reply(cseq, 457, "Invalid Range");
                 return true;
             }
-            if (!playing_ && (!scanner.join_offset(read_pos_) || !ring.resident(read_pos_))) {
+            // A short pause must not rewind within the existing RTP
+            // session. Only the first PLAY or an overwritten cursor
+            // needs a new keyframe anchor.
+            if (!playing_ && (!played_ || !ring.resident(read_pos_)) &&
+                (!scanner.join_offset(read_pos_) || !ring.resident(read_pos_))) {
                 reply(cseq, 503, "Service Unavailable");
                 return true;
             }
             playing_ = true;
+            played_ = true;
             progress_ = now;
         } else if (method == "PAUSE") {
             playing_ = false;
@@ -274,7 +279,7 @@ bool RtspViewer::request(const std::string &head, const KeyEntry &ke, int slot,
 bool RtspViewer::on_readable(const KeyEntry &ke, int slot, const VideoRing &ring,
                              const VideoScanner &scanner, time_t now)
 {
-    if (closing_) return sent_ < out_.size();
+    if (closing_ && sent_ == out_.size()) return false;
     if (!authorised_ && now-connected_ > VIDEO_RTSP_AUTH_TIMEOUT_S) {
         reason_ = "RTSP authentication timeout";
         return false;
@@ -283,6 +288,10 @@ bool RtspViewer::on_readable(const KeyEntry &ke, int slot, const VideoRing &ring
     const ssize_t n = recv(fd_, buf, sizeof(buf), 0);
     if (n == 0) return false;
     if (n < 0) return errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR;
+    // EPOLLIN remains level-triggered while queued output is flushed.
+    // Consume and discard further input so a blocked TEARDOWN reply
+    // cannot spin the shared video child on unread data or EOF.
+    if (closing_) return true;
     input_.append(reinterpret_cast<const char *>(buf), size_t(n));
     if (input_.size() > REQUEST_LIMIT) return false;
     while (!input_.empty()) {
