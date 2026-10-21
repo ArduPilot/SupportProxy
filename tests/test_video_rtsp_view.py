@@ -1,5 +1,6 @@
 """RTSP viewers share the TS ring without acquiring a publisher slot."""
 import base64
+import os
 import shutil
 import socket
 import struct
@@ -7,6 +8,7 @@ import subprocess
 import time
 
 import pytest
+import tsgen
 
 from test_video_child import VPORT, PORT_ENG
 from test_video_view import session, http_get, read_for  # noqa: F401
@@ -14,8 +16,12 @@ from test_video_rtsp import clip, RtspSession, _workdir  # noqa: F401
 
 
 class Client:
-    def __init__(self, suffix=''):
-        self.sock = socket.create_connection(('127.0.0.1', VPORT), timeout=5)
+    def __init__(self, suffix='', receive_buffer=None):
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.sock.settimeout(5)
+        if receive_buffer is not None:
+            self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, receive_buffer)
+        self.sock.connect(('127.0.0.1', VPORT))
         self.url = 'rtsp://127.0.0.1:%d/view/v1%s' % (VPORT, suffix)
         self.cseq = 0
         self.pending = b''
@@ -87,6 +93,135 @@ class Client:
         assert code == 200
         self.session = headers['session'].split(';')[0]
         assert self.request('PLAY')[0] == 200
+
+
+class TaggedTSGen(tsgen.TSGen):
+    """Distinguish replayed packets even when continuity counters wrap."""
+    def __init__(self):
+        super().__init__()
+        self.serial = 0
+
+    def video(self, **kwargs):
+        packet = bytearray(super().video(**kwargs))
+        struct.pack_into('!Q', packet, len(packet)-8, self.serial)
+        self.serial += 1
+        return bytes(packet)
+
+
+def rtp_frame(client):
+    while True:
+        channel, packet = client.frame()
+        if channel == 0:
+            return packet
+        assert channel == 1
+
+
+def pause_after_buffered_data(client, final_packet):
+    # Establish the exact pause cursor instead of relying on one pump
+    # iteration having sent the complete initial GOP.
+    while True:
+        packet = rtp_frame(client)
+        client.media.append((0, packet))
+        if packet.endswith(final_packet):
+            break
+    assert client.request('PAUSE')[0] == 200
+    return [packet for channel, packet in client.media if channel == 0]
+
+
+@pytest.mark.integration
+def test_pause_resume_preserves_buffered_position(session):
+    s = session()
+    s.feed.gen = TaggedTSGen()
+    assert s.wait_ready(), s.proxy.log
+    c = Client()
+    try:
+        c.play()
+        before = pause_after_buffered_data(c, s.feed.snapshot()[-188:])
+        assert before
+
+        # No keyframe arrives while paused: reusing the join anchor
+        # would replay the end of the previous GOP in this session.
+        new_data = b''.join(s.feed.gen.video() for _ in range(21))
+        for datagram in s.feed.gen.datagrams(new_data):
+            s.feed.pub.sock.sendto(datagram, ('127.0.0.1', VPORT))
+            time.sleep(0.002)
+        assert c.request('PLAY')[0] == 200
+        after, data = [], b''
+        while len(data) < len(new_data):
+            packet = rtp_frame(c)
+            after.append(packet)
+            data += packet[12:]
+        assert data == new_data, 'resume replayed or skipped buffered TS packets'
+        assert after[0][8:12] == before[-1][8:12]  # same SSRC
+        first = struct.unpack('!H', after[0][2:4])[0]
+        previous = struct.unpack('!H', before[-1][2:4])[0]
+        assert first == (previous+1) % 65536
+    finally:
+        c.close()
+
+
+@pytest.mark.integration
+def test_pause_resume_rejoins_at_keyframe_after_lapping(session):
+    s = session(env={'SUPPORTPROXY_VIDEO_RING_BYTES': str(64 * 1024)})
+    s.feed.gen = TaggedTSGen()
+    assert s.wait_ready(), s.proxy.log
+    c = Client()
+    try:
+        c.play()
+        before = pause_after_buffered_data(c, s.feed.snapshot()[-188:])
+        assert before
+        s.feed.burst(2000)  # overwrite the paused cursor
+        assert c.request('PLAY')[0] == 200
+        packet = rtp_frame(c)
+        data = packet[12:]
+        assert data[0] == 0x47 and ((data[1] & 31) << 8) | data[2] == 0
+        assert data in s.feed.snapshot()
+        assert data not in b''.join(p[12:] for p in before)
+        assert packet[8:12] == before[-1][8:12]
+    finally:
+        c.close()
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize('half_close', [False, True])
+def test_blocked_teardown_does_not_spin_on_pending_input(session, half_close):
+    s = session()
+    assert s.wait_ready(), s.proxy.log
+    c = Client(receive_buffer=4096)
+    try:
+        c.play()
+        s.feed.burst(6000)  # fill the TCP send buffer while the viewer stops reading
+        peer_port = c.sock.getsockname()[1]
+        with open('/proc/net/tcp') as f:
+            connections = [line.split() for line in f.readlines()[1:]]
+        queues = [int(row[4].split(':')[0], 16) for row in connections
+                  if int(row[1].split(':')[1], 16) == VPORT and
+                  int(row[2].split(':')[1], 16) == peer_port]
+        assert queues and queues[0] > 0, 'test did not backpressure the viewer'
+
+        c.cseq += 1
+        request = ('TEARDOWN %s RTSP/1.0\r\nCSeq: %d\r\nSession: %s\r\n\r\n' %
+                   (c.url, c.cseq, c.session)).encode()
+        # More than a read chunk remains in the socket after TEARDOWN.
+        c.sock.sendall(request + b'x' * 32768)
+        if half_close:
+            c.sock.shutdown(socket.SHUT_WR)
+            assert s.proxy.wait_for('viewer disconnected', timeout=3), s.proxy.log
+        else:
+            vpid = s.proxy.video_pid()
+            assert vpid is not None
+
+            def ticks():
+                with open('/proc/%d/stat' % vpid) as f:
+                    fields = f.read().split()
+                return int(fields[13]) + int(fields[14])
+
+            start = ticks()
+            time.sleep(2)
+            assert ticks()-start < os.sysconf('SC_CLK_TCK') // 2, \
+                'closing RTSP viewer busy-spun on unread input'
+    finally:
+        c.close()
 
 
 @pytest.mark.integration
