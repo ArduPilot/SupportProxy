@@ -60,12 +60,31 @@ to appear.</p>
       <p>Mission Planner: right-click the HUD, select Video &rarr;
          Set GStreamer Source, and paste:</p>
       <pre><code>rtspsrc location="rtsp://{{ host }}:{{ s.port }}/view/v{{ s.number }}{% if s.needs_password %}?pw=YOUR_VIEWER_PASSWORD{% endif %}" protocols=tcp latency=100 ! application/x-rtp ! decodebin3 ! queue max-size-buffers=1 leaky=2 ! videoconvert ! video/x-raw,format=BGRA ! appsink name=outsink sync=false</code></pre>
+      <div class="video-share" data-slot="{{ s.slot }}"
+           data-share-url="{{ share_url }}" data-csrf="{{ csrf_token() }}">
+        <label>Public viewing link, good for
+          <select class="share-hours">
+            {% for h in share_hours %}
+            <option value="{{ h }}">{% if h == 168 %}7 days{% elif h == 1 %}1 hour{% else %}{{ h }} hours{% endif %}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <button type="button" class="share-create">Create &amp; copy link</button>
+        <span class="share-result" hidden>
+          <input type="text" class="share-url" readonly size="40">
+        </span>
+        <div class="hint share-note" hidden>Anyone with this link can watch this
+          stream until it expires. Creating a new link does not cancel
+          earlier ones. To end every link early, set a new MAVLink signing
+          passphrase on the "My entry" page.</div>
+      </div>
     </details>
     {% endif %}
   </div>
 {% endfor %}
 
 <script src="{{ url_for('static', filename='vendor/mpegts.js/mpegts.js') }}"></script>
+<script src="{{ url_for('static', filename='video-share.js') }}"></script>
 <script>
 (function () {
   var slots = [

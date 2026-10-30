@@ -263,3 +263,9 @@ td.actions > form { display: inline-block; vertical-align: middle; }
 .iconbtn.danger-icon { color: #b03030; }
 button.danger .icon { vertical-align: -0.2em; margin-right: 0.2em; }
 form.day-delete { margin-top: 0.6em; }
+
+/* Public viewing link: the URL field is a fixed 40 characters wide (the link scrolls inside it). */
+.video-share { margin: 0.5em 0 1em; }
+.video-share .share-result { margin-top: 0.5em; }
+.video-share .share-result[hidden] { display: none; }
+.video-share .share-url { max-width: 100%; box-sizing: border-box; }
