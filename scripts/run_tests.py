@@ -56,6 +56,7 @@ PHASES = [
                               'tests/test_video_record.py',
                               'tests/test_video_view.py',
                               'tests/test_video_rtsp.py',
+                              'tests/test_video_rtsp_view.py',
                               'tests/test_video_testtool.py']),
     ('Webadmin Tests',       ['tests/webadmin/']),
 ]

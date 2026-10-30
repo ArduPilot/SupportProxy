@@ -132,13 +132,28 @@ class TSGen:
         body[2] = section_length & 0xFF
         return bytes(body) + struct.pack('>I', crc32_mpeg(bytes(body)))
 
-    def video(self, key=False, size=160):
+    @staticmethod
+    def _pts_field(pts):
+        """The 5-byte PES PTS field (marker bits included)."""
+        pts &= 0x1FFFFFFFF
+        return bytes([0x21 | ((pts >> 30) & 0x07) << 1,
+                      (pts >> 22) & 0xFF,
+                      ((pts >> 14) & 0xFE) | 1,
+                      (pts >> 7) & 0xFF,
+                      ((pts << 1) & 0xFE) | 1])
+
+    def video(self, key=False, size=160, pts=None):
         """One video packet. `key` sets both a keyframe payload and the
-        adaptation field's random_access_indicator."""
+        adaptation field's random_access_indicator. With `pts` (90 kHz)
+        the PES header carries a presentation timestamp, which HLS
+        segmenting needs; without it there is none."""
         pes = bytearray()
         pes += b'\x00\x00\x01\xe0'          # PES start, video stream id
         pes += b'\x00\x00'                  # unbounded length
-        pes += b'\x80\x00\x00'              # flags, no PTS
+        if pts is None:
+            pes += b'\x80\x00\x00'          # flags, no PTS
+        else:
+            pes += b'\x80\x80\x05' + self._pts_field(pts)
         if self.stream_type == STREAM_HEVC:
             # HEVC NAL header is 2 bytes, type is bits 6..1
             pes += b'\x00\x00\x01' + bytes([(35 if key else 1) << 1, 0x01])
@@ -162,6 +177,18 @@ class TSGen:
                 out += self.pat()
                 out += self.pmt()
             out += self.video(key=(i % gop == 0))
+        return bytes(out)
+
+    def hls_gop(self, pts, packets=14):
+        """PAT, PMT, then a timestamped keyframe and delta packets.
+
+        `packets` is the total, 14 by default so a GOP is exactly two
+        datagrams.
+        """
+        out = bytearray(self.pat() + self.pmt())
+        out += self.video(key=True, pts=pts)
+        for _ in range(packets - 3):
+            out += self.video()
         return bytes(out)
 
     def datagrams(self, data):

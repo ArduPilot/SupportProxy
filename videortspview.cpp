@@ -184,7 +184,10 @@ bool RtspViewer::request(const std::string &head, const KeyEntry &ke, int slot,
     const bool has_basic = req.header_count("Authorization") != 0;
     bool permitted = authorised_;
     if (!authorised_ || has_pw || has_token || has_basic) {
-        permitted = (has_token && video_token_valid(ke, port2_, slot, token.c_str(), now));
+        // A link-bound token is refused: authorised_ is cached for the
+        // whole session, so nothing would end it when the link does.
+        permitted = (has_token
+                     && video_token_valid_unbound(ke, port2_, slot, token.c_str(), now));
         if (!permitted) {
             if (!has_pw) pw = http_basic_password(req.header("Authorization"));
             permitted = video_viewer_authorised(ke, pw);

@@ -54,6 +54,30 @@ struct TSStats {
 };
 
 /*
+  A point the live stream can be cut for HLS: the join anchor of a
+  keyframe, with that keyframe's PES PTS. The segment that starts here
+  runs to the next boundary, so no bytes are copied or rewritten.
+ */
+struct HlsBoundary {
+    uint64_t off;
+    uint64_t pts;       // 90 kHz, 33 bits
+    uint32_t seq;       // never reused, even across publishers
+};
+
+// Boundaries closer together than this are skipped, so a 1 s GOP still
+// yields segments long enough to be worth a request each.
+#define HLS_MIN_SEGMENT_PTS (2u * 90000u)
+// EXT-X-TARGETDURATION, in seconds. It may not change within a playlist
+// and no segment may be longer, so it is one fixed value that bounds
+// every segment admitted below.
+#define HLS_TARGET_DURATION_S 6u
+// A gap this long between keyframes can't be a segment of that length, so
+// it is treated as a timestamp jump and the list restarts after it. A
+// camera needs a keyframe at least this often to be served over HLS.
+#define HLS_MAX_SEGMENT_PTS (HLS_TARGET_DURATION_S * 90000u)
+#define HLS_MAX_BOUNDARIES 12
+
+/*
   Reassembles one PSI section spread across TS packets. A PAT or a small
   PMT usually fits in a single packet, but nothing guarantees it, and a
   scanner that assumed so would silently misparse a larger PMT.
@@ -86,6 +110,34 @@ public:
     // Absolute offset a late viewer should start at. False when no
     // usable anchor has been seen (yet, or ever).
     bool join_offset(uint64_t &out) const;
+
+    // Recent HLS cut points, oldest first. A segment is complete only
+    // when a later boundary exists.
+    const HlsBoundary *hls_boundaries(size_t &n) const
+    {
+        n = hls_n_;
+        return hls_;
+    }
+    uint32_t hls_epoch(void) const { return hls_epoch_; }
+    uint32_t hls_epoch_first_seq(void) const { return hls_epoch_first_seq_; }
+
+    /*
+      Sequence state a successor stream must start from. A new publisher
+      restarts PTS, but HLS players need the media sequence to keep
+      rising, and need to be told about the discontinuity.
+     */
+    void hls_successor(uint32_t &next_seq, uint32_t &epoch) const
+    {
+        next_seq = hls_next_seq_;
+        epoch = hls_epoch_ + (hls_next_seq_ != hls_epoch_first_seq_ ? 1 : 0);
+    }
+    void hls_resume(uint32_t next_seq, uint32_t epoch)
+    {
+        hls_n_ = 0;
+        hls_next_seq_ = next_seq;
+        hls_epoch_ = epoch;
+        hls_epoch_first_seq_ = next_seq;
+    }
 
     uint16_t video_pid(void) const { return video_pid_; }
     uint8_t video_stream_type(void) const { return video_stream_type_; }
@@ -136,6 +188,13 @@ private:
     uint64_t partial_off_ = 0;
     bool synced_ = false;
 
+    HlsBoundary hls_[HLS_MAX_BOUNDARIES] {};
+    size_t hls_n_ = 0;
+    uint32_t hls_next_seq_ = 0;
+    uint32_t hls_epoch_ = 0;
+    uint32_t hls_epoch_first_seq_ = 0;
+
+    void hls_note(uint64_t off, uint64_t pts);
     void packet(const uint8_t *p, uint64_t off);
     void parse_pat(const uint8_t *sec, size_t n, uint64_t off);
     void parse_pmt(const uint8_t *sec, size_t n, uint64_t off);

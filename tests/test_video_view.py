@@ -449,6 +449,77 @@ class TestSlowViewer:
             for sk in socks:
                 sk.close()
 
+    def test_per_address_caps_pin_loopback_and_others(self, session):
+        """127.0.0.1 is the web UI proxying HLS for every bystander, so it
+        gets 24 of the 32 entries; any other address gets 8. Neither can
+        take the whole table, which would deny publishing."""
+        s = session()
+        assert s.wait_ready(), s.proxy.log
+        socks = []
+
+        def silent(src, n):
+            for _ in range(n):
+                c = socket.socket()
+                c.bind((src, 0))
+                c.settimeout(5)
+                c.connect(('127.0.0.1', VPORT))
+                socks.append(c)
+            return socks[len(socks) - n:]
+
+        def refused(held):
+            count = 0
+            for c in held:
+                c.setblocking(False)
+                try:
+                    if b'503' in c.recv(256):
+                        count += 1
+                except OSError:
+                    pass     # silent: accepted and waiting
+            return count
+
+        try:
+            # A silent connection is dropped after VIDEO_DETECT_SILENCE_S
+            # (2 s), so both batches are opened and counted inside that
+            # window to be held together.
+            loopback = silent('127.0.0.1', 40)
+            other = silent('127.0.0.2', 12)
+            time.sleep(0.5)
+            assert refused(loopback) == 40 - 24
+            # 24 of the 32 entries are held by 127.0.0.1, which leaves 8
+            # for the other address (also exactly its own cap)
+            assert refused(other) == 12 - 8
+        finally:
+            for c in socks:
+                c.close()
+
+    def test_other_addresses_are_capped_at_eight_each(self, session):
+        """On its own, a non-loopback address gets exactly 8 entries. The
+        loopback test cannot show this: with 24 entries already held
+        only 8 are free, which a cap of 12 or 16 would also leave."""
+        s = session()
+        assert s.wait_ready(), s.proxy.log
+        socks = []
+        try:
+            for _ in range(12):
+                c = socket.socket()
+                c.bind(('127.0.0.2', 0))
+                c.settimeout(5)
+                c.connect(('127.0.0.1', VPORT))
+                socks.append(c)
+            time.sleep(0.5)          # inside the 2 s silent-drop window
+            refused = 0
+            for c in socks:
+                c.setblocking(False)
+                try:
+                    if b'503' in c.recv(256):
+                        refused += 1
+                except OSError:
+                    pass
+            assert refused == 12 - 8
+        finally:
+            for c in socks:
+                c.close()
+
 
 @pytest.mark.integration
 class TestViewerCpu:
@@ -622,6 +693,139 @@ class TestWebSocketViewer:
         assert b'101' in head, head
 
 
+def http_fetch(port, path, timeout=5.0):
+    """GET a short response and return (head, body)."""
+    sock, head, body = http_get(port, path, timeout=timeout)
+    try:
+        want = 0
+        for line in head.split(b'\r\n'):
+            if line.lower().startswith(b'content-length:'):
+                want = int(line.split(b':')[1])
+        while len(body) < want:
+            c = sock.recv(65536)
+            if not c:
+                break
+            body += c
+    finally:
+        sock.close()
+    return head, body
+
+
+@pytest.mark.integration
+class TestHlsViewer:
+    GOPS = 6
+    GOP_S = 4
+
+    def _publish(self, s):
+        """Timestamped keyframes GOP_S seconds apart, sent as fast as
+        the socket takes them (the PTS is what segments are cut by)."""
+        gen = s.feed.gen
+        sent = bytearray()
+        for i in range(self.GOPS):
+            for dg in gen.datagrams(gen.hls_gop(i * self.GOP_S * 90000)):
+                s.feed.pub.sock.sendto(dg, ('127.0.0.1', VPORT))
+                sent += dg
+                time.sleep(0.002)
+        time.sleep(0.5)
+        return bytes(sent)
+
+    def test_playlist_spans_three_targets_and_segments_play(self, session):
+        s = session()
+        assert s.wait_ready(), s.proxy.log
+        sent = self._publish(s)
+        tok = mint_token(s.workdir, PORT_ENG, 0)
+
+        head, body = http_fetch(VPORT, '/v1.m3u8?t=%s' % tok)
+        assert b'200' in head.split(b'\r\n')[0], head
+        assert b'application/vnd.apple.mpegurl' in head
+        pl = body.decode()
+        assert '#EXT-X-TARGETDURATION:6\n' in pl, pl
+
+        # RFC 8216 6.2.2: a live playlist spans at least 3 target durations,
+        # which the default ring has to be able to hold.
+        durs = [float(l[len('#EXTINF:'):].rstrip(',')) for l in pl.split('\n')
+                if l.startswith('#EXTINF:')]
+        assert sum(durs) >= 18, pl
+
+        # The child's start is a discontinuity, and the counters start
+        # from its launch time so a restart can't make them fall back.
+        assert '#EXT-X-DISCONTINUITY\n' in pl, pl
+        dseq = int(pl.split('#EXT-X-DISCONTINUITY-SEQUENCE:')[1].split('\n')[0])
+        mseq = int(pl.split('#EXT-X-MEDIA-SEQUENCE:')[1].split('\n')[0])
+        assert dseq > 0 and mseq > 0, pl
+
+        # Segments carry the token, and are byte spans of the publish.
+        uris = [l for l in pl.split('\n') if l.endswith('?t=%s' % tok)]
+        assert len(uris) == len(durs), pl
+        head, seg = http_fetch(VPORT, '/' + uris[0])
+        assert b'200' in head.split(b'\r\n')[0], head
+        assert b'video/mp2t' in head
+        assert len(seg) > 0 and len(seg) % 188 == 0 and seg[0] == 0x47
+        assert seg in sent, 'segment is not a verbatim span of what was published'
+
+    def _last_seq(self, pl):
+        names = [l for l in pl.split('\n') if l.startswith('v1-')]
+        return int(names[-1].split('?')[0].rsplit('-', 1)[1][:-3])
+
+    def test_counters_do_not_fall_back_when_the_child_is_replaced(self,
+                                                                  session):
+        """Each child starts its counters at its launch time. A publisher
+        that outruns the wall clock pushes them past it, and the
+        successor must carry on from there, not drop back."""
+        import os
+        import re
+        s = session()
+        assert s.wait_ready(), s.proxy.log
+        tok = mint_token(s.workdir, PORT_ENG, 0)
+        gen = s.feed.gen
+        # 40 keyframe groups, sent flat out: far more segments than
+        # seconds have passed since this child launched.
+        for i in range(40):
+            for dg in gen.datagrams(gen.hls_gop(i * 4 * 90000)):
+                s.feed.pub.sock.sendto(dg, ('127.0.0.1', VPORT))
+                time.sleep(0.001)
+        # The child records its counters on its 5 s tick.
+        time.sleep(6)
+        head, body = http_fetch(VPORT, '/v1.m3u8?t=%s' % tok)
+        assert b'200' in head.split(b'\r\n')[0], head
+        before = self._last_seq(body.decode())
+
+        first = s.proxy.video_pid()
+        assert first is not None
+        os.kill(first, 9)
+        assert s.proxy.wait_for(r'video child %d exited' % first), \
+            s.proxy.log
+        assert s.proxy.wait_for(r'video child (?!%d\b)\d+ ready' % first), \
+            s.proxy.log
+
+        deadline = time.time() + 40
+        after = None
+        while time.time() < deadline and after is None:
+            for i in range(4):
+                for dg in gen.datagrams(gen.hls_gop(i * 4 * 90000)):
+                    s.feed.pub.sock.sendto(dg, ('127.0.0.1', VPORT))
+                    time.sleep(0.002)
+            time.sleep(0.5)
+            try:
+                head, body = http_fetch(VPORT, '/v1.m3u8?t=%s' % tok)
+            except OSError:
+                continue
+            if b'200' in head.split(b'\r\n')[0]:
+                after = self._last_seq(body.decode())
+        assert after is not None, s.proxy.log
+        assert after > before, \
+            'media sequence fell back from %d to %d' % (before, after)
+
+    def test_playlist_needs_a_credential_when_a_password_is_set(self, session):
+        s = session(viewer_pass='watchme')
+        assert s.wait_ready(), s.proxy.log
+        self._publish(s)
+        head, _ = http_fetch(VPORT, '/v1.m3u8')
+        assert b'401' in head.split(b'\r\n')[0], head
+        head, _ = http_fetch(VPORT, '/v1.m3u8?pw=watchme')
+        assert b'200' in head.split(b'\r\n')[0], head
+
+
 def _make_cert(workdir):
     """Self-signed cert the proxy picks up from its cwd for TLS."""
     subprocess.run([
@@ -684,6 +888,186 @@ class TestSecureWebSocketViewer:
                                                              s.proxy.log)
             assert data[0] == 0x47
             assert data in s.feed.snapshot(), 'wss payload not verbatim'
+        finally:
+            s.stop()
+
+
+def mint_bound_token(workdir, port2, slot, until):
+    """A viewer token bound to a share link that expires at `until`."""
+    from webadmin import videotoken
+    db = keydb_lib.open_db(str(workdir / 'keys.tdb'))
+    db.transaction_start()
+    try:
+        ke = keydb_lib.KeyEntry(port2)
+        assert ke.fetch(db)
+        return videotoken.mint(ke.secret_key, port2, slot, until=until)
+    finally:
+        db.transaction_cancel()
+        db.close()
+
+
+def wss_connect(port, target, timeout=8.0):
+    """ws_connect over TLS (the proxy's cert is self-signed)."""
+    import base64
+    import ssl
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    raw = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    raw.settimeout(timeout)
+    raw.connect(('127.0.0.1', port))
+    sock = ctx.wrap_socket(raw, server_hostname='localhost')
+    key = base64.b64encode(b'w' * 16).decode()
+    sock.sendall((
+        'GET %s HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\n'
+        'Connection: Upgrade\r\nSec-WebSocket-Key: %s\r\n'
+        'Sec-WebSocket-Version: 13\r\n\r\n' % (target, key)).encode())
+    head = b''
+    deadline = time.time() + timeout
+    while b'\r\n\r\n' not in head and time.time() < deadline:
+        try:
+            c = sock.recv(4096)
+        except (socket.timeout, ssl.SSLWantReadError):
+            continue
+        except (ssl.SSLError, OSError):
+            break
+        if not c:
+            break
+        head += c
+    sep = head.find(b'\r\n\r\n')
+    return sock, head[:sep if sep >= 0 else len(head)], \
+        head[sep + 4:] if sep >= 0 else b''
+
+
+def closed_within(sock, seconds):
+    """True if the peer ends the connection within `seconds`. Frames the
+    server is still sending are read and thrown away."""
+    deadline = time.time() + seconds
+    sock.settimeout(1.0)
+    while time.time() < deadline:
+        try:
+            if not sock.recv(65536):
+                return True
+        except socket.timeout:
+            continue
+        except OSError:
+            return True
+    return False
+
+
+@pytest.mark.integration
+class TestLinkBoundViewer:
+    """A viewer admitted with a share link's token lives only as long as
+    the link, and only as long as the entry's key."""
+
+    def test_stream_ends_when_the_link_expires(self, session):
+        s = session(viewer_pass='watchme')
+        assert s.wait_ready(), s.proxy.log
+        s.feed.start()
+        until = int(time.time()) + 4
+        tok = mint_bound_token(s.workdir, PORT_ENG, 0, until)
+        sock, head, _ = ws_connect(VPORT, '/v1?t=%s' % tok)
+        try:
+            assert b'101' in head, head
+            # Checked on the child's 5 s tick, so allow a couple of them.
+            assert closed_within(sock, 20), \
+                'viewer outlived its link:\n%s' % s.proxy.log
+        finally:
+            sock.close()
+        # And the expired token buys nothing new.
+        sock, head, _ = ws_connect(VPORT, '/v1?t=%s' % tok)
+        sock.close()
+        assert b'101' not in head, head
+
+    def test_an_already_expired_link_is_refused(self, session):
+        s = session(viewer_pass='watchme')
+        assert s.wait_ready(), s.proxy.log
+        tok = mint_bound_token(s.workdir, PORT_ENG, 0, int(time.time()) - 5)
+        sock, head, _ = ws_connect(VPORT, '/v1?t=%s' % tok)
+        sock.close()
+        assert b'101' not in head, head
+
+    def test_changing_the_key_ends_the_stream(self, session):
+        s = session(viewer_pass='watchme')
+        assert s.wait_ready(), s.proxy.log
+        s.feed.start()
+        tok = mint_bound_token(s.workdir, PORT_ENG, 0,
+                               int(time.time()) + 3600)
+        sock, head, _ = ws_connect(VPORT, '/v1?t=%s' % tok)
+        try:
+            assert b'101' in head, head
+            db = keydb_lib.open_db(str(s.workdir / 'keys.tdb'))
+            db.transaction_start()
+            keydb_lib.set_pass(db, PORT_ENG, 'a-different-passphrase')
+            db.transaction_prepare_commit()
+            db.transaction_commit()
+            db.close()
+            assert closed_within(sock, 20), \
+                'viewer survived a key change:\n%s' % s.proxy.log
+        finally:
+            sock.close()
+        # The old link no longer opens a new stream either.
+        sock, head, _ = ws_connect(VPORT, '/v1?t=%s' % tok)
+        sock.close()
+        assert b'101' not in head, head
+
+
+@pytest.mark.integration
+class TestSecureLinkBoundViewer:
+    def _session(self, tmp_path):
+        wd = _workdir(tmp_path, viewer_pass='watchme')
+        _make_cert(wd)
+        s = Session(wd)
+        assert s.wait_ready(), s.proxy.log
+        s.feed.start()
+        return wd, s
+
+    def test_wss_upgrade_needs_a_credential(self, tmp_path):
+        """Over TLS the request is unreadable until the handshake has
+        been answered, so a refusal is a close rather than a 401. What
+        matters is that no media ever flows."""
+        wd, s = self._session(tmp_path)
+        try:
+            for target in ('/v1', '/v1?pw=wrong'):
+                sock, head, rest = wss_connect(VPORT, target)
+                try:
+                    got = bytearray(rest)
+                    deadline = time.time() + 10
+                    sock.settimeout(1.0)
+                    closed = False
+                    while time.time() < deadline:
+                        try:
+                            c = sock.recv(65536)
+                        except socket.timeout:
+                            continue
+                        except OSError:
+                            closed = True
+                            break
+                        if not c:
+                            closed = True
+                            break
+                        got += c
+                    assert closed, 'unauthorised wss viewer left open'
+                    # At most a close frame: no stream payload.
+                    assert len(got) < 100, \
+                        'unauthorised wss viewer received %d bytes' % len(got)
+                finally:
+                    sock.close()
+            assert 'unauthorized' in s.proxy.log, s.proxy.log
+        finally:
+            s.stop()
+
+    def test_wss_stream_ends_when_the_link_expires(self, tmp_path):
+        wd, s = self._session(tmp_path)
+        try:
+            tok = mint_bound_token(wd, PORT_ENG, 0, int(time.time()) + 4)
+            sock, head, _ = wss_connect(VPORT, '/v1?t=%s' % tok)
+            try:
+                assert b'101' in head, head
+                assert closed_within(sock, 20), \
+                    'wss viewer outlived its link:\n%s' % s.proxy.log
+            finally:
+                sock.close()
         finally:
             s.stop()
 

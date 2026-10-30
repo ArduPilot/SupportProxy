@@ -137,3 +137,25 @@ bool video_password_matches(const uint8_t stored[32],
  */
 bool video_token_valid(const struct KeyEntry &ke, int port2, int slot,
                        const char *token, time_t now);
+
+// As above, but a token bound to a share link ("<expiry>.<until>.<mac>")
+// is refused. For a viewer that is admitted once and never re-checked.
+bool video_token_valid_unbound(const struct KeyEntry &ke, int port2, int slot,
+                               const char *token, time_t now);
+
+/*
+  A token minted from a share link also carries the link's own expiry:
+  "<expiry>.<until>.<hex hmac>", the MAC over
+  "video-view|<port2>|<slot>|<expiry>|<until>".
+
+  <expiry> still only bounds how long the token may be used to connect.
+  <until> is how long a viewer who connected with it may keep watching,
+  so a WebSocket opened at the last minute of a link does not outlive it.
+
+  video_token_session_valid() is the check for an established viewer: the
+  MAC must still verify against the entry's *current* key (so changing
+  the key drops the viewer) and <until>, when present, must not have
+  passed. The short <expiry> is deliberately ignored.
+ */
+bool video_token_session_valid(const struct KeyEntry &ke, int port2,
+                               int slot, const char *token, time_t now);

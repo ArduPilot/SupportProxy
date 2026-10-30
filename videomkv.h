@@ -13,7 +13,13 @@ public:
     bool failed = false;
     std::string prefix;
     std::function<void(const uint8_t *, size_t)> cluster;
-    void reset() { *this = VideoScanner(); }
+    // The HLS sequence has to keep rising across publishers.
+    void reset() {
+        uint32_t next_seq = 0, epoch = 0;
+        hls_successor(next_seq, epoch);
+        *this = VideoScanner();
+        hls_resume(next_seq, epoch);
+    }
     bool join_offset(uint64_t &out) const {
         if (!matroska) return TSScanner::join_offset(out);
         out = anchor;

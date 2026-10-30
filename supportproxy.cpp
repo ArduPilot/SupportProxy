@@ -88,6 +88,7 @@ struct listen_port {
     pid_t video_pid;
     time_t video_respawn_after;   // backoff so a child that dies at once
                                   // can't be re-forked in a tight loop
+    struct VideoHlsMark *video_hls_mark;  // survives the child, see video.h
     uint32_t video_ports[KEY_MAX_VIDEO_PORTS];
     uint32_t video_flags;
     uint32_t video_flags_hi;   // slots past KEY_VIDEO_PORTS_INLINE
@@ -245,6 +246,7 @@ static void upsert_port(int port1, int port2, uint32_t flags, uint32_t fc_sysid,
     p->pid = 0;
     p->video_pid = 0;
     p->video_respawn_after = 0;
+    p->video_hls_mark = nullptr;
     memcpy(p->video_ports, video_ports, sizeof(p->video_ports));
     p->video_flags = video_flags;
     p->video_flags_hi = video_flags_hi;
@@ -1226,6 +1228,12 @@ static void fork_video_child(struct listen_port *p)
         return;
     }
 
+    // Before the fork, so every child of this entry shares one mapping.
+    // A failed mapping just means counters restart at launch time.
+    if (p->video_hls_mark == nullptr) {
+        p->video_hls_mark = video_hls_mark_alloc();
+    }
+
     pid_t pid = fork();
     if (pid < 0) {
         printf("[%d] video: fork failed - %s\n", p->port2, strerror(errno));
@@ -1259,7 +1267,7 @@ static void fork_video_child(struct listen_port *p)
         for (auto *p2 = ports; p2; p2 = p2->next) {
             close_sockets(p2);
         }
-        video_child_main(p->port2, ready[1]);
+        video_child_main(p->port2, ready[1], p->video_hls_mark);
         // video_child_main is noreturn and _exit()s: never fall back
         // into the parent's code with copied destructors that would
         // close fd numbers we have since reused.

@@ -265,6 +265,35 @@ def test_rtsp_payload_is_verbatim_and_http_stays_live(session):
 
 
 @pytest.mark.integration
+def test_link_bound_token_is_refused_for_rtsp(session):
+    """A share-link token is re-checked while a WebSocket or HTTP viewer
+    streams. RTSP playback is admitted once and never re-checked, so it
+    must not honour a token that is meant to die with the link."""
+    import time
+    import keydb_lib
+    from webadmin.videotoken import mint
+    s = session(viewer_pass='viewer-secret')
+    assert s.wait_ready(), s.proxy.log
+    db = keydb_lib.open_db(str(s.workdir / 'keys.tdb'))
+    ke = keydb_lib.KeyEntry(PORT_ENG)
+    assert ke.fetch(db)
+    db.close()
+    bound = mint(ke.secret_key, ke.port2, 0, until=int(time.time()) + 3600)
+    plain = mint(ke.secret_key, ke.port2, 0)
+    c = Client()
+    try:
+        assert c.request('DESCRIBE', url=c.url + '?t=' + bound)[0] == 401
+    finally:
+        c.close()
+    # The same entry still admits an ordinary viewer token.
+    c = Client()
+    try:
+        assert c.request('DESCRIBE', url=c.url + '?t=' + plain)[0] == 200
+    finally:
+        c.close()
+
+
+@pytest.mark.integration
 @pytest.mark.parametrize('credential', ['query', 'basic', 'token'])
 def test_viewer_credentials_and_fragmented_request(session, credential):
     s = session(viewer_pass='viewer-secret')
