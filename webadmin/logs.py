@@ -24,7 +24,6 @@ import re
 import shutil
 import stat
 import subprocess
-import threading
 import time
 
 from flask import (Blueprint, Response, abort, current_app, flash, g, redirect,
@@ -32,6 +31,7 @@ from flask import (Blueprint, Response, abort, current_app, flash, g, redirect,
 
 import keydb_lib
 
+from . import anon_limit
 from .auth import current_entry, current_owner, require_admin, require_login
 from .forms import DeleteLogForm
 from .db import tdb_readonly
@@ -374,12 +374,11 @@ def _ffmpeg_bin():
     return shutil.which('ffmpeg')
 
 
-# Concurrent remuxes allowed for readers who are not logged in. Each one
-# holds a web worker thread and an ffmpeg for as long as the client
-# reads, and the shipped gunicorn runs 4 threads: without a cap, a
-# public-logs entry lets anonymous readers take all of them.
-_REMUX_ANON_MAX = 2
-_remux_anon_slots = threading.BoundedSemaphore(_REMUX_ANON_MAX)
+# Remuxes for readers who are not logged in. Each one holds a web worker
+# thread and an ffmpeg for as long as the client reads, so they share the
+# anonymous budget (see anon_limit) rather than taking all the threads.
+_REMUX_ANON_MAX = anon_limit.MAX
+_remux_anon_slots = anon_limit.slots
 
 
 def _remux_response(port2, date, session_name):

@@ -472,3 +472,13 @@ class TestAnonymousRemuxCap:
         assert r.get_data()[4:8] == b'ftyp'
         r.close()
         assert logs_mod._remux_anon_slots._value == logs_mod._REMUX_ANON_MAX
+
+
+def test_anonymous_playback_and_hls_share_one_thread_budget():
+    """Separate caps would add up: 3 HLS sends plus 2 remuxes would hold
+    all 4 gunicorn threads. They must draw from the same semaphore, and it
+    must leave a thread free."""
+    from webadmin import anon_limit, logs as logs_mod, routes_video
+    assert logs_mod._remux_anon_slots is routes_video._hls_slots
+    assert logs_mod._remux_anon_slots is anon_limit.slots
+    assert anon_limit.MAX < 4          # gunicorn --threads 4

@@ -483,3 +483,333 @@ def test_raw_thermal_offers_desktop_viewer(client, keydb_path, monkeypatch):
     html = client.get('/video/').get_data(as_text=True)
     assert 'view_raw_thermal.py' in html and '/v3.mkv' in html
     assert 'id="player3"' not in html and 'id="player1"' in html
+
+
+class TestShareToken:
+    def test_round_trips(self, keydb_path):
+        ke = fetch_entry(keydb_path, ALICE_PORT2)
+        tok = videotoken.mint_share(ke.secret_key, ALICE_PORT2, 0, 3600)
+        assert videotoken.check_share(ke.secret_key, ALICE_PORT2, 0, tok) == 'ok'
+
+    def test_expires(self, keydb_path):
+        ke = fetch_entry(keydb_path, ALICE_PORT2)
+        now = time.time()
+        tok = videotoken.mint_share(ke.secret_key, ALICE_PORT2, 0, 10, now=now)
+        assert videotoken.check_share(ke.secret_key, ALICE_PORT2, 0, tok,
+                                      now=now + 11) == 'expired'
+
+    def test_is_bound_to_entry_and_slot(self, keydb_path):
+        ke = fetch_entry(keydb_path, ALICE_PORT2)
+        tok = videotoken.mint_share(ke.secret_key, ALICE_PORT2, 0, 3600)
+        assert videotoken.check_share(ke.secret_key, ALICE_PORT2, 1, tok) == 'invalid'
+        assert videotoken.check_share(ke.secret_key, BOB_PORT2, 0, tok) == 'invalid'
+
+    def test_extending_the_expiry_invalidates_it(self, keydb_path):
+        ke = fetch_entry(keydb_path, ALICE_PORT2)
+        tok = videotoken.mint_share(ke.secret_key, ALICE_PORT2, 0, 60)
+        _, _, mac = tok.partition('.')
+        forged = '%d.%s' % (int(time.time()) + 10 ** 7, mac)
+        assert videotoken.check_share(ke.secret_key, ALICE_PORT2, 0, forged) == 'invalid'
+
+    def test_expiry_is_readable_from_the_token(self, keydb_path):
+        ke = fetch_entry(keydb_path, ALICE_PORT2)
+        tok = videotoken.mint_share(ke.secret_key, ALICE_PORT2, 0, 10, now=1000)
+        assert videotoken.share_expiry(tok) == 1010
+
+    def test_junk_is_invalid(self, keydb_path):
+        ke = fetch_entry(keydb_path, ALICE_PORT2)
+        for junk in ('', 'nope', '.', '123.', 'abc.def', '1.\u00e9'):
+            assert videotoken.check_share(ke.secret_key, ALICE_PORT2, 0,
+                                          junk) == 'invalid'
+
+    def test_view_and_share_tokens_are_not_interchangeable(self, keydb_path):
+        ke = fetch_entry(keydb_path, ALICE_PORT2)
+        view = videotoken.mint(ke.secret_key, ALICE_PORT2, 0)
+        share = videotoken.mint_share(ke.secret_key, ALICE_PORT2, 0, 60)
+        assert videotoken.check_share(ke.secret_key, ALICE_PORT2, 0, view) == 'invalid'
+        assert not videotoken.verify(ke.secret_key, ALICE_PORT2, 0, share)
+
+
+@pytest.fixture(autouse=True)
+def _fresh_hls_slots(monkeypatch):
+    """The test client never closes a response, which is when a slot is
+    given back, so each test gets its own set rather than leaking one."""
+    import threading
+    from webadmin import routes_video
+    monkeypatch.setattr(routes_video, '_hls_slots',
+                        threading.BoundedSemaphore(
+                            routes_video.HLS_MAX_CONCURRENT))
+
+
+class _FakeVideoChild:
+    """Answers the two requests the watch page proxies, on a free port."""
+
+    def __init__(self, playlist_status=200, truncate_segment=False):
+        import http.server
+        import threading
+        outer = self
+        outer.requests = []
+        outer.playlist_status = playlist_status
+        outer.truncate_segment = truncate_segment
+
+        class H(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def do_GET(self):
+                outer.requests.append(self.path)
+                if self.path.startswith('/v1.m3u8') and outer.playlist_status == 200:
+                    body = b'#EXTM3U\n#EXTINF:2.0,\nv1-5-1.ts?t=12.abc\n'
+                    code = 200
+                elif self.path.startswith('/v1-5-7.ts'):
+                    body, code = b'\x47' + b'\0' * 187, 200
+                else:
+                    body, code = b'no\n', 503
+                self.send_response(code)
+                self.send_header('Content-Length', str(len(body)))
+                self.end_headers()
+                if outer.truncate_segment and code == 200 \
+                        and self.path.startswith('/v1-5-7.ts'):
+                    # promise the whole segment, send part, then hang up
+                    self.wfile.write(body[:50])
+                    self.close_connection = True
+                    return
+                self.wfile.write(body)
+
+        self.httpd = http.server.HTTPServer(('127.0.0.1', 0), H)
+        self.port = self.httpd.server_address[1]
+        threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
+
+    def close(self):
+        self.httpd.shutdown()
+        self.httpd.server_close()
+
+
+class TestShareLink:
+    def _share(self, client, hours=1, slot=0):
+        r = client.post('/video/share', data={'slot': slot, 'hours': hours})
+        assert r.status_code == 200, r.get_data(as_text=True)
+        return r.get_json()['url']
+
+    def _path(self, url):
+        from urllib.parse import urlparse
+        return urlparse(url).path
+
+    def test_owner_creates_link_and_anonymous_can_open_it(self, app, keydb_path):
+        _enable_video(keydb_path, ALICE_PORT2)
+        owner = app.test_client()
+        login_as(owner, ALICE_PORT1, ALICE_PASS)
+        path = self._path(self._share(owner))
+        anon = app.test_client()
+        r = anon.get(path)
+        assert r.status_code == 200
+        html = r.get_data(as_text=True)
+        assert 'watch.js' in html and 'index.m3u8' in html
+        assert r.headers['Referrer-Policy'] == 'no-referrer'
+        ke = fetch_entry(keydb_path, ALICE_PORT2)
+        assert bytes(ke.secret_key).hex() not in html.lower()
+
+    def test_share_requires_login_and_a_valid_lifetime(self, app, keydb_path):
+        _enable_video(keydb_path, ALICE_PORT2)
+        anon = app.test_client()
+        r = anon.post('/video/share', data={'slot': 0, 'hours': 1})
+        assert r.status_code in (301, 302)
+        owner = app.test_client()
+        login_as(owner, ALICE_PORT1, ALICE_PASS)
+        for hours in (0, 2, 99999):
+            assert owner.post('/video/share', data={'slot': 0,
+                                                    'hours': hours}).status_code == 400
+        assert owner.post('/video/share',
+                          data={'slot': 2, 'hours': 1}).status_code == 404
+
+    def test_owner_cannot_share_another_entry(self, app, keydb_path):
+        _enable_video(keydb_path, BOB_PORT2)
+        owner = app.test_client()
+        login_as(owner, ALICE_PORT1, ALICE_PASS)
+        r = owner.post('/video/share?port2=%d' % BOB_PORT2,
+                       data={'slot': 0, 'hours': 1})
+        assert r.status_code == 403
+
+    def test_expired_link_says_so(self, app, keydb_path):
+        _enable_video(keydb_path, ALICE_PORT2)
+        ke = fetch_entry(keydb_path, ALICE_PORT2)
+        tok = videotoken.mint_share(ke.secret_key, ALICE_PORT2, 0, 60,
+                                    now=time.time() - 3600)
+        r = app.test_client().get('/watch/%d/0/%s/' % (ALICE_PORT2, tok))
+        assert r.status_code == 410
+        assert 'expired' in r.get_data(as_text=True)
+
+    def test_bad_links_are_all_404(self, app, keydb_path):
+        _enable_video(keydb_path, ALICE_PORT2)
+        ke = fetch_entry(keydb_path, ALICE_PORT2)
+        good = videotoken.mint_share(ke.secret_key, ALICE_PORT2, 0, 3600)
+        c = app.test_client()
+        assert c.get('/watch/%d/0/%s/' % (ALICE_PORT2, good)).status_code == 200
+        for path in ('/watch/%d/0/%s/' % (ALICE_PORT2, good[:-1] + 'x'),
+                     '/watch/%d/1/%s/' % (ALICE_PORT2, good),
+                     '/watch/%d/0/%s/' % (BOB_PORT2, good),
+                     '/watch/%d/9/%s/' % (ALICE_PORT2, good),
+                     '/watch/%d/0/junk/' % ALICE_PORT2):
+            assert c.get(path).status_code == 404, path
+
+    def test_link_has_one_spelling(self, app, keydb_path):
+        _enable_video(keydb_path, ALICE_PORT2)
+        ke = fetch_entry(keydb_path, ALICE_PORT2)
+        good = videotoken.mint_share(ke.secret_key, ALICE_PORT2, 0, 3600)
+        exp, mac = good.split('.')
+        c = app.test_client()
+        assert c.get('/watch/%d/0/%s/' % (ALICE_PORT2, good)).status_code == 200
+        # the same signed value, spelled differently, is not the same link
+        for alt in ('+' + exp, '0' + exp, exp[:3] + '_' + exp[3:],
+                    exp + ' ', '\u0661' + exp[1:]):
+            r = c.get('/watch/%d/0/%s.%s/' % (ALICE_PORT2, alt, mac))
+            assert r.status_code == 404, alt
+
+    def test_hls_is_capped_so_the_admin_ui_keeps_a_worker(self, app,
+                                                          keydb_path):
+        from webadmin import routes_video
+        up = _FakeVideoChild()
+        held = []
+        try:
+            _enable_video(keydb_path, ALICE_PORT2, ports=(up.port,))
+            ke = fetch_entry(keydb_path, ALICE_PORT2)
+            tok = videotoken.mint_share(ke.secret_key, ALICE_PORT2, 0, 3600)
+            url = '/watch/%d/0/%s/index.m3u8' % (ALICE_PORT2, tok)
+            c = app.test_client()
+            # sequential requests give their slot back once sent
+            for _ in range(routes_video.HLS_MAX_CONCURRENT + 3):
+                assert c.get(url, buffered=True).status_code == 200
+            # with every slot in use, the next one is told to retry
+            while routes_video._hls_slots.acquire(blocking=False):
+                held.append(1)
+            assert len(held) == routes_video.HLS_MAX_CONCURRENT
+            r = c.get(url)
+            assert r.status_code == 503
+            assert r.headers['Retry-After']
+        finally:
+            for _ in held:
+                routes_video._hls_slots.release()
+            up.close()
+
+    def test_link_dies_when_video_is_disabled(self, app, keydb_path):
+        ke = fetch_entry(keydb_path, ALICE_PORT2)
+        tok = videotoken.mint_share(ke.secret_key, ALICE_PORT2, 0, 3600)
+        r = app.test_client().get('/watch/%d/0/%s/' % (ALICE_PORT2, tok))
+        assert r.status_code == 404
+
+    def test_ws_token_is_a_valid_viewer_token(self, app, keydb_path):
+        _enable_video(keydb_path, ALICE_PORT2)
+        ke = fetch_entry(keydb_path, ALICE_PORT2)
+        tok = videotoken.mint_share(ke.secret_key, ALICE_PORT2, 0, 3600)
+        r = app.test_client().get('/watch/%d/0/%s/ws-token' % (ALICE_PORT2, tok))
+        assert r.status_code == 200
+        assert videotoken.verify(ke.secret_key, ALICE_PORT2, 0,
+                                 r.get_json()['token'])
+
+    def test_ws_token_carries_the_links_expiry(self, app, keydb_path):
+        _enable_video(keydb_path, ALICE_PORT2)
+        ke = fetch_entry(keydb_path, ALICE_PORT2)
+        now = int(time.time())
+        tok = videotoken.mint_share(ke.secret_key, ALICE_PORT2, 0, 3600,
+                                    now=now)
+        r = app.test_client().get('/watch/%d/0/%s/ws-token' % (ALICE_PORT2, tok))
+        vt = r.get_json()['token']
+        _, until, _ = vt.split('.')
+        assert int(until) == now + 3600
+        # the child ends the viewer when the link does
+        assert not videotoken.verify(ke.secret_key, ALICE_PORT2, 0, vt,
+                                     now=now + 3601)
+        # the end time is signed: it cannot be pushed out
+        forged = '%s.%d.%s' % (vt.split('.')[0], now + 7200, vt.split('.')[2])
+        assert not videotoken.verify(ke.secret_key, ALICE_PORT2, 0, forged)
+
+    def test_port2_beyond_the_keydb_range_is_404(self, app, keydb_path):
+        r = app.test_client().get('/watch/%d/0/1.abc/' % (2 ** 31))
+        assert r.status_code == 404
+        r = app.test_client().get('/watch/%d/0/1.abc/' % (2 ** 63))
+        assert r.status_code == 404
+
+    def test_playlist_segment_urls_do_not_carry_the_token(self, app,
+                                                         keydb_path):
+        up = _FakeVideoChild()
+        try:
+            _enable_video(keydb_path, ALICE_PORT2, ports=(up.port,))
+            ke = fetch_entry(keydb_path, ALICE_PORT2)
+            tok = videotoken.mint_share(ke.secret_key, ALICE_PORT2, 0, 3600)
+            r = app.test_client().get(
+                '/watch/%d/0/%s/index.m3u8' % (ALICE_PORT2, tok))
+            assert b'v1-5-1.ts\n' in r.get_data()
+            assert b't=' not in r.get_data()
+        finally:
+            up.close()
+
+    def test_a_viewer_token_is_not_a_share_link(self, app, keydb_path):
+        _enable_video(keydb_path, ALICE_PORT2)
+        ke = fetch_entry(keydb_path, ALICE_PORT2)
+        view = videotoken.mint(ke.secret_key, ALICE_PORT2, 0)
+        r = app.test_client().get('/watch/%d/0/%s/' % (ALICE_PORT2, view))
+        assert r.status_code == 404
+
+    def test_hls_is_proxied_from_the_video_port(self, app, keydb_path):
+        up = _FakeVideoChild()
+        try:
+            _enable_video(keydb_path, ALICE_PORT2, ports=(up.port,))
+            ke = fetch_entry(keydb_path, ALICE_PORT2)
+            tok = videotoken.mint_share(ke.secret_key, ALICE_PORT2, 0, 3600)
+            base = '/watch/%d/0/%s/' % (ALICE_PORT2, tok)
+            c = app.test_client()
+            r = c.get(base + 'index.m3u8')
+            assert r.status_code == 200
+            assert r.headers['Content-Type'].startswith('application/vnd.apple.mpegurl')
+            assert r.headers['Cache-Control'] == 'no-cache'
+            assert r.get_data().startswith(b'#EXTM3U')
+            r = c.get(base + 'v1-5-7.ts')
+            assert r.status_code == 200
+            assert r.headers['Content-Type'] == 'video/mp2t'
+            assert r.get_data()[:1] == b'\x47'
+            # the upstream got a viewer token, not the share token
+            assert all('t=' in p and tok not in p for p in up.requests)
+            up_tok = up.requests[0].split('t=', 1)[1]
+            assert videotoken.verify(ke.secret_key, ALICE_PORT2, 0, up_tok)
+            # a segment for another slot's number is refused
+            assert c.get(base + 'v2-5-7.ts').status_code == 404
+        finally:
+            up.close()
+
+    def test_hls_reports_an_idle_stream_as_retryable(self, app, keydb_path):
+        up = _FakeVideoChild(playlist_status=503)
+        try:
+            _enable_video(keydb_path, ALICE_PORT2, ports=(up.port,))
+            ke = fetch_entry(keydb_path, ALICE_PORT2)
+            tok = videotoken.mint_share(ke.secret_key, ALICE_PORT2, 0, 3600)
+            r = app.test_client().get(
+                '/watch/%d/0/%s/index.m3u8' % (ALICE_PORT2, tok))
+            assert r.status_code == 503
+        finally:
+            up.close()
+
+    def test_hls_segment_cut_short_is_503_not_cached(self, app, keydb_path):
+        up = _FakeVideoChild(truncate_segment=True)
+        try:
+            _enable_video(keydb_path, ALICE_PORT2, ports=(up.port,))
+            ke = fetch_entry(keydb_path, ALICE_PORT2)
+            tok = videotoken.mint_share(ke.secret_key, ALICE_PORT2, 0, 3600)
+            r = app.test_client().get(
+                '/watch/%d/0/%s/v1-5-7.ts' % (ALICE_PORT2, tok))
+            assert r.status_code == 503
+            assert 'max-age' not in r.headers.get('Cache-Control', '')
+        finally:
+            up.close()
+
+    def test_hls_with_the_video_child_down_is_503(self, app, keydb_path):
+        import socket
+        s = socket.socket()
+        s.bind(('127.0.0.1', 0))
+        port = s.getsockname()[1]
+        s.close()
+        _enable_video(keydb_path, ALICE_PORT2, ports=(port,))
+        ke = fetch_entry(keydb_path, ALICE_PORT2)
+        tok = videotoken.mint_share(ke.secret_key, ALICE_PORT2, 0, 3600)
+        r = app.test_client().get(
+            '/watch/%d/0/%s/index.m3u8' % (ALICE_PORT2, tok))
+        assert r.status_code == 503

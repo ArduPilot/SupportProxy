@@ -150,6 +150,57 @@ A viewer starts at a buffered keyframe, and reconnects after the
 publisher restarts. The `/view/` RTSP namespace is reserved for viewing;
 RTSP publishers should continue using a different path, such as `/cam`.
 
+**Sharing with bystanders.** On the web UI's video page, pick a lifetime
+(1 hour to 7 days) and press **Create & copy link** (under "Play outside the browser", at the bottom of the page). The link opens a player page
+with no login and no password, for that one slot only. It is a signed,
+expiring URL: nothing is stored, so a link cannot be cancelled early, and
+creating a new link does not cancel earlier ones. Setting a new MAVLink signing
+passphrase for the entry (the "My entry" page) ends every link at once. The web UI checks a link and trades it for a short-lived viewer
+token that carries the link's expiry; the video port drops a viewer when
+that expiry passes or the entry's passphrase changes, so a stream already open
+ends with the link, within a few seconds (a passphrase change is noticed on the child's
+5-second tick). Viewers admitted by the viewer password are not affected,
+and the link-bound token is refused for RTSP playback, which is admitted
+once and not re-checked.
+
+The shared page plays over WebSocket where the browser has Media Source
+Extensions, and over HLS where it does not (iPhones, whose browsers all use
+WebKit). HLS runs several seconds behind live: segments are cut at
+keyframes, at least 2 and under 6 seconds apart (`EXT-X-TARGETDURATION` is a
+fixed 6), and a player starts about three segment lengths back. The camera
+needs a keyframe at least every 6 seconds for HLS to work; a longer gap is
+treated as a timestamp jump. Shorter keyframe intervals shorten the delay.
+
+HLS is cut straight from the stream already in memory, so it costs no extra
+process, disk or CPU per stream. The video port serves
+`/v1.m3u8` and `/v1-<launch>-<n>.ts` (`<launch>` is when the video child
+started, so a restart never reuses a name) to anyone holding a viewer token or password
+(a client that fetched the playlist with `?t=` gets the token appended to
+each segment URI; with `?pw=` or Basic auth it must send the credential
+again for each segment, and the token lasts only 60 seconds);
+the web UI fetches them from `127.0.0.1` on the viewer's behalf, because the
+video port only speaks TLS for WebSocket. This needs the web UI on the same
+host as the proxy. The ring has to hold about 40 seconds of stream
+(`SUPPORTPROXY_VIDEO_RING_BYTES`, 32 MiB by default, which suits up to
+about 6.7 Mbit/s): a playlist spans three 6-second target durations
+(18 s), lists only segments in the newest three quarters of the ring, and
+the oldest segment it lists can overshoot that span by up to 6 s more,
+with the unfinished segment on top, so 4/3 x (18 + 2 x 6) = 40 s. Set it
+to at least `40 * bitrate / 8` bytes for a faster stream. With less, the
+playlist is shorter than RFC 8216 allows, and the video port answers 503
+until at least one complete segment fits. The ring is allocated for a slot
+only while it has a publisher, and freed when the publisher leaves. HLS is not offered
+for Matroska streams.
+
+A segment request holds one of the slot's 32 viewer connections, and one
+of the web UI's 4 worker threads, while it is sent. At most 3 HLS requests
+are served at once across the web UI, counting public log playback too,
+so a crowd cannot starve the login page; the rest get a 503 with
+`Retry-After` and the player retries. These
+are the real limits on concurrent bystanders, and have not been load-tested. For a large audience put a caching
+reverse proxy in front of `/watch/`: segments are marked cacheable for a
+minute, and everyone given the same link requests the same URLs.
+
 **Disk.** Video has its own budget, separate from telemetry, so a busy
 camera can never evict a user's tlogs. Set it per entry in the web UI;
 a free-space floor stops recording before the disk fills.

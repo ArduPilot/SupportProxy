@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Live video &mdash; {{ entry.name }}</h2>
+
+{% if raw_thermal %}
+  <p><em>This stream cannot be shown in a browser.</em></p>
+{% else %}
+<div id="watch"
+     data-hls-url="{{ hls_url }}"
+     data-token-url="{{ token_url }}"
+     data-host="{{ host }}"
+     data-port="{{ port }}"
+     data-number="{{ number }}">
+  <video id="player" controls autoplay muted playsinline
+         width="640" style="max-width:100%;background:#000"></video>
+  <div class="video-status" id="status">Connecting&hellip;</div>
+</div>
+<p class="hint">The picture appears while the vehicle is streaming. If it is
+not, this page keeps trying. Playback may run a few seconds behind live on
+some phones.</p>
+<script src="{{ url_for('static', filename='vendor/mpegts.js/mpegts.js') }}"></script>
+<script src="{{ url_for('static', filename='watch.js') }}"></script>
+{% endif %}
+{% endblock %}
