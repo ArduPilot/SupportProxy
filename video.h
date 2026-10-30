@@ -32,7 +32,22 @@
   success, or errno for the first failure. The fd is closed either way,
   so the parent's read never blocks if the child dies first.
  */
-void video_child_main(int port2, int ready_fd) __attribute__((noreturn));
+void video_child_main(int port2, int ready_fd, struct VideoHlsMark *mark)
+    __attribute__((noreturn));
+
+/*
+  HLS counters a re-forked child must not fall back below. Each child
+  starts its counters at its launch time, but a publisher sending faster
+  than real time, or one that keeps resetting its timestamps, can push
+  them past the wall clock, and a successor would then start lower and
+  confuse a player that is still polling the same playlist URL.
+
+  Lives in an anonymous shared mapping the parent creates once per entry
+  and every child of that entry inherits, so it survives the child. The
+  child refreshes it after every ingested packet and when a stream ends,
+  so a kill loses nothing a player could have seen.
+ */
+struct VideoHlsMark *video_hls_mark_alloc(void);
 
 // True if this entry should have a video child: video enabled and at
 // least one port configured.

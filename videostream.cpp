@@ -119,6 +119,24 @@ int videostream_selftest(void)
         RCHECK(memcmp(out, in + 100, 50) == 0, "partial bytes match");
     }
 
+    // release: an idle slot holds no memory, and a later init() works
+    {
+        VideoRing r;
+        r.init(4096);
+        uint8_t b[100] {};
+        r.write(b, sizeof(b));
+        r.release();
+        RCHECK(r.capacity() == 0, "release frees the buffer");
+        RCHECK(r.write_pos() == 0, "release restarts the offsets");
+        r.write(b, sizeof(b));    // must be harmless on a released ring
+        RCHECK(r.write_pos() == 0, "write to a released ring is dropped");
+        uint8_t out[10];
+        RCHECK(r.read_at(0, out, sizeof(out)) == 0, "nothing to read");
+        r.init(4096);
+        r.write(b, sizeof(b));
+        RCHECK(r.write_pos() == 100, "ring is usable again after init");
+    }
+
     // wrap: the ring must stay byte-exact across the seam
     {
         VideoRing r;

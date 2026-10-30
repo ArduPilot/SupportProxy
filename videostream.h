@@ -23,7 +23,15 @@
 // on the Phoenix camera: ~4 s GOP at ~2.45 Mbit/s, so 8 MiB holds about
 // 26 s -- roughly six GOPs. A higher-bitrate publisher with a long GOP
 // needs the rule applied, not this constant.
-#define VIDEO_RING_DEFAULT (8u * 1024 * 1024)
+//
+// HLS needs more. A playlist spans three 6 s target durations and lists
+// only segments in the newest three quarters of the ring, the oldest
+// listed segment can overshoot that span by up to 6 s, and the
+// unfinished segment sits on top, so it wants
+//   ring >= 40 s * bitrate / 8      (4/3 x (18 + 2 x 6) s)
+// which is 32 MiB at about 6.7 Mbit/s. The ring is allocated only for a
+// slot with a publisher, and released when the publisher leaves.
+#define VIDEO_RING_DEFAULT (32u * 1024 * 1024)
 
 // Ring size actually used, honouring SUPPORTPROXY_VIDEO_RING_BYTES.
 // Overridable because lapping a viewer is otherwise only reachable by
@@ -57,6 +65,14 @@ public:
     // and rewinding write_pos_ under one would make its position look
     // like the far future. The caller drops viewers first.
     void reset(void) { write_pos_ = 0; }
+
+    // reset(), and give the memory back. For a slot whose publisher has
+    // gone, so an idle slot holds no ring. Same precondition as reset().
+    void release(void)
+    {
+        std::vector<uint8_t>().swap(buf_);
+        write_pos_ = 0;
+    }
 
 private:
     std::vector<uint8_t> buf_;

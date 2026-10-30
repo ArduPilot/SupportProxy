@@ -162,6 +162,9 @@ void TSScanner::reset(void)
     partial_len_ = 0;
     partial_off_ = 0;
     synced_ = false;
+    uint32_t next_seq = 0, epoch = 0;
+    hls_successor(next_seq, epoch);
+    hls_resume(next_seq, epoch);
 }
 
 bool TSScanner::stream_type_playable(uint8_t st)
@@ -255,6 +258,55 @@ void TSScanner::parse_pmt(const uint8_t *sec, size_t n, uint64_t off)
     }
 }
 
+void TSScanner::hls_note(uint64_t off, uint64_t pts)
+{
+    if (hls_n_ > 0) {
+        const HlsBoundary &last = hls_[hls_n_ - 1];
+        if (off <= last.off) {
+            return;
+        }
+        const uint64_t d = (pts - last.pts) & 0x1FFFFFFFFull;
+        if (d < HLS_MIN_SEGMENT_PTS) {
+            return;
+        }
+        if (d >= HLS_MAX_SEGMENT_PTS) {
+            // Timestamps jumped (or ran backwards): what follows is a
+            // different timeline, so it is announced as a discontinuity.
+            uint32_t next_seq = 0, epoch = 0;
+            hls_successor(next_seq, epoch);
+            hls_resume(next_seq, epoch);
+        }
+    }
+    if (hls_n_ == HLS_MAX_BOUNDARIES) {
+        memmove(&hls_[0], &hls_[1], sizeof(hls_[0]) * (HLS_MAX_BOUNDARIES - 1));
+        hls_n_--;
+    }
+    hls_[hls_n_].off = off;
+    hls_[hls_n_].pts = pts;
+    hls_[hls_n_].seq = hls_next_seq_++;
+    hls_n_++;
+}
+
+// PTS of a PES packet that starts at `p`. False when there isn't one.
+static bool pes_pts(const uint8_t *p, size_t n, uint64_t &pts)
+{
+    if (n < 14 || p[0] != 0 || p[1] != 0 || p[2] != 1) {
+        return false;
+    }
+    if ((p[7] & 0x80) == 0 || p[8] < 5) {
+        return false;
+    }
+    if ((p[9] & 0x01) == 0 || (p[11] & 0x01) == 0 || (p[13] & 0x01) == 0) {
+        return false;
+    }
+    pts = (uint64_t((p[9] >> 1) & 0x07) << 30)
+        | (uint64_t(p[10]) << 22)
+        | (uint64_t(p[11] >> 1) << 15)
+        | (uint64_t(p[12]) << 7)
+        | uint64_t(p[13] >> 1);
+    return true;
+}
+
 void TSScanner::packet(const uint8_t *p, uint64_t off)
 {
     stats_.packets++;
@@ -328,6 +380,10 @@ void TSScanner::packet(const uint8_t *p, uint64_t off)
                 anchor_ = last_pat_off_ < last_pmt_off_ ? last_pat_off_
                                                         : last_pmt_off_;
                 have_anchor_ = true;
+                uint64_t pts = 0;
+                if (pusi && pes_pts(payload, plen, pts)) {
+                    hls_note(anchor_, pts);
+                }
             }
         }
     }
@@ -586,6 +642,25 @@ struct TSBuilder {
         payload[n++] = 0x10;
         pkt(out, vpid, true, payload, n, rai < 0 ? key : rai != 0);
     }
+
+    // An H.264 keyframe whose PES header carries `pts`.
+    void key_pts(uint8_t *out, uint16_t vpid, uint64_t pts)
+    {
+        uint8_t payload[32] {};
+        size_t n = 0;
+        payload[n++] = 0x00; payload[n++] = 0x00; payload[n++] = 0x01;
+        payload[n++] = 0xE0;
+        payload[n++] = 0x00; payload[n++] = 0x00;
+        payload[n++] = 0x80; payload[n++] = 0x80; payload[n++] = 0x05;
+        payload[n++] = uint8_t(0x21 | (((pts >> 30) & 0x07) << 1));
+        payload[n++] = uint8_t(pts >> 22);
+        payload[n++] = uint8_t(((pts >> 15) << 1) | 1);
+        payload[n++] = uint8_t(pts >> 7);
+        payload[n++] = uint8_t((pts << 1) | 1);
+        payload[n++] = 0x00; payload[n++] = 0x00; payload[n++] = 0x00;
+        payload[n++] = 0x01; payload[n++] = 0x09; payload[n++] = 0x10;
+        pkt(out, vpid, true, payload, n, true);
+    }
 };
 
 #define CHECK(cond, msg) do {                                   \
@@ -724,6 +799,45 @@ int videots_selftest(void)
         CHECK(sc.have_program(), "false-RAI case parsed PSI");
         uint64_t off = 0;
         CHECK(!sc.join_offset(off), "false RAI must not produce an anchor");
+    }
+
+    // HLS cut points: keyframes closer than the minimum are skipped, and
+    // a timestamp jump starts a new epoch while the sequence keeps rising.
+    {
+        TSBuilder b;
+        const uint64_t pts[5] = { 0, 90000, 180000, 405000, 45000 };
+        uint8_t s[TS_PACKET_SIZE * 3 * 5] {};
+        for (size_t i = 0; i < 5; i++) {
+            uint8_t *g = s + i * 3 * TS_PACKET_SIZE;
+            b.pat(g, 0x100, 0);
+            b.pmt(g + TS_PACKET_SIZE, 0x100, 0x101, TS_STREAM_H264, 0);
+            b.key_pts(g + 2 * TS_PACKET_SIZE, 0x101, pts[i]);
+        }
+        TSScanner sc;
+        sc.feed(s, TS_PACKET_SIZE * 3 * 4, 0);
+        size_t n = 0;
+        const HlsBoundary *h = sc.hls_boundaries(n);
+        CHECK(n == 3, "short-GOP keyframe skipped");
+        CHECK(h[0].off == 0 && h[0].seq == 0, "first boundary");
+        CHECK(h[1].off == 6 * TS_PACKET_SIZE && h[1].seq == 1,
+              "second boundary");
+        CHECK(h[2].off == 9 * TS_PACKET_SIZE && h[2].pts == 405000,
+              "third boundary");
+        CHECK(sc.hls_epoch() == 0, "no discontinuity yet");
+
+        sc.feed(s + TS_PACKET_SIZE * 3 * 4, TS_PACKET_SIZE * 3, TS_PACKET_SIZE * 3 * 4);
+        h = sc.hls_boundaries(n);
+        CHECK(n == 1 && h[0].seq == 3, "timestamp jump restarts the list");
+        CHECK(sc.hls_epoch() == 1 && sc.hls_epoch_first_seq() == 3,
+              "timestamp jump is a new epoch");
+
+        sc.reset();
+        sc.hls_boundaries(n);
+        CHECK(n == 0 && sc.hls_epoch() == 2, "reset starts a new epoch");
+        uint32_t next_seq = 0, epoch = 0;
+        sc.hls_successor(next_seq, epoch);
+        CHECK(next_seq == 4 && epoch == 2,
+              "an empty epoch is not announced twice");
     }
 
     printf("videots selftest: OK\n");

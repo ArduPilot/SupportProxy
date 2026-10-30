@@ -23,6 +23,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/epoll.h>
+#include <sys/mman.h>
 #include <sys/socket.h>
 #include <sys/wait.h>
 #include <time.h>
@@ -51,6 +52,10 @@
   three slots with a reconnect in flight needs a handful.
  */
 #define VIDEO_MAX_VIEWERS_PER_IP 8
+// The web UI fetches HLS for every bystander from 127.0.0.1, so that one
+// address stands for many people. Still short of the table, so a local
+// flood cannot deny publishing.
+#define VIDEO_MAX_VIEWERS_LOOPBACK (VIDEO_MAX_VIEWERS - 8)
 
 /*
   Concurrent RTMP handshakes per slot. More than one so a squatter
@@ -84,6 +89,11 @@ bool video_entry_wants_child(uint32_t flags, const uint32_t *video_ports)
     }
     return false;
 }
+
+struct VideoHlsMark {
+    uint32_t next_seq[KEY_MAX_VIDEO_PORTS];
+    uint32_t epoch[KEY_MAX_VIDEO_PORTS];
+};
 
 namespace {
 
@@ -282,14 +292,15 @@ static rtp_codec_t rtp_codec_hint(const uint8_t *p, size_t n)
 
 class VideoChild {
 public:
-    VideoChild(int port2, int ready_fd) :
-        port2_(port2), ready_fd_(ready_fd), auth_(port2) {}
+    VideoChild(int port2, int ready_fd, VideoHlsMark *mark) :
+        port2_(port2), ready_fd_(ready_fd), mark_(mark), auth_(port2) {}
 
     void run(void) __attribute__((noreturn));
 
 private:
     int port2_;
     int ready_fd_;
+    VideoHlsMark *mark_;
     VideoAuth auth_;
     struct KeyEntry ke_ {};
     Slot slots_[KEY_MAX_VIDEO_PORTS];
@@ -347,6 +358,9 @@ private:
     void epoll_sync_viewer(VideoViewer &v, uint32_t &events);
     void drop_viewer(Slot &s, int idx, VideoViewer &v);
     void end_stream(Slot &s, int idx, const char *why);
+    void announce_viewer(int idx, VideoViewer &vw);
+    void note_hls_mark(void);
+    void note_hls_mark(int idx);
     void pump_viewers(Slot &s, int idx, time_t now);
 };
 
@@ -452,6 +466,7 @@ void VideoChild::ingest(Slot &s, int idx, const uint8_t *buf, size_t n)
     const uint64_t before = s.ring.write_pos();
     s.scanner.feed(buf, n, before);
     s.ring.write(buf, n);
+    note_hls_mark(idx);
 
     if (!s.recording || s.rec.stopped()) {
         return;
@@ -497,6 +512,7 @@ void VideoChild::ingest_stream(Slot &s, int idx, const uint8_t *buf, size_t n)
     const uint64_t before = s.ring.write_pos();
     s.scanner.feed(buf, n, before);
     s.ring.write(buf, n);
+    note_hls_mark(idx);
 
     if (!s.recording || s.rec.stopped()) {
         return;
@@ -677,13 +693,16 @@ void VideoChild::handle_tcp(Slot &s, int idx)
      */
     int free_slot = -1;
     int from_this_ip = 0;
+    const int ip_cap = ntohl(from.sin_addr.s_addr) == INADDR_LOOPBACK
+                           ? VIDEO_MAX_VIEWERS_LOOPBACK
+                           : VIDEO_MAX_VIEWERS_PER_IP;
     for (int v = 0; v < VIDEO_MAX_VIEWERS; v++) {
         if (s.viewers[v].active()
             && s.viewers[v].peer_ip_be() == uint32_t(from.sin_addr.s_addr)) {
             from_this_ip++;
         }
     }
-    if (from_this_ip < VIDEO_MAX_VIEWERS_PER_IP) {
+    if (from_this_ip < ip_cap) {
         for (int v = 0; v < VIDEO_MAX_VIEWERS; v++) {
             if (!s.viewers[v].active()) {
                 free_slot = v;
@@ -708,8 +727,8 @@ void VideoChild::handle_tcp(Slot &s, int idx)
     s.viewer_events[free_slot] = 0;
     s.viewers_seen++;
     epoll_add_viewer(s.viewers[free_slot], s.viewer_events[free_slot]);
-    printf("[%d] video slot %d viewer from %s connected\n",
-           port2_, idx, addr_to_str(from));
+    // The "connected" line waits until we know this is a viewing session
+    // and not a one-shot HLS fetch (see pump_viewers).
 }
 
 /*
@@ -724,7 +743,7 @@ void VideoChild::latch_publisher(Slot &s, int idx, time_t now)
     s.pub_last = now;
     s.pub_bytes = 0;
     s.ring.init(video_ring_bytes());
-    s.scanner = VideoScanner();
+    s.scanner.reset();
     s.rec.set_matroska(false);
     s.had_anchor = false;
     s.reset_rtp();
@@ -797,7 +816,7 @@ bool VideoChild::pump_mkv(Slot &s, int idx, time_t now)
         s.scanner.feed(data, length, s.ring.write_pos());
         s.ring.write(data, length); s.pub_bytes += length;
     });
-    (void)idx;
+    note_hls_mark(idx);
     return ok && !s.scanner.failed;
 }
 
@@ -1580,18 +1599,42 @@ void VideoChild::epoll_sync_viewer(VideoViewer &v, uint32_t &events)
     }
 }
 
+void VideoChild::announce_viewer(int idx, VideoViewer &vw)
+{
+    struct sockaddr_in peer {};
+    peer.sin_family = AF_INET;
+    peer.sin_addr.s_addr = vw.peer_ip_be();
+    peer.sin_port = vw.peer_port_be();
+    vw.set_announced();
+    printf("[%d] video slot %d viewer from %s connected\n",
+           port2_, idx, addr_to_str(peer));
+}
+
 void VideoChild::drop_viewer(Slot &s, int idx, VideoViewer &v)
 {
     if (!v.active()) {
         return;
     }
-    printf("[%d] video slot %d viewer disconnected after %llu KiB (%s)\n",
-           port2_, idx, (unsigned long long)(v.bytes_sent() / 1024),
-           v.drop_reason()[0] ? v.drop_reason() : "closed");
+    // An HLS playlist or segment is one request among many from a single
+    // player: logging each, or forcing a tick (keydb reload, stats line,
+    // connections.tdb commit) for each, would cost more than serving it.
+    const bool session = !v.is_hls();
+    if (session) {
+        // Dropped before the next pump pass announced it (a probe, a
+        // reset): the log should still show a connect for each disconnect.
+        if (!v.announced()) {
+            announce_viewer(idx, v);
+        }
+        printf("[%d] video slot %d viewer disconnected after %llu KiB (%s)\n",
+               port2_, idx, (unsigned long long)(v.bytes_sent() / 1024),
+               v.drop_reason()[0] ? v.drop_reason() : "closed");
+    }
     epoll_ctl(epfd_, EPOLL_CTL_DEL, v.fd(), nullptr);
     v.close();
-    s.viewers_dropped++;
-    last_tick_ = 0;
+    if (session) {
+        s.viewers_dropped++;
+        last_tick_ = 0;
+    }
 }
 
 /*
@@ -1611,6 +1654,7 @@ void VideoChild::drop_viewer(Slot &s, int idx, VideoViewer &v)
  */
 void VideoChild::end_stream(Slot &s, int idx, const char *why)
 {
+    note_hls_mark();
     for (int v = 0; v < VIDEO_MAX_VIEWERS; v++) {
         VideoViewer &vw = s.viewers[v];
         if (vw.active()) {
@@ -1618,7 +1662,9 @@ void VideoChild::end_stream(Slot &s, int idx, const char *why)
             drop_viewer(s, idx, vw);
         }
     }
-    s.ring.reset();
+    // Not just reset: an idle slot has no use for its ring, and the
+    // README promises it is held only while a publisher is present.
+    s.ring.release();
     s.scanner.reset();
     s.last_anchor = 0;
     s.had_anchor = false;
@@ -1652,6 +1698,14 @@ void VideoChild::pump_viewers(Slot &s, int idx, time_t now)
             s.viewer_events[v] = 0;
             if (mkv) handle_mkv(s, idx, fd, from, now);
             else handle_rtsp(s, idx, fd, from, now, proto);
+            continue;
+        }
+        if (!vw.announced() && !vw.is_hls()
+            && (vw.state() != VV_DETECT || vw.kind() == VVK_WS)) {
+            announce_viewer(idx, vw);
+        }
+        if (!vw.still_authorised(ke_, idx, now)) {
+            drop_viewer(s, idx, vw);
             continue;
         }
         if (vw.state() == VV_DETECT && vw.kind() == VVK_WS) {
@@ -1727,8 +1781,28 @@ void VideoChild::write_conn_rows(time_t now)
     conn_db_close_commit(db);
 }
 
+// Record the counters a successor child would have to start from.
+void VideoChild::note_hls_mark(int idx)
+{
+    if (mark_ == nullptr) {
+        return;
+    }
+    uint32_t next_seq = 0, epoch = 0;
+    slots_[idx].scanner.hls_successor(next_seq, epoch);
+    mark_->next_seq[idx] = std::max(mark_->next_seq[idx], next_seq);
+    mark_->epoch[idx] = std::max(mark_->epoch[idx], epoch);
+}
+
+void VideoChild::note_hls_mark(void)
+{
+    for (int i = 0; i < KEY_MAX_VIDEO_PORTS; i++) {
+        note_hls_mark(i);
+    }
+}
+
 void VideoChild::tick(time_t now)
 {
+    note_hls_mark();
     // Policy that doesn't need a rebind (credentials, grace, quota) is
     // picked up here. Anything that changes binding -- the enable bit,
     // the ports, the slot options -- makes the parent re-fork us
@@ -1837,6 +1911,27 @@ void VideoChild::run(void)
 
     int err = bind_slots();
     signal_ready(err);
+
+    /*
+      Segment names are cacheable for a minute and live under a link that
+      outlasts this process. Put the launch time in every name, so a
+      re-forked child never reissues one its predecessor served however
+      fast either cut segments, and start the sequence there too so the
+      media sequence a player sees does not fall back. The discontinuity
+      counter starts there as well: the first segment of a child is a
+      discontinuity from whatever its predecessor served, and the counter
+      a player has seen under the same playlist URL must not fall back.
+     */
+    const uint32_t launched = uint32_t(time(nullptr));
+    video_hls_set_incarnation(launched);
+    for (int i = 0; i < KEY_MAX_VIDEO_PORTS; i++) {
+        uint32_t next_seq = launched, epoch = launched;
+        if (mark_ != nullptr) {
+            next_seq = std::max(next_seq, mark_->next_seq[i]);
+            epoch = std::max(epoch, mark_->epoch[i]);
+        }
+        slots_[i].scanner.hls_resume(next_seq, epoch);
+    }
 
     epfd_ = epoll_create1(0);
     if (epfd_ == -1) {
@@ -1989,8 +2084,15 @@ void VideoChild::run(void)
 
 }  // namespace
 
-void video_child_main(int port2, int ready_fd)
+struct VideoHlsMark *video_hls_mark_alloc(void)
 {
-    VideoChild child(port2, ready_fd);
+    void *m = mmap(nullptr, sizeof(VideoHlsMark), PROT_READ | PROT_WRITE,
+                   MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+    return m == MAP_FAILED ? nullptr : static_cast<VideoHlsMark *>(m);
+}
+
+void video_child_main(int port2, int ready_fd, struct VideoHlsMark *mark)
+{
+    VideoChild child(port2, ready_fd, mark);
     child.run();
 }

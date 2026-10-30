@@ -48,6 +48,11 @@ void VideoViewer::start(int fd, int port2, uint32_t peer_ip_be,
     blocked_ = false;
     ws_ = nullptr;
     ws_ready_ = false;
+    hls_ = false;
+    authorised_ = false;
+    announced_ = false;
+    token_.clear();
+    token_checked_ = now;
     drop_reason_ = "";
 
     int one = 1;
@@ -61,6 +66,8 @@ void VideoViewer::start(int fd, int port2, uint32_t peer_ip_be,
 
 void VideoViewer::close(void)
 {
+    // A response cut short never reaches the release in flush().
+    release_out();
     delete rtsp_view_;
     rtsp_view_ = nullptr;
     if (ws_ != nullptr) {
@@ -84,6 +91,167 @@ void VideoViewer::fail(int code, const char *reason, const char *text)
     out_sent_ = 0;
     state_ = VV_RESPONDING;
     streaming_ = false;
+}
+
+static uint32_t hls_incarnation = 0;
+
+void video_hls_set_incarnation(uint32_t inc)
+{
+    hls_incarnation = inc;
+}
+
+// "/v<number>-<incarnation>-<seq>.ts" -> seq. A name from another
+// incarnation is not ours to serve.
+static bool hls_segment_path(const std::string &path, int number, uint32_t &seq)
+{
+    char prefix[40];
+    const int plen = snprintf(prefix, sizeof(prefix), "/v%d-%u-", number,
+                              hls_incarnation);
+    const size_t head = size_t(plen);
+    if (path.size() < head + 4 || path.compare(0, head, prefix) != 0
+        || path.compare(path.size() - 3, 3, ".ts") != 0) {
+        return false;
+    }
+    const std::string digits = path.substr(head, path.size() - 3 - head);
+    if (digits.empty() || digits.size() > 10) {
+        return false;
+    }
+    uint64_t v = 0;
+    for (char c : digits) {
+        if (c < '0' || c > '9') {
+            return false;
+        }
+        v = v * 10 + uint64_t(c - '0');
+    }
+    if (v > UINT32_MAX) {
+        return false;
+    }
+    seq = uint32_t(v);
+    return true;
+}
+
+// A player starts fetching a segment seconds after reading the playlist,
+// so one the ring is about to overwrite is not worth advertising.
+static bool hls_segment_fresh(const VideoRing &ring, uint64_t off)
+{
+    return ring.resident(off)
+        && ring.write_pos() - off <= ring.capacity() / 4 * 3;
+}
+
+void VideoViewer::respond_ok(const char *type, const char *cache,
+                             const std::string &body, time_t now)
+{
+    char head[256];
+    snprintf(head, sizeof(head),
+             "HTTP/1.1 200 OK\r\n"
+             "Content-Type: %s\r\n"
+             "Content-Length: %zu\r\n"
+             "Cache-Control: %s\r\n"
+             "Connection: close\r\n"
+             "\r\n",
+             type, body.size(), cache);
+    out_ = head;
+    out_ += body;
+    out_sent_ = 0;
+    bytes_sent_ = out_.size();
+    streaming_ = false;
+    state_ = VV_RESPONDING;
+    last_progress_ = now;
+    drop_reason_ = "hls";
+    hls_ = true;
+}
+
+bool VideoViewer::serve_hls_playlist(int slot, const VideoRing &ring,
+                                     const VideoScanner &scanner, time_t now)
+{
+    size_t n = 0;
+    const HlsBoundary *b = scanner.hls_boundaries(n);
+    // Segment i is complete once boundary i+1 exists.
+    const size_t last = n >= 2 ? n - 1 : 0;
+    // Newest first: keep adding older segments until the list spans
+    // enough target durations, runs out of fresh segments, or is full.
+    // The list is one epoch, so the timestamps are comparable.
+    const uint64_t want_span =
+        uint64_t(HLS_PLAYLIST_MIN_TARGETS) * HLS_TARGET_DURATION_S * 90000u;
+    size_t first = last;
+    while (first > 0 && last - first < HLS_PLAYLIST_SEGMENTS
+           && hls_segment_fresh(ring, b[first - 1].off)
+           && (first == last
+               || ((b[last].pts - b[first].pts) & 0x1FFFFFFFFull) < want_span)) {
+        first--;
+    }
+    if (first >= last) {
+        fail(503, "stream not ready", "No complete HLS segment yet.");
+        return true;
+    }
+    // RFC 8216 4.3.3.1: the value must not change during the life of the
+    // playlist, and the scanner admits no longer segment than this.
+    const unsigned target = HLS_TARGET_DURATION_S;
+
+    // A client that authenticated with ?t= fetches the segments the same
+    // way: a relative URI drops the query, and with a password set the
+    // segment would be a 401.
+    std::string uri_query;
+    if (!token_.empty()) {
+        uri_query = "?t=" + token_;
+    }
+
+    // A segment from a new publisher follows a discontinuity. When the
+    // list starts on it the tag is emitted, otherwise it has already
+    // scrolled off and only the counter remembers it.
+    const uint32_t epoch = scanner.hls_epoch();
+    const bool starts_epoch = epoch > 0
+        && b[first].seq == scanner.hls_epoch_first_seq();
+
+    char line[96];
+    std::string pl = "#EXTM3U\n#EXT-X-VERSION:3\n";
+    snprintf(line, sizeof(line), "#EXT-X-TARGETDURATION:%u\n", target);
+    pl += line;
+    snprintf(line, sizeof(line), "#EXT-X-MEDIA-SEQUENCE:%u\n", b[first].seq);
+    pl += line;
+    if (epoch > 0) {
+        snprintf(line, sizeof(line), "#EXT-X-DISCONTINUITY-SEQUENCE:%u\n",
+                 starts_epoch ? epoch - 1 : epoch);
+        pl += line;
+    }
+    for (size_t i = first; i < last; i++) {
+        if (i == first && starts_epoch) {
+            pl += "#EXT-X-DISCONTINUITY\n";
+        }
+        const uint64_t d = (b[i + 1].pts - b[i].pts) & 0x1FFFFFFFFull;
+        snprintf(line, sizeof(line), "#EXTINF:%.3f,\nv%d-%u-%u.ts",
+                 double(d) / 90000.0, slot + 1, hls_incarnation, b[i].seq);
+        pl += line;
+        pl += uri_query;
+        pl += "\n";
+    }
+    respond_ok("application/vnd.apple.mpegurl", "no-cache", pl, now);
+    return true;
+}
+
+bool VideoViewer::serve_hls_segment(uint32_t seq, const VideoRing &ring,
+                                    const VideoScanner &scanner, time_t now)
+{
+    size_t n = 0;
+    const HlsBoundary *b = scanner.hls_boundaries(n);
+    for (size_t i = 0; i + 1 < n; i++) {
+        if (b[i].seq != seq) {
+            continue;
+        }
+        if (!ring.resident(b[i].off)) {
+            break;
+        }
+        // Resident, so no longer than the ring.
+        const size_t len = size_t(b[i + 1].off - b[i].off);
+        std::string body(len, '\0');
+        if (ring.read_at(b[i].off, reinterpret_cast<uint8_t *>(&body[0]), len) != len) {
+            break;
+        }
+        respond_ok("video/mp2t", "public, max-age=60", body, now);
+        return true;
+    }
+    fail(404, "not found", "Segment is no longer available.");
+    return true;
 }
 
 bool VideoViewer::begin_stream(const struct KeyEntry &ke, int slot,
@@ -303,6 +471,33 @@ bool VideoViewer::on_readable(const struct KeyEntry &ke, int slot,
         return true;
     }
 
+    // HLS: /v1.m3u8 and /v1-<seq>.ts, cut from the ring without copying
+    // the stream anywhere else. Not offered for Matroska.
+    {
+        char playlist[32];
+        snprintf(playlist, sizeof(playlist), "/v%d.m3u8", slot + 1);
+        uint32_t seg_seq = 0;
+        const bool is_playlist = req_.path() == playlist;
+        const bool is_segment = hls_segment_path(req_.path(), slot + 1, seg_seq);
+        if (is_playlist || is_segment) {
+            // Before any refusal: a client looping on a 401 must not be
+            // logged and ticked as a session per request either.
+            hls_ = true;
+            // Authorise first: the stream type is not for anonymous
+            // callers to probe.
+            if (!ws_authorise(ke, slot, req_)) {
+                fail(401, "unauthorized", "A viewer token or password is required.");
+                return true;
+            }
+            if (scanner.matroska) {
+                fail(404, "not found", "HLS is not available for this stream.");
+                return true;
+            }
+            return is_playlist ? serve_hls_playlist(slot, ring, scanner, now)
+                               : serve_hls_segment(seg_seq, ring, scanner, now);
+        }
+    }
+
     // Path selects the slot: /v1.ts .. /v3.ts. The connection already
     // arrived on this slot's port, so the path only has to agree.
     char want[32];
@@ -351,6 +546,17 @@ bool VideoViewer::detect_timeout(const struct KeyEntry &ke, int slot,
     return begin_stream(ke, slot, ring, scanner, false, now);
 }
 
+// Forget the pending response, and give back a large buffer.
+void VideoViewer::release_out(void)
+{
+    if (out_.capacity() > 64 * 1024) {
+        std::string().swap(out_);
+    } else {
+        out_.clear();
+    }
+    out_sent_ = 0;
+}
+
 bool VideoViewer::flush(time_t now)
 {
     while (out_sent_ < out_.size()) {
@@ -370,8 +576,10 @@ bool VideoViewer::flush(time_t now)
         out_sent_ += size_t(w);
         last_progress_ = now;
     }
-    out_.clear();
-    out_sent_ = 0;
+    // clear() keeps the capacity, and a viewer that has served an HLS
+    // segment would otherwise sit on a buffer that size (several MB) for
+    // as long as its connection lives.
+    release_out();
     blocked_ = false;
     return true;
 }
@@ -396,6 +604,12 @@ bool VideoViewer::on_writable(const VideoRing &ring, time_t now)
                 return false;
             }
         } else {
+            // An HLS segment is a megabyte or more; a client that stops
+            // reading must not hold a viewer slot for ever.
+            if (now - last_progress_ > VIDEO_VIEWER_STUCK_S) {
+                drop_reason_ = "stalled";
+                return false;
+            }
             return true;
         }
     }
@@ -493,21 +707,50 @@ bool VideoViewer::wants_write(void) const
         || (ws_ != nullptr && ws_->has_pending_output());
 }
 
-bool VideoViewer::ws_authorise(const struct KeyEntry &ke, int slot,
-                               const HttpRequest &req)
+bool VideoViewer::still_authorised(const struct KeyEntry &ke, int slot,
+                                   time_t now)
+{
+    if (token_.empty() || now == token_checked_) {
+        return true;
+    }
+    token_checked_ = now;
+    if (video_token_session_valid(ke, port2_, slot, token_.c_str(), now)) {
+        return true;
+    }
+    drop_reason_ = "link expired or key changed";
+    return false;
+}
+
+bool VideoViewer::authorise(const struct KeyEntry &ke, int slot,
+                            const std::string &tok, std::string pw)
 {
     // A token is the normal path for the browser player: it keeps the
     // viewer password out of a URL that lands in history and logs.
-    const std::string tok = req.query("t");
+    //
+    // The token is echoed into HLS playlists and re-checked for as long
+    // as the viewer stays. strtol() is lenient about what it accepts as a
+    // hex pair (whitespace, a sign), so a variant spelling of a valid
+    // token must not be admitted: it would be neither safe to echo nor
+    // reliably re-checked.
     if (!tok.empty()
+        && tok.find_first_not_of("0123456789.abcdef") == std::string::npos
         && video_token_valid(ke, port2_, slot, tok.c_str(), time(nullptr))) {
+        token_ = tok;
+        authorised_ = true;
         return true;
     }
+    authorised_ = video_viewer_authorised(ke, pw);
+    return authorised_;
+}
+
+bool VideoViewer::ws_authorise(const struct KeyEntry &ke, int slot,
+                               const HttpRequest &req)
+{
     std::string pw = req.query("pw");
     if (pw.empty()) {
         pw = http_basic_password(req.header("Authorization"));
     }
-    return video_viewer_authorised(ke, pw);
+    return authorise(ke, slot, req.query("t"), pw);
 }
 
 bool VideoViewer::begin_ws(const struct KeyEntry &ke, int slot,
@@ -536,6 +779,22 @@ bool VideoViewer::begin_ws(const struct KeyEntry &ke, int slot,
             return true;   // handshake still in progress
         }
         ws_ready_ = true;
+        /*
+          A TLS client's request is inside the encryption, so on_readable()
+          could not see it: this is the first place it can be judged. (A
+          plain ws:// upgrade was judged there, with its headers.) The
+          upgrade has been answered already, so a refusal is a close.
+         */
+        if (!authorised_) {
+            const std::string &target = ws_->request_target();
+            std::string tok, pw;
+            (void)http_query_value(target, "t", tok);
+            (void)http_query_value(target, "pw", pw);
+            if (!authorise(ke, slot, tok, pw)) {
+                drop_reason_ = "unauthorized";
+                return false;
+            }
+        }
         // Redacted: a viewer may authenticate with ?pw=, which is a
         // long-lived credential, and the log is both kept on disk and
         // rendered into the admin server page.

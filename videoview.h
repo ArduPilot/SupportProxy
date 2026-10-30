@@ -31,6 +31,17 @@
 // not CPU: 32 viewers of an 8 Mbit/s stream is 256 Mbit/s.
 #define VIDEO_MAX_VIEWERS 32
 
+// Segments listed in an HLS playlist, at most. The ring bounds it too.
+#define HLS_PLAYLIST_SEGMENTS (HLS_MAX_BOUNDARIES - 1)
+// RFC 8216 6.2.2: a live playlist should span at least this many target
+// durations, so the list grows to this before it stops adding segments.
+#define HLS_PLAYLIST_MIN_TARGETS 3
+
+// Names the run of the video child that cut an HLS segment. A segment
+// name is cacheable for a minute and lives under a link that outlasts
+// the child, so a re-forked child must never reissue one.
+void video_hls_set_incarnation(uint32_t inc);
+
 // How much to hand one viewer per loop iteration. Bounds the latency
 // every other viewer and the publisher see.
 #define VIDEO_VIEWER_WRITE_CHUNK 65536
@@ -120,6 +131,17 @@ public:
     }
 
     bool wants_write(void) const;
+
+    // A viewer admitted by a token is re-checked against the entry as it
+    // is now, so a share link that expires or a key that changes ends
+    // the viewing it admitted. Cheap enough to call every loop pass.
+    bool still_authorised(const struct KeyEntry &ke, int slot, time_t now);
+
+    // A one-shot HLS playlist or segment fetch: a request, not a viewing
+    // session, so it is neither logged nor worth a stats tick.
+    bool is_hls(void) const { return hls_; }
+    bool announced(void) const { return announced_; }
+    void set_announced(void) { announced_ = true; }
     viewer_state state(void) const { return state_; }
     // Bytes deliberately left in the socket until more arrive (a split
     // request line). Level-triggered EPOLLIN would re-fire on them
@@ -155,6 +177,7 @@ private:
     size_t prefix_sent_ = 0;
     std::string out_;          // pending response bytes
     size_t out_sent_ = 0;
+    void release_out(void);
 
     uint64_t read_pos_ = 0;
     bool streaming_ = false;
@@ -169,17 +192,30 @@ private:
     WebSocket *ws_ = nullptr;
     RtspViewer *rtsp_view_ = nullptr;
     bool ws_ready_ = false;
+    bool hls_ = false;
+    bool authorised_ = false;   // ws_authorise() passed on the plain request
+    bool announced_ = false;
+    std::string token_;          // the viewer token that admitted us, if any
+    time_t token_checked_ = 0;
     const char *drop_reason_ = "";
 
     bool begin_stream(const struct KeyEntry &ke, int slot,
                       const VideoRing &ring, const VideoScanner &scanner,
                       bool http, time_t now);
     void fail(int code, const char *reason, const char *text);
+    void respond_ok(const char *type, const char *cache,
+                    const std::string &body, time_t now);
+    bool serve_hls_playlist(int slot, const VideoRing &ring,
+                            const VideoScanner &scanner, time_t now);
+    bool serve_hls_segment(uint32_t seq, const VideoRing &ring,
+                           const VideoScanner &scanner, time_t now);
     bool flush(time_t now);
     // A WS viewer must present a token (or the viewer password) before
     // we complete the upgrade.
     bool ws_authorise(const struct KeyEntry &ke, int slot,
                       const HttpRequest &req);
+    bool authorise(const struct KeyEntry &ke, int slot,
+                   const std::string &tok, std::string pw);
     bool begin_ws(const struct KeyEntry &ke, int slot, const VideoRing &ring,
                   const VideoScanner &scanner, time_t now);
 };

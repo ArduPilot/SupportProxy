@@ -165,8 +165,13 @@ video_admit_t VideoAuth::admit(const struct KeyEntry &ke, uint32_t peer_ip_be,
     return r;
 }
 
-bool video_token_valid(const struct KeyEntry &ke, int port2, int slot,
-                       const char *token, time_t now)
+/*
+  Parse and MAC-check a token. `until` is 0 for the two-part form.
+  Time limits are the caller's business.
+ */
+static bool token_parse(const struct KeyEntry &ke, int port2, int slot,
+                        const char *token, long long &expiry,
+                        long long &until)
 {
     if (token == nullptr || *token == '\0') {
         return false;
@@ -177,21 +182,34 @@ bool video_token_valid(const struct KeyEntry &ke, int port2, int slot,
     }
     char *endp = nullptr;
     errno = 0;
-    const long long expiry = strtoll(token, &endp, 10);
+    expiry = strtoll(token, &endp, 10);
     if (errno != 0 || endp != dot || expiry <= 0) {
         return false;
     }
-    if (now > time_t(expiry)) {
-        return false;
-    }
+    until = 0;
     const char *mac_hex = dot + 1;
+    const char *dot2 = strchr(mac_hex, '.');
+    if (dot2 != nullptr) {
+        errno = 0;
+        until = strtoll(mac_hex, &endp, 10);
+        if (errno != 0 || endp != dot2 || until <= 0) {
+            return false;
+        }
+        mac_hex = dot2 + 1;
+    }
     if (strlen(mac_hex) != 64) {
         return false;
     }
 
-    char msg[128];
-    const int mlen = snprintf(msg, sizeof(msg), "video-view|%d|%d|%lld",
-                              port2, slot, expiry);
+    char msg[160];
+    int mlen;
+    if (until != 0) {
+        mlen = snprintf(msg, sizeof(msg), "video-view|%d|%d|%lld|%lld",
+                        port2, slot, expiry, until);
+    } else {
+        mlen = snprintf(msg, sizeof(msg), "video-view|%d|%d|%lld",
+                        port2, slot, expiry);
+    }
     if (mlen <= 0 || size_t(mlen) >= sizeof(msg)) {
         return false;
     }
@@ -215,4 +233,34 @@ bool video_token_valid(const struct KeyEntry &ke, int port2, int slot,
         got[i] = uint8_t(v);
     }
     return CRYPTO_memcmp(want, got, sizeof(want)) == 0;
+}
+
+bool video_token_valid(const struct KeyEntry &ke, int port2, int slot,
+                       const char *token, time_t now)
+{
+    long long expiry = 0, until = 0;
+    if (!token_parse(ke, port2, slot, token, expiry, until)) {
+        return false;
+    }
+    return now <= time_t(expiry) && (until == 0 || now <= time_t(until));
+}
+
+bool video_token_valid_unbound(const struct KeyEntry &ke, int port2, int slot,
+                               const char *token, time_t now)
+{
+    long long expiry = 0, until = 0;
+    if (!token_parse(ke, port2, slot, token, expiry, until) || until != 0) {
+        return false;
+    }
+    return now <= time_t(expiry);
+}
+
+bool video_token_session_valid(const struct KeyEntry &ke, int port2,
+                               int slot, const char *token, time_t now)
+{
+    long long expiry = 0, until = 0;
+    if (!token_parse(ke, port2, slot, token, expiry, until)) {
+        return false;
+    }
+    return until == 0 || now <= time_t(until);
 }
