@@ -8,7 +8,7 @@
 <p>
   {% if can_manage %}
   <a href="{{ url_for('admin.edit', port2=entry.port2) }}">edit entry</a> ·
-  <a href="{{ url_for('admin.list_entries') }}">all entries</a>
+  <a href="{{ url_for('admin.list_entries') }}">All entries</a>
   {% if entry.video_enabled() and entry.active_video_ports() %}
   · <a href="{{ url_for('video.index', port2=entry.port2) }}">watch live video &rarr;</a>
   {% endif %}

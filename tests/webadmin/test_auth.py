@@ -48,11 +48,11 @@ class TestLogin:
         assert resp.status_code == 302
         assert resp.location.endswith('/login')
 
-    def test_index_redirects_to_admin_for_admin(self, client):
+    def test_index_redirects_admin_to_the_same_page_as_owner(self, client):
         login_as(client, BOB_PORT1, BOB_PASS)
         resp = client.get('/')
         assert resp.status_code == 302
-        assert '/admin/' in resp.location
+        assert resp.location.endswith('/me/'), resp.location
 
     def test_index_redirects_to_me_for_owner(self, client):
         login_as(client, ALICE_PORT1, ALICE_PASS)

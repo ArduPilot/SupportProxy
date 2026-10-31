@@ -14,23 +14,48 @@
          width="245" height="88" fetchpriority="high">
     <h1>{{ config.WEBUI_TITLE }}</h1>
   </a>
-  <nav>
-    {% if session.get('owner') %}
-      <span>logged in as port {{ session['owner'] }}{% if session.get('is_admin') %} (admin){% endif %}</span>
-      {% if session.get('is_admin') %}
-        <a href="{{ url_for('admin.list_entries') }}">all entries</a>
-        <a href="{{ url_for('admin.connections') }}">connections</a>
-        <a href="{{ url_for('system.index') }}">server</a>
-      {% endif %}
-      <a href="{{ url_for('owner.me') }}">my entry</a>
-      <a href="{{ url_for('video.index') }}">video</a>
-      <form method="post" action="{{ url_for('auth.logout') }}" class="inline">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <button type="submit">log out</button>
-      </form>
-    {% endif %}
-  </nav>
+  {% if session.get('owner') %}
+  <div class="who">
+    <span>logged in as port {{ session['owner'] }}{% if session.get('is_admin') %} (admin){% endif %}</span>
+    <form method="post" action="{{ url_for('auth.logout') }}" class="inline">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button type="submit">Log out</button>
+    </form>
+  </div>
+  {% endif %}
 </header>
+{% if session.get('owner') %}
+{#
+  One menu for everyone, in one order; admins get extra tabs after the
+  shared ones. Who is logged in, and Log out, are in the header.
+
+  The tab for the page being viewed is marked. An admin looking at an
+  entry's logs is still on All entries; anyone else reading them (the
+  shared read-only link) is on Logs.
+#}
+{% macro tab(href, label, active, extra='') -%}
+<a href="{{ href }}"
+   {%- if extra or active %} class="{{ extra }}{{ ' ' if extra and active }}{{ 'current' if active }}"{% endif %}
+   {%- if active %} aria-current="page"{% endif %}>{{ label }}</a>
+{%- endmacro %}
+{% set ep = request.endpoint or '' %}
+{% set bp = request.blueprint or '' %}
+{% set admin = session.get('is_admin') %}
+<nav class="main-nav" aria-label="Main">
+  {{ tab(url_for('owner.me'), 'Dashboard', bp == 'owner') }}
+  {{ tab(url_for('video.index'), 'Video', bp == 'video') }}
+  {{ tab(url_for('owner_logs.owner_dates'), 'Logs',
+         bp == 'owner_logs' or (bp == 'admin_logs' and not admin)) }}
+  {% if admin %}
+    {{ tab(url_for('admin.list_entries'), 'All entries',
+           bp in ('admin', 'admin_logs') and ep != 'admin.connections',
+           'admin-first') }}
+    {{ tab(url_for('admin.connections'), 'Connections',
+           ep == 'admin.connections') }}
+    {{ tab(url_for('system.index'), 'Server', bp == 'system') }}
+  {% endif %}
+</nav>
+{% endif %}
 <main>
   {% with msgs = get_flashed_messages(with_categories=true) %}
     {% for cat, msg in msgs %}
