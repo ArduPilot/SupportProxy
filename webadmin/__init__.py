@@ -126,9 +126,8 @@ def create_app(test_config=None):
 
     @app.route('/')
     def index():
-        from .auth import is_admin, current_owner
-        if is_admin():
-            return redirect(url_for('admin.list_entries'))
+        from .auth import current_owner
+        # One landing page for everyone, admins included.
         if current_owner() is not None:
             return redirect(url_for('owner.me'))
         return redirect(url_for('auth.login'))

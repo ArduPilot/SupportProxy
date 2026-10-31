@@ -5,7 +5,7 @@
 {% block content %}
 <h2>My logs ({{ entry.port1 }}/{{ entry.port2 }})</h2>
 
-<p><a href="{{ url_for('owner.me') }}">back to my entry</a>
+<p><a href="{{ url_for('owner.me') }}">back to the dashboard</a>
   {% if entry.video_enabled() and entry.active_video_ports() %}
   · <a href="{{ url_for('video.index') }}">watch live video &rarr;</a>
   {% endif %}

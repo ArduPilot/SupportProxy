@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% from "_macros.html" import row, check, tip %}
-{% block title %}My entry — {{ config.WEBUI_TITLE }}{% endblock %}
+{% block title %}Dashboard — {{ config.WEBUI_TITLE }}{% endblock %}
 {% block auto_refresh_seconds %}5{% endblock %}
 {% block content %}
 <h2>Active connections ({{ active | length }})</h2>

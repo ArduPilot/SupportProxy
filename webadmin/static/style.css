@@ -9,11 +9,29 @@ header h1 { font-size: 1.2rem; margin: 0; color: #fff; }
 header .brand { display: flex; align-items: center; gap: 0.6rem;
                 text-decoration: none; color: inherit; }
 header .brand .logo { height: 2.4rem; width: auto; display: block; }
-header nav { display: flex; gap: 1rem; align-items: center; font-size: 0.9rem; }
-header nav a { color: #fff; }
-header nav form.inline { display: inline; }
-header nav button { background: #fff; color: #3a7cb3; border: 1px solid #2a5e88; }
-header nav button:hover { background: #e6f0fa; }
+
+/* Main menu: one row of pill buttons, the same for everyone. Admin tabs
+   follow the shared ones after a gap. */
+nav.main-nav { display: flex; flex-wrap: wrap; align-items: center;
+               gap: 0.5rem; margin: 0 0 1rem; }
+nav.main-nav a { padding: 0.4rem 0.9rem; border: 1px solid #b8c4d0;
+                 border-radius: 6px; background: #fff; color: #2050a0;
+                 text-decoration: none; font-size: 0.95rem; }
+nav.main-nav a:hover { background: #e6f0fa; }
+nav.main-nav a.current { background: #3a7cb3; border-color: #2a5e88;
+                         color: #fff; }
+nav.main-nav a.admin-first { margin-left: 1rem; }
+@media (max-width: 650px) { nav.main-nav a.admin-first { margin-left: 0; } }
+
+/* Who is logged in, and Log out, at the right of the title bar. */
+header { flex-wrap: wrap; gap: 0.4rem 1rem; }
+header .who { display: flex; align-items: center; gap: 0.8rem;
+              font-size: 0.9rem; white-space: nowrap; margin-left: auto; }
+header .who form.inline { display: inline; margin: 0; }
+header .who button { background: #fff; color: #3a7cb3;
+                     border: 1px solid #2a5e88; border-radius: 6px;
+                     padding: 0.3rem 0.8rem; font-size: 0.9rem; }
+header .who button:hover { background: #e6f0fa; }
 main { padding: 0.5rem 0; }
 
 .field { margin: 0.5rem 0; }
