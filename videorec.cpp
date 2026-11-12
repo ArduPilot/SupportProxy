@@ -248,15 +248,21 @@ void VideoWriter::close_segment(void)
       in this process. The fd is shared with the child across fork, so
       the child's fsync covers our writes; we close our copy at once.
      */
+    // Double fork so the fsync runs in a grandchild owned by init: the
+    // video child never reaps strays, and each segment left a zombie.
     const pid_t pid = fork();
     if (pid == 0) {
+        if (fork() > 0) {
+            _exit(0);
+        }
         fsync(fd);
-        close(fd);
         _exit(0);
     }
     if (pid < 0) {
         // Couldn't fork: better a stall than an unflushed segment.
         fsync(fd);
+    } else {
+        waitpid(pid, nullptr, 0);
     }
     close(fd);
 }
