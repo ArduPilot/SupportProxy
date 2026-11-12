@@ -487,11 +487,14 @@ class TestViewerCpu:
             'idle viewer burned %d ticks in 4s (400 = one core)' % used
 
 
-def ws_connect(port, target, timeout=8.0):
+def ws_connect(port, target, timeout=8.0, rcvbuf=None):
     """Minimal WebSocket client: handshake, then read binary frames."""
     import base64
     key = base64.b64encode(b'v' * 16).decode()
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    if rcvbuf is not None:
+        # must precede connect(): it sets the advertised window
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, rcvbuf)
     s.settimeout(timeout)
     s.connect(('127.0.0.1', port))
     s.sendall((
@@ -613,8 +616,7 @@ class TestWebSocketWaitingViewer:
     def test_ping_flood_without_reading_is_dropped(self, session):
         """Pongs queued for a peer that never reads must stay bounded."""
         s = session()
-        sock, head, _ = ws_connect(VPORT, '/v1')
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4096)
+        sock, head, _ = ws_connect(VPORT, '/v1', rcvbuf=4096)
         payload = bytes(125)
         ping = bytes([0x89, 0x80 | 125, 0, 0, 0, 0]) + payload
         try:
@@ -647,6 +649,7 @@ class TestWebSocketWaitingViewer:
             sock.close()
 
 
+@pytest.mark.integration
 class TestWebSocketViewer:
     def test_ws_viewer_receives_the_stream(self, session):
         s = session()

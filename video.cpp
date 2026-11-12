@@ -1657,6 +1657,9 @@ void VideoChild::pump_viewers(Slot &s, int idx, time_t now)
         if (vw.state() == VV_DETECT && vw.kind() == VVK_WS) {
             if (!vw.begin_ws_pump(ke_, idx, s.ring, s.scanner, now)) {
                 drop_viewer(s, idx, vw);
+            } else {
+                // the pump may have queued pongs: arm EPOLLOUT for them
+                epoll_sync_viewer(vw, s.viewer_events[v]);
             }
             continue;
         }
