@@ -171,11 +171,11 @@ bool VideoViewer::on_readable(const struct KeyEntry &ke, int slot,
       viewer is dropped by the silence timeout.
      */
     if (kind_ == VVK_WS) {
-        // Already handed to WebSocket; it drives itself from the pump.
-        // Note this must NOT short-circuit an HTTP viewer: its request
-        // may arrive fragmented, and the parse below has to see the
-        // rest of it.
-        return true;
+        // Already handed to WebSocket. Drive it here too so input and
+        // EOF are consumed. Note this must NOT short-circuit an HTTP
+        // viewer: its request may arrive fragmented, and the parse
+        // below has to see the rest of it.
+        return begin_ws(ke, slot, ring, scanner, now);
     }
 
     /*
@@ -379,6 +379,11 @@ bool VideoViewer::flush(time_t now)
 bool VideoViewer::on_writable(const VideoRing &ring, time_t now)
 {
     if (rtsp_view_) return rtsp_view_->on_writable(ring, now);
+    // Queued WebSocket output (e.g. pongs while waiting for a stream).
+    if (ws_ != nullptr && !ws_->flush()) {
+        drop_reason_ = "write error";
+        return false;
+    }
     if (!flush(now)) {
         return false;
     }
@@ -484,7 +489,8 @@ bool VideoViewer::on_writable(const VideoRing &ring, time_t now)
 bool VideoViewer::wants_write(void) const
 {
     if (rtsp_view_) return rtsp_view_->wants_write();
-    return blocked_ || out_sent_ < out_.size();
+    return blocked_ || out_sent_ < out_.size()
+        || (ws_ != nullptr && ws_->has_pending_output());
 }
 
 bool VideoViewer::ws_authorise(const struct KeyEntry &ke, int slot,
@@ -513,16 +519,20 @@ bool VideoViewer::begin_ws(const struct KeyEntry &ke, int slot,
         // itself, which is why the detect phase only peeked.
         ws_ = new WebSocket(fd_);
     }
+    // Read on every call, not just during the handshake: until streaming
+    // starts nothing else reads this socket, and unread input or EOF
+    // re-fires level-triggered EPOLLIN for ever, spinning the child.
+    uint8_t sink[512];
+    if (ws_->recv(sink, sizeof(sink)) < 0) {
+        drop_reason_ = ws_ready_ ? "websocket closed" : "websocket handshake failed";
+        return false;
+    }
     if (!ws_ready_) {
-        // Pump the handshake along. recv() returning < 0 means the
-        // link failed; 0 just means "not finished yet".
-        uint8_t sink[512];
-        const ssize_t r = ws_->recv(sink, sizeof(sink));
-        if (r < 0) {
-            drop_reason_ = "websocket handshake failed";
-            return false;
-        }
-        if (ws_->request_target().empty()) {
+        if (!ws_->handshake_done()) {
+            if (now - connected_at_ >= VIDEO_WS_HANDSHAKE_S) {
+                drop_reason_ = "websocket handshake timeout";
+                return false;
+            }
             return true;   // handshake still in progress
         }
         ws_ready_ = true;

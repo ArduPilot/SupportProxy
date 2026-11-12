@@ -46,6 +46,11 @@ public:
         return req_target;
     }
 
+    // True once the 101 response has been sent in full.
+    bool handshake_done(void) const {
+        return done_headers;
+    }
+
     // Push queued output. Callers driving a write-ready event loop use
     // this; send() also flushes opportunistically. False = link is dead.
     bool flush(void);
