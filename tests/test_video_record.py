@@ -183,6 +183,21 @@ class TestRecording:
                 continue
             assert blob[0] == 0x47, '%s does not start at a packet' % f.name
             assert len(blob) % 188 == 0, '%s is not packet-aligned' % f.name
+        # each rotation forks an fsync helper; none may be left a zombie
+        vpid = s.proxy.video_pid()
+        assert vpid is not None, s.proxy.log
+        zombies = []
+        for pid in os.listdir('/proc'):
+            if not pid.isdigit():
+                continue
+            try:
+                with open('/proc/%s/stat' % pid) as f:
+                    fields = f.read().rsplit(')', 1)[1].split()
+            except OSError:
+                continue
+            if fields[0] == 'Z' and int(fields[1]) == vpid:
+                zombies.append(pid)
+        assert not zombies, 'unreaped fsync children: %r' % zombies
 
     def test_stream_without_keyframes_still_rotates(self, session):
         """A muxer that never signals a random access point must not
