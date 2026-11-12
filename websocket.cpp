@@ -499,10 +499,10 @@ void WebSocket::queue_frame(uint8_t opcode, const void *data, size_t n)
         header_len = 10;
     }
 
-    // Drop the fully-flushed prefix first so tx doesn't grow forever on
-    // a long-lived link.
-    if (tx_sent > 0 && tx_sent == tx.size()) {
-        tx.clear();
+    // Drop the flushed prefix so tx doesn't grow forever on a long-lived
+    // link, including one whose peer never quite drains the queue.
+    if (tx_sent > 0 && (tx_sent == tx.size() || tx_sent >= WS_TX_COMPACT)) {
+        tx.erase(tx.begin(), tx.begin() + tx_sent);
         tx_sent = 0;
     }
     tx.insert(tx.end(), header, header + header_len);
