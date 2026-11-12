@@ -43,6 +43,9 @@
 // speaks first.
 #define VIDEO_DETECT_SILENCE_S 2
 
+// Time allowed for a WebSocket (or TLS) handshake to complete.
+#define VIDEO_WS_HANDSHAKE_S 10
+
 enum viewer_state {
     VV_DETECT = 0,      // deciding what this connection is
     VV_RESPONDING,      // sending an HTTP response header or an error

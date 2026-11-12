@@ -571,6 +571,82 @@ def mint_token(workdir, port2, slot):
 
 
 @pytest.mark.integration
+class TestWebSocketWaitingViewer:
+    """A WebSocket viewer waiting for a joinable stream must still be read.
+
+    Production saw video children each spin a full core: viewers that
+    completed the handshake on a slot with no keyframe yet were never
+    read again, so their close (or any frame) re-fired level-triggered
+    EPOLLIN for ever and the slot never freed.
+    """
+
+    @staticmethod
+    def _ticks(pid):
+        with open('/proc/%d/stat' % pid) as f:
+            parts = f.read().split()
+        return int(parts[13]) + int(parts[14])
+
+    @pytest.mark.parametrize('how', ['close_frame', 'fin'])
+    def test_closed_waiting_viewer_is_dropped(self, session, how):
+        s = session()
+        vpid = s.proxy.video_pid()
+        assert vpid is not None, s.proxy.log
+        sock, head, _ = ws_connect(VPORT, '/v1')
+        try:
+            assert b'101' in head, head
+            if how == 'close_frame':
+                # masked close frame, status 1000
+                sock.sendall(bytes([0x88, 0x82, 1, 2, 3, 4,
+                                    0x03 ^ 1, 0xe8 ^ 2]))
+            else:
+                sock.shutdown(socket.SHUT_WR)
+            # close_frame keeps TCP open: the frame alone must end it
+            assert s.proxy.wait_for(r'viewer disconnected', timeout=5), \
+                s.proxy.log
+            t0 = self._ticks(vpid)
+            time.sleep(2)
+            used = self._ticks(vpid) - t0
+        finally:
+            sock.close()
+        assert used < 20, 'closed ws viewer burned %d ticks in 2s' % used
+
+    def test_ping_flood_without_reading_is_dropped(self, session):
+        """Pongs queued for a peer that never reads must stay bounded."""
+        s = session()
+        sock, head, _ = ws_connect(VPORT, '/v1')
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4096)
+        payload = bytes(125)
+        ping = bytes([0x89, 0x80 | 125, 0, 0, 0, 0]) + payload
+        try:
+            assert b'101' in head, head
+            sock.settimeout(1.0)
+            batch = ping * 1000
+            deadline = time.time() + 30
+            while time.time() < deadline:
+                try:
+                    sock.sendall(batch)
+                except (socket.timeout, OSError):
+                    break
+                if 'output queue full' in s.proxy.log:
+                    break
+            assert s.proxy.wait_for(r'output queue full', timeout=5), \
+                s.proxy.log[-2000:]
+            assert s.proxy.wait_for(r'viewer disconnected', timeout=5), \
+                s.proxy.log[-2000:]
+        finally:
+            sock.close()
+
+    def test_stalled_handshake_times_out(self, session):
+        s = session()
+        sock = socket.create_connection(('127.0.0.1', VPORT))
+        try:
+            sock.sendall(b'\x16\x03\x01\x02\x00\x01\x00\x01\xfc\x03\x03')
+            assert s.proxy.wait_for(r'websocket handshake timeout',
+                                    timeout=15), s.proxy.log
+        finally:
+            sock.close()
+
+
 class TestWebSocketViewer:
     def test_ws_viewer_receives_the_stream(self, session):
         s = session()

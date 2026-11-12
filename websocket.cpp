@@ -343,6 +343,11 @@ bool WebSocket::decode_frames(void)
             }
             return false;
         case WS_OP_PING:
+            // A peer that pings without reading must not grow tx forever.
+            if (tx.size() - tx_sent > WS_MAX_TX_QUEUE) {
+                printf("WebSocket: output queue full, dropping connection\n");
+                return false;
+            }
             queue_frame(WS_OP_PONG, payload, size_t(payload_len));
             flush();
             break;
