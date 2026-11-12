@@ -27,6 +27,8 @@ enum ws_detect_t { WS_NO, WS_YES, WS_MORE };
 // Cap on framed-but-unwritten output. A peer that stops reading must not
 // make us buffer without bound; past this we fail the connection.
 #define WS_MAX_TX_QUEUE (1024*1024)
+// sent bytes at the front of tx before they are erased
+#define WS_TX_COMPACT (64*1024)
 
 class WebSocket {
 public:
