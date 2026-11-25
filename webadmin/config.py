@@ -54,6 +54,13 @@ class DefaultConfig:
     # field if that file exists in the keys.tdb directory.
     WEBUI_TITLE = 'SupportProxy admin'
 
+    # Web viewer that plays a raw thermal (Matroska) stream live from a
+    # video port's TLS WebSocket; the video page links to it. It must
+    # allow this proxy's host in its Content-Security-Policy. Empty
+    # disables the link. Overridden by webui.json's "live_viewer".
+    LIVE_VIEWER_URL = os.environ.get(
+        'WEBADMIN_LIVE_VIEWER_URL', 'https://plot.ardupilot.org/video-live/')
+
     # Browser-cache static assets (logo, CSS, JS). Without this Flask
     # emits no Cache-Control header, so the meta-refresh flow refetches
     # the logo every 5 s and you see a blank header flash mid-paint.

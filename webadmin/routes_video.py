@@ -13,6 +13,7 @@ from flask import (Blueprint, Response, abort, current_app, jsonify,
 import functools
 import http.client
 import re
+from urllib.parse import quote, urlsplit
 
 import keydb_lib
 
@@ -45,6 +46,19 @@ def _viewer_host():
     so the player connects directly to the same host on that port.
     """
     return request.host.split(':')[0]
+
+
+def _live_viewer_link(host, port):
+    """Link that opens a raw thermal slot in the live web viewer, or None.
+
+    The viewer connects to the video port's TLS WebSocket itself, so the
+    link carries only the address: a viewer password is typed there.
+    """
+    viewer = current_app.config.get('LIVE_VIEWER_URL') or ''
+    if urlsplit(viewer).scheme not in ('http', 'https'):
+        return None
+    return '%s%slive=%s' % (viewer, '&' if '?' in viewer else '?',
+                            quote('wss://%s:%d/' % (host, port), safe=''))
 
 
 def _resolve_port2():
@@ -130,10 +144,13 @@ def index():
                      if c.role == conntdb_lib.CONN_ROLE_VIDEO_PUB and
                      c.app_proto == conntdb_lib.CONN_APP_MATROSKA}
         slots = []
+        host = _viewer_host()
         for slot, port in ke.active_video_ports():
             slots.append({
                 'slot': slot,
                 'raw_thermal': slot in raw_slots,
+                'live_url': (_live_viewer_link(host, port)
+                             if slot in raw_slots else None),
                 'number': slot + 1,
                 'port': port,
                 'opts': ke.slot_opt_names(slot),
@@ -146,7 +163,7 @@ def index():
         entry=ke,
         port2=port2,
         slots=slots,
-        host=_viewer_host(),
+        host=host,
         enabled=ke.video_enabled(),
         browser_playable=BROWSER_PLAYABLE,
         stream_names=STREAM_NAMES,

@@ -19,8 +19,18 @@ to appear.</p>
     <h3>Slot {{ s.number }} &mdash; port {{ s.port }}</h3>
 
     {% if s.raw_thermal %}
-    <p>Lossless raw thermal (FFV1, 16-bit). This browser player cannot decode
-       the stream. Use <code>camera view rawthermal</code> in MAVProxy when
+    <p>Lossless raw thermal (FFV1, 16-bit).</p>
+    {% if s.live_url %}
+    <p><a class="video-live-link" href="{{ s.live_url }}" target="_blank"
+          rel="noopener noreferrer">Open live in the flight viewer</a>
+       &mdash; the image, pixel temperatures and the flight path on a map,
+       with pause and seek back over what it has received.
+       {% if s.needs_password %}Enter the viewer password in its Live
+       dialog.{% endif %}
+       It needs TLS on this video port.</p>
+    {% endif %}
+    <p>The player on this page cannot decode the stream. Outside the
+       browser, use <code>camera view rawthermal</code> in MAVProxy when
        connected through this proxy, or the desktop thermal viewer:</p>
     <pre><code>python3 scripts/view_raw_thermal.py http://{{ host }}:{{ s.port }}/v{{ s.number }}.mkv{% if s.needs_password %}?pw=YOUR_VIEWER_PASSWORD{% endif %}</code></pre>
     <p>The desktop viewer defaults to greyscale, shows pixel temperatures,
