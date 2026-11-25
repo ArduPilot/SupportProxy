@@ -483,6 +483,29 @@ def test_raw_thermal_offers_desktop_viewer(client, keydb_path, monkeypatch):
     html = client.get('/video/').get_data(as_text=True)
     assert 'view_raw_thermal.py' in html and '/v3.mkv' in html
     assert 'id="player3"' not in html and 'id="player1"' in html
+    # one link, for the raw thermal slot only, addressed to its video port
+    assert html.count('video-live-link') == 1
+    assert ('href="https://plot.ardupilot.org/video-live/?live='
+            'wss%%3A%%2F%%2Flocalhost%%3A%d%%2F"' % (VPORT+2)) in html
+    assert 'Enter the viewer password' not in html
+
+
+def test_raw_thermal_live_viewer_link_is_configurable(client, keydb_path, monkeypatch):
+    from types import SimpleNamespace
+    from webadmin import connections
+    import conntdb_lib
+    _enable_video(keydb_path, ALICE_PORT2, ports=(VPORT,))
+    monkeypatch.setattr(connections, 'list_for_port2', lambda port: [SimpleNamespace(
+        stream_idx=0, role=conntdb_lib.CONN_ROLE_VIDEO_PUB, app_proto=conntdb_lib.CONN_APP_MATROSKA)])
+    login_as(client, ALICE_PORT1, ALICE_PASS)
+    client.application.config['LIVE_VIEWER_URL'] = 'https://viewer.example/v/?x=1'
+    html = client.get('/video/').get_data(as_text=True)
+    assert ('href="https://viewer.example/v/?x=1&amp;live='
+            'wss%%3A%%2F%%2Flocalhost%%3A%d%%2F"' % VPORT) in html
+    for off in ('', 'javascript:alert(1)'):
+        client.application.config['LIVE_VIEWER_URL'] = off
+        html = client.get('/video/').get_data(as_text=True)
+        assert 'video-live-link' not in html and 'view_raw_thermal.py' in html
 
 
 class TestShareToken:

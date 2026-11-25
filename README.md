@@ -795,6 +795,16 @@ video quota and log-download listing. They do not use the MPEG-TS browser log
 player. The live web page identifies active Matroska publishers and offers a
 desktop viewer instead of its MPEG-TS player (reload after changing formats).
 
+It also links each raw thermal slot to a web viewer that plays the stream
+live from the video port's TLS WebSocket (`wss://HOST:PORT/`), with the flight
+path on a map and seek back over what it has received. The video port needs
+TLS (`fullchain.pem` and `privkey.pem`), and the viewer's
+Content-Security-Policy must allow this proxy's host. The viewer defaults to
+`https://plot.ardupilot.org/video-live/`; set `WEBADMIN_LIVE_VIEWER_URL`, or
+`"live_viewer"` in `webui.json`, to use another, or to an empty string for no
+link. The link carries no credential: with a viewer password set, it is
+entered in the viewer.
+
 MAVProxy connected to this proxy discovers the correct URL automatically:
 
 ```text
