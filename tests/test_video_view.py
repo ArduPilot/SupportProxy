@@ -738,6 +738,26 @@ class TestWebSocketViewer:
         assert data in s.feed.snapshot(), \
             'ws payload is not a verbatim span of what was published'
 
+    def test_ws_viewer_slow_to_start_is_not_dropped(self, session):
+        """A viewer that drains slowly at first (a long path still in
+        slow start) waits in the ring, not in the WebSocket queue."""
+        s = session()
+        assert s.wait_ready(), s.proxy.log
+        sock, head, rest = ws_connect(VPORT, '/v1', rcvbuf=65536)
+        try:
+            assert b'101' in head, head
+            # well past the WebSocket queue limit before the viewer reads
+            while len(s.feed.snapshot()) < 3 * 1024 * 1024:
+                s.feed.burst(1000)
+            assert 'viewer disconnected' not in s.proxy.log, s.proxy.log[-2000:]
+            data = ws_read_payload(sock, 20, rest)
+        finally:
+            sock.close()
+        assert 'output queue full' not in s.proxy.log, s.proxy.log[-2000:]
+        assert len(data) > 2 * 1024 * 1024, 'ws viewer got %d bytes' % len(data)
+        assert data in s.feed.snapshot(), \
+            'ws payload is not a verbatim span of what was published'
+
     def test_ws_requires_a_credential_when_a_password_is_set(self, session):
         s = session(viewer_pass='watchme')
         assert s.wait_ready(), s.proxy.log

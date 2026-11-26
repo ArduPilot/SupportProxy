@@ -629,6 +629,12 @@ bool VideoViewer::on_writable(const VideoRing &ring, time_t now)
     // Send codec setup before any ring bytes, through the same framing as
     // the viewer. A slow joiner is subject to the same bounded buffering.
     while (prefix_sent_ < prefix_.size()) {
+        // send() queues what the socket will not take, so wait for the
+        // queue to drain rather than piling the stream up behind it
+        if (ws_ != nullptr && ws_->has_pending_output()) {
+            blocked_ = true;
+            return now-last_progress_ <= VIDEO_VIEWER_STUCK_S;
+        }
         const size_t n = std::min(size_t(16384), prefix_.size()-prefix_sent_);
         const uint8_t *p = reinterpret_cast<const uint8_t *>(prefix_.data()+prefix_sent_);
         ssize_t w = ws_ ? ws_->send(p, n) : ::send(fd_, p, n, MSG_NOSIGNAL);
@@ -642,6 +648,11 @@ bool VideoViewer::on_writable(const VideoRing &ring, time_t now)
     }
     size_t budget = VIDEO_VIEWER_WRITE_CHUNK;
     while (budget > 0 && read_pos_ < ring.write_pos()) {
+        // as for the prefix: the ring holds the backlog, not the WebSocket
+        if (ws_ != nullptr && ws_->has_pending_output()) {
+            blocked_ = true;
+            break;
+        }
         uint8_t chunk[16384];
         const size_t want = budget < sizeof(chunk) ? budget : sizeof(chunk);
         const size_t got = ring.read_at(read_pos_, chunk, want);
@@ -678,6 +689,8 @@ bool VideoViewer::on_writable(const VideoRing &ring, time_t now)
     }
     if (read_pos_ >= ring.write_pos()) {
         blocked_ = false;   // caught up: nothing is waiting on the socket
+    } else if (budget == 0) {
+        blocked_ = true;    // more to send: come back without waiting for ingest
     }
 
     const uint64_t lag = ring.write_pos() - read_pos_;
