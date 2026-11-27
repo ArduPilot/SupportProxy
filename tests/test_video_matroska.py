@@ -188,3 +188,33 @@ def test_websocket_prefix_and_http_token(tmp_path):
         ws.close(); pub.close()
     finally:
         proxy.stop()
+
+
+def test_websocket_viewer_stalled_before_the_prefix_is_logged_as_stalled(tmp_path):
+    """Queued pongs the viewer never reads hold back the stream's prefix;
+    the drop that follows says why."""
+    wd, proxy = start(tmp_path)
+    try:
+        ws, response, _ = ws_connect(VPORT, '/v1', rcvbuf=4096)
+        assert b'101' in response, response
+        # more pongs than the socket buffers hold, fewer than the queue limit
+        mask = b'\x01\x02\x03\x04'
+        ping = b'\x89\xfd' + mask + bytes(125)
+        for _ in range(6000):
+            ws.sendall(ping)
+        time.sleep(1)
+        assert 'disconnected' not in proxy.log, proxy.log[-2000:]
+        pub, response = publish()
+        assert b'100' in response
+        send(pub, HEADER+cluster(4))
+        assert proxy.wait_for('join=ready'), proxy.log
+        deadline = time.time()+30
+        i = 5
+        while time.time() < deadline and 'viewer disconnected' not in proxy.log:
+            send(pub, cluster(i)); i += 1
+            time.sleep(.5)
+        ws.close(); pub.close()
+        assert 'output queue full' not in proxy.log, proxy.log[-2000:]
+        assert proxy.wait_for(r'viewer disconnected after 0 KiB \(stalled\)', timeout=5), proxy.log[-2000:]
+    finally:
+        proxy.stop()
