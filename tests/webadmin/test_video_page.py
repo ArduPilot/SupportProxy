@@ -511,7 +511,7 @@ def test_raw_thermal_live_viewer_link_is_configurable(client, keydb_path, monkey
     html = client.get('/video/').get_data(as_text=True)
     assert ('href="https://viewer.example/v/?live='
             'wss%%3A%%2F%%2Flocalhost%%3A%d%%2F#pw=x"' % VPORT) in html
-    for off in ('', 'javascript:alert(1)'):
+    for off in ('', 'javascript:alert(1)', 'https://[bad/'):
         client.application.config['LIVE_VIEWER_URL'] = off
         html = client.get('/video/').get_data(as_text=True)
         assert 'video-live-link' not in html and 'view_raw_thermal.py' in html

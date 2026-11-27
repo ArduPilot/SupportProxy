@@ -55,7 +55,10 @@ def _live_viewer_link(host, port):
     link carries only the address: a viewer password is typed there.
     """
     viewer = current_app.config.get('LIVE_VIEWER_URL') or ''
-    parts = urlsplit(viewer)
+    try:
+        parts = urlsplit(viewer)
+    except ValueError:      # e.g. an unclosed IPv6 bracket
+        return None
     if parts.scheme not in ('http', 'https'):
         return None
     # in the query, ahead of any fragment the configured URL carries
