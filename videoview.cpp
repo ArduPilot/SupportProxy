@@ -589,13 +589,15 @@ bool VideoViewer::on_writable(const VideoRing &ring, time_t now)
     if (rtsp_view_) return rtsp_view_->on_writable(ring, now);
     // Queued WebSocket output (e.g. pongs while waiting for a stream).
     if (ws_ != nullptr) {
-        const size_t queued = ws_->pending_output();
         if (!ws_->flush()) {
             drop_reason_ = "write error";
             return false;
         }
-        if (ws_->pending_output() < queued) {
-            last_progress_ = now;   // a slow drain is still progress
+        // a slow drain is still progress, and so is one made while
+        // answering a ping
+        if (ws_->bytes_flushed() != ws_flushed_) {
+            ws_flushed_ = ws_->bytes_flushed();
+            last_progress_ = now;
         }
     }
     if (!flush(now)) {
@@ -784,6 +786,7 @@ bool VideoViewer::begin_ws(const struct KeyEntry &ke, int slot,
         // WebSocket reads and answers the handshake off the socket
         // itself, which is why the detect phase only peeked.
         ws_ = new WebSocket(fd_);
+        ws_flushed_ = 0;
     }
     // Read on every call, not just during the handshake: until streaming
     // starts nothing else reads this socket, and unread input or EOF

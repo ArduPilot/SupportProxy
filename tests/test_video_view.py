@@ -800,6 +800,30 @@ class TestWebSocketViewer:
         finally:
             sock.close()
 
+    def test_ws_viewer_draining_slowly_while_pinging_is_not_stalled(self, session):
+        """The pong for each ping is flushed on the read path, taking the
+        queued video with it: that is progress too."""
+        s = session()
+        assert s.wait_ready(), s.proxy.log
+        sock, head, rest = ws_connect(VPORT, '/v1', rcvbuf=4096)
+        try:
+            assert b'101' in head, head
+            while len(s.feed.snapshot()) < 2 * 1024 * 1024:
+                s.feed.burst(1000)
+            assert 'viewer disconnected' not in s.proxy.log, s.proxy.log[-2000:]
+            got = len(rest)
+            sock.settimeout(2)
+            ping = b'\x89\x80\x01\x02\x03\x04'
+            for _ in range(60):
+                got += len(sock.recv(512))
+                sock.sendall(ping)
+                s.feed.burst(20)
+                time.sleep(0.5)
+            assert got > 16384, 'ws viewer got %d bytes' % got
+            assert 'viewer disconnected' not in s.proxy.log, s.proxy.log[-2000:]
+        finally:
+            sock.close()
+
     def test_ws_requires_a_credential_when_a_password_is_set(self, session):
         s = session(viewer_pass='watchme')
         assert s.wait_ready(), s.proxy.log

@@ -170,6 +170,7 @@ private:
     uint16_t peer_port_be_ = 0;
     time_t connected_at_ = 0;
     time_t last_progress_ = 0;
+    uint64_t ws_flushed_ = 0;       // ws_->bytes_flushed() at the last look
     time_t behind_since_ = 0;
 
     HttpRequest req_;
