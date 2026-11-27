@@ -56,10 +56,10 @@ class DefaultConfig:
 
     # Web viewer that plays a raw thermal (Matroska) stream live from a
     # video port's TLS WebSocket; the video page links to it. It must
-    # allow this proxy's host in its Content-Security-Policy. Empty
-    # disables the link. Overridden by webui.json's "live_viewer".
-    LIVE_VIEWER_URL = os.environ.get(
-        'WEBADMIN_LIVE_VIEWER_URL', 'https://plot.ardupilot.org/video-live/')
+    # allow this proxy's host in its Content-Security-Policy, so there is
+    # no default: empty means no link. Overridden by webui.json's
+    # "live_viewer".
+    LIVE_VIEWER_URL = os.environ.get('WEBADMIN_LIVE_VIEWER_URL', '')
 
     # Browser-cache static assets (logo, CSS, JS). Without this Flask
     # emits no Cache-Control header, so the meta-refresh flow refetches

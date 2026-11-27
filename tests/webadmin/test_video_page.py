@@ -480,6 +480,10 @@ def test_raw_thermal_offers_desktop_viewer(client, keydb_path, monkeypatch):
     monkeypatch.setattr(connections, 'list_for_port2', lambda port: [SimpleNamespace(
         stream_idx=2, role=conntdb_lib.CONN_ROLE_VIDEO_PUB, app_proto=conntdb_lib.CONN_APP_MATROSKA)])
     login_as(client, ALICE_PORT1, ALICE_PASS)
+    # no viewer is configured by default, so no link
+    html = client.get('/video/').get_data(as_text=True)
+    assert 'video-live-link' not in html and 'view_raw_thermal.py' in html
+    client.application.config['LIVE_VIEWER_URL'] = 'https://plot.ardupilot.org/video-live/'
     html = client.get('/video/').get_data(as_text=True)
     assert 'view_raw_thermal.py' in html and '/v3.mkv' in html
     assert 'id="player3"' not in html and 'id="player1"' in html
@@ -502,6 +506,11 @@ def test_raw_thermal_live_viewer_link_is_configurable(client, keydb_path, monkey
     html = client.get('/video/').get_data(as_text=True)
     assert ('href="https://viewer.example/v/?x=1&amp;live='
             'wss%%3A%%2F%%2Flocalhost%%3A%d%%2F"' % VPORT) in html
+    # a fragment stays last, after the query
+    client.application.config['LIVE_VIEWER_URL'] = 'https://viewer.example/v/#pw=x'
+    html = client.get('/video/').get_data(as_text=True)
+    assert ('href="https://viewer.example/v/?live='
+            'wss%%3A%%2F%%2Flocalhost%%3A%d%%2F#pw=x"' % VPORT) in html
     for off in ('', 'javascript:alert(1)'):
         client.application.config['LIVE_VIEWER_URL'] = off
         html = client.get('/video/').get_data(as_text=True)

@@ -13,7 +13,7 @@ from flask import (Blueprint, Response, abort, current_app, jsonify,
 import functools
 import http.client
 import re
-from urllib.parse import quote, urlsplit
+from urllib.parse import quote, urlsplit, urlunsplit
 
 import keydb_lib
 
@@ -55,10 +55,13 @@ def _live_viewer_link(host, port):
     link carries only the address: a viewer password is typed there.
     """
     viewer = current_app.config.get('LIVE_VIEWER_URL') or ''
-    if urlsplit(viewer).scheme not in ('http', 'https'):
+    parts = urlsplit(viewer)
+    if parts.scheme not in ('http', 'https'):
         return None
-    return '%s%slive=%s' % (viewer, '&' if '?' in viewer else '?',
-                            quote('wss://%s:%d/' % (host, port), safe=''))
+    # in the query, ahead of any fragment the configured URL carries
+    live = 'live=' + quote('wss://%s:%d/' % (host, port), safe='')
+    query = parts.query + '&' + live if parts.query else live
+    return urlunsplit(parts._replace(query=query))
 
 
 def _resolve_port2():
