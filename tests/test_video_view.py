@@ -758,6 +758,23 @@ class TestWebSocketViewer:
         assert data in s.feed.snapshot(), \
             'ws payload is not a verbatim span of what was published'
 
+    def test_ws_viewer_that_never_reads_is_dropped_as_stalled(self, session):
+        """Waiting in the ring is bounded: a viewer that takes nothing is
+        dropped, and the log says why."""
+        s = session()
+        assert s.wait_ready(), s.proxy.log
+        sock, head, _ = ws_connect(VPORT, '/v1', rcvbuf=4096)
+        try:
+            assert b'101' in head, head
+            deadline = time.time() + 40
+            while time.time() < deadline and 'viewer disconnected' not in s.proxy.log:
+                s.feed.burst(300)
+        finally:
+            sock.close()
+        assert 'output queue full' not in s.proxy.log, s.proxy.log[-2000:]
+        assert s.proxy.wait_for(r'viewer disconnected after \d+ KiB \(stalled\)',
+                                timeout=5), s.proxy.log[-2000:]
+
     def test_ws_requires_a_credential_when_a_password_is_set(self, session):
         s = session(viewer_pass='watchme')
         assert s.wait_ready(), s.proxy.log

@@ -59,6 +59,9 @@ public:
     bool has_pending_output(void) const {
         return tx_sent < tx.size();
     }
+    size_t pending_output(void) const {
+        return tx.size() - tx_sent;
+    }
 
 private:
     int fd = -1;

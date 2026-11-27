@@ -588,9 +588,15 @@ bool VideoViewer::on_writable(const VideoRing &ring, time_t now)
 {
     if (rtsp_view_) return rtsp_view_->on_writable(ring, now);
     // Queued WebSocket output (e.g. pongs while waiting for a stream).
-    if (ws_ != nullptr && !ws_->flush()) {
-        drop_reason_ = "write error";
-        return false;
+    if (ws_ != nullptr) {
+        const size_t queued = ws_->pending_output();
+        if (!ws_->flush()) {
+            drop_reason_ = "write error";
+            return false;
+        }
+        if (ws_->pending_output() < queued) {
+            last_progress_ = now;   // a slow drain is still progress
+        }
     }
     if (!flush(now)) {
         return false;
@@ -633,7 +639,9 @@ bool VideoViewer::on_writable(const VideoRing &ring, time_t now)
         // queue to drain rather than piling the stream up behind it
         if (ws_ != nullptr && ws_->has_pending_output()) {
             blocked_ = true;
-            return now-last_progress_ <= VIDEO_VIEWER_STUCK_S;
+            if (now-last_progress_ <= VIDEO_VIEWER_STUCK_S) return true;
+            drop_reason_ = "stalled";
+            return false;
         }
         const size_t n = std::min(size_t(16384), prefix_.size()-prefix_sent_);
         const uint8_t *p = reinterpret_cast<const uint8_t *>(prefix_.data()+prefix_sent_);
@@ -641,7 +649,9 @@ bool VideoViewer::on_writable(const VideoRing &ring, time_t now)
         if (w < 0 && errno == EINTR) continue;
         if ((w < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) || (w == 0 && ws_)) {
             blocked_ = true;
-            return now-last_progress_ <= VIDEO_VIEWER_STUCK_S;
+            if (now-last_progress_ <= VIDEO_VIEWER_STUCK_S) return true;
+            drop_reason_ = "stalled";
+            return false;
         }
         if (w <= 0) return false;
         prefix_sent_ += size_t(w); last_progress_ = now;
