@@ -775,6 +775,31 @@ class TestWebSocketViewer:
         assert s.proxy.wait_for(r'viewer disconnected after \d+ KiB \(stalled\)',
                                 timeout=5), s.proxy.log[-2000:]
 
+    def test_ws_viewer_draining_slowly_is_not_stalled(self, session):
+        """A viewer that takes one queued frame over more than the stall
+        time, a little at a time, is still making progress."""
+        s = session()
+        assert s.wait_ready(), s.proxy.log
+        sock, head, rest = ws_connect(VPORT, '/v1', rcvbuf=4096)
+        try:
+            assert b'101' in head, head
+            # a backlog well past the socket buffers
+            while len(s.feed.snapshot()) < 2 * 1024 * 1024:
+                s.feed.burst(1000)
+            assert 'viewer disconnected' not in s.proxy.log, s.proxy.log[-2000:]
+            # under 16 KiB (one frame) in each stall time, for three of them,
+            # with just enough published to keep the stream alive
+            got = len(rest)
+            sock.settimeout(2)
+            for _ in range(60):
+                got += len(sock.recv(512))
+                s.feed.burst(20)
+                time.sleep(0.5)
+            assert got > 16384, 'ws viewer got %d bytes' % got
+            assert 'viewer disconnected' not in s.proxy.log, s.proxy.log[-2000:]
+        finally:
+            sock.close()
+
     def test_ws_requires_a_credential_when_a_password_is_set(self, session):
         s = session(viewer_pass='watchme')
         assert s.wait_ready(), s.proxy.log
