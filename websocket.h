@@ -59,8 +59,9 @@ public:
     bool has_pending_output(void) const {
         return tx_sent < tx.size();
     }
-    size_t pending_output(void) const {
-        return tx.size() - tx_sent;
+    // total bytes handed to the socket, whichever call flushed them
+    uint64_t bytes_flushed(void) const {
+        return tx_flushed;
     }
 
 private:
@@ -80,6 +81,7 @@ private:
     bool in_fragment = false;       // mid multi-frame message
 
     std::vector<uint8_t> tx;        // framed output
+    uint64_t tx_flushed = 0;
     size_t tx_sent = 0;             // how much of tx has reached the socket
     // SSL_write retries must use the same bytes, address and length even if
     // queue_frame() appends more output and reallocates tx in the meantime.

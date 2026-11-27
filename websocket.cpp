@@ -547,6 +547,7 @@ bool WebSocket::flush(void)
         }
         tls_tx.clear();
         tx_sent += size_t(wret);
+        tx_flushed += uint64_t(wret);
     }
     tx.clear();
     tx_sent = 0;
